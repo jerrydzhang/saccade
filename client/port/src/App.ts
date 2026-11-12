@@ -504,6 +504,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
         elsewhere: (spec: string, act: ElsewhereAct) => {
           void openElsewhere(spec, act);
         },
+        copy: (text: string) => {
+          lastCopy = { payload: text, at: Date.now() };
+          try {
+            void navigator.clipboard.writeText(text);
+          } catch {
+            // the recorded payload is the act's truth either way
+          }
+          notifyStrip();
+        },
       });
     }
   }

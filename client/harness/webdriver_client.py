@@ -291,6 +291,11 @@ class WebDriver:
             raise WebDriverError("unknown error", f"current window answered {value!r}")
         return value
 
+    def close_window(self) -> None:
+        """Close the CURRENT window (W3C DELETE /window); the caller
+        switches away first when it must survive."""
+        self.request("DELETE", f"/session/{self.session}/window")
+
     def switch_to_window(self, handle: str) -> None:
         self.request("POST", f"/session/{self.session}/window", {"handle": handle})
 

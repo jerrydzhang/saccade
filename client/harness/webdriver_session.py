@@ -681,6 +681,25 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         web_path.write_bytes(png)
         compositor = capture_compositor_frame(state.shooter_bin, state.wayland_name, state.shots, name)
         return {"ok": True, "web": str(web_path), "compositor": compositor}, False
+    if command == "close-window":
+        assert state.client is not None
+        label = request.get("label")
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("invalid argument", "close-window needs a label")
+        inventory = enumerate_windows(state.client)
+        match = next((w for w in inventory if w.get("label") == label), None)
+        if match is None:
+            return {"ok": True, "closed": False, "reason": f"no window labelled {label!r}"}, False
+        original = state.client.current_window()
+        state.client.switch_to_window(match["handle"])
+        state.client.close_window()
+        remaining = state.client.window_handles()
+        # restore a surviving handle, preferring the original when it lives
+        if original in remaining:
+            state.client.switch_to_window(original)
+        elif remaining:
+            state.client.switch_to_window(remaining[0])
+        return {"ok": True, "closed": True, "remaining": len(remaining)}, False
     if command == "down":
         return {"ok": True, "stopping": True}, True
     raise WebDriverError("invalid argument", f"unknown command: {command!r}")

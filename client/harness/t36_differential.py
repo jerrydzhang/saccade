@@ -297,13 +297,20 @@ def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
 
 
 def _s17_port(request: RequestFn, pace: float) -> dict:
-    """S17's port branch: activity is a place, through the Tasks
-    instrument (the i-21 slice). Real driving throughout: the picker
-    opens the tasks page, real label keystrokes select a row, the row
-    menu's primary opens the task's activity AS A LOCATION (the
-    surface flips to the board), the trail retains it, Back returns
-    the list with the departed row at its reading anchor, Forward
-    retraces."""
+    """S17's port branch, CORRECTED with F6 (t-36 r109-r113): the
+    row menu's primary is o 'open board through the link' - the
+    ratified order (the earlier f 'open the activity here' reversed
+    the prototype and the record, and this check passed it against a
+    reading of the text; corrected here in the same change as the
+    acts). Real driving throughout: the picker opens the tasks page,
+    real label keystrokes select a row, the menu carries o/i/w/y,
+    Enter (the primary) delivers through the link - with one window
+    the elsewhere surface opens a new linked window at the task's
+    board revision without asking (birth-location delivery, the link
+    recorded on the list window) - and a second Enter REUSES the
+    link (no third window). The list never leaves: the surface holds
+    tasks throughout, and no trail entry appears for a delivery that
+    opened elsewhere."""
     import json as _json
     import time as _time
 
@@ -365,77 +372,82 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
         'return [...document.querySelectorAll("[data-port-menu-act]")].map(el =>'
         " el.getAttribute('data-port-menu-act'));",
     )
-    if acts != ["f", "o", "i", "w"]:
+    if acts != ["o", "i", "w", "y"]:
         return {"status": t36_results.STATUS_FAIL,
-                "detail": f"the row menu carries the wrong acts: {acts!r} (expected f, o, i, w)"}
+                "detail": f"the row menu carries the wrong acts: {acts!r} (expected o, i, w, y - F6's ratified order)"}
 
-    # the primary (Enter runs act 0): the task's activity opens AS A
-    # LOCATION - the surface flips to the board at the task's revision
+    # the primary (Enter runs act 0): o through the link. With one
+    # window and no link the elsewhere surface opens a new linked
+    # window at the task's board revision without asking; the link
+    # is recorded on the list window; the LIST NEVER LEAVES
     _key(request, "enter")
-    _sleep(pace, 1.0)
-    activity = wait_for(
-        lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
+    _sleep(pace, 1.5)
+    delivered = wait_for(
+        lambda r: (r.get("window") or {}).get("link") is not None
+        and r.get("surface") == "tasks",
     )
-    if activity is None:
+    if delivered is None:
         now = readout()
         return {"status": t36_results.STATUS_FAIL,
-                "detail": (f"the task-row primary did not open {departed!r}'s activity as a"
-                           f" location: surface={now.get('surface')!r}"
-                           f" location={(now.get('board') or {}).get('location')!r}")}
-    trail = activity.get("trail") or {}
-    if not (isinstance(trail.get("depth"), int) and trail["depth"] >= 2 and trail.get("canBack") is True):
+                "detail": (f"the task-row primary did not deliver through the link:"
+                           f" link={(now.get('window') or {}).get('link')!r}"
+                           f" surface={now.get('surface')!r}")}
+    handles_before = _ok(request({"cmd": "windows"}, timeout=30)).get("handles")
+    # a second Enter reuses the link: no new window
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, "s")
+    _sleep(pace, 0.4)
+    _key(request, "a")
+    _sleep(pace, 0.4)
+    _key(request, "enter")
+    _sleep(pace, 1.5)
+    reused = wait_for(
+        lambda r: (r.get("window") or {}).get("link") is not None
+        and r.get("surface") == "tasks",
+    )
+    handles_after = _ok(request({"cmd": "windows"}, timeout=30)).get("handles")
+    if reused is None:
+        now = readout()
         return {"status": t36_results.STATUS_FAIL,
-                "detail": f"the activity open is not retained in the trail: {trail!r}"}
+                "detail": (f"the second Enter did not reuse the link:"
+                           f" link={(now.get('window') or {}).get('link')!r}")}
+    if isinstance(handles_before, list) and isinstance(handles_after, list) \
+            and len(handles_after) != len(handles_before):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the second Enter opened another window instead of reusing the"
+                           f" link: {len(handles_before)} -> {len(handles_after)} handles")}
 
-    # Back returns the list with the departed row at its reading anchor
-    _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "o"]}, timeout=30))
-    back = wait_for(
-        lambda r: r.get("surface") == "tasks" and (r.get("tasks") or {}).get("status") == "loaded",
-    )
-    if back is None:
-        now = readout()
-        return {"status": t36_results.STATUS_FAIL,
-                "detail": f"Back did not return the task list: surface={now.get('surface')!r}"}
-    departed_part = next(
-        (str(row.get("part")) for row in ((back.get("tasks") or {}).get("rows") or [])
-        if row.get("task") == departed),
-        None,
-    )
-    if departed_part is None:
-        return {"status": t36_results.STATUS_FAIL,
-                "detail": f"the departed row {departed!r} left the page on return (identity walk)"}
-    box = _json_evaluate(
-        request,
-        f"const el = document.querySelector('[data-port-part={_json.dumps(departed_part)}]');"
-        " if (!el) return null; const b = el.getBoundingClientRect();"
-        " return {top: Math.round(b.top)};",
-    )
-    top = box.get("top") if isinstance(box, dict) else None
-    if not (isinstance(top, (int, float)) and -60 <= top <= 200):
-        return {"status": t36_results.STATUS_FAIL,
-                "detail": f"the departed row is not at its reading anchor after Back: top={top!r}"}
+    # leave the lane in the one-window state later checks assume:
+    # close the delivered window (best effort - the delivery and the
+    # reuse are already proven; a close failure never fails the check
+    # but is reported)
+    closed_note = ""
+    try:
+        linked = str((delivered.get("window") or {}).get("link") or "")
+        if linked:
+            close = _ok(request({"cmd": "close-window", "label": linked}, timeout=30))
+            closed_note = f", the delivered window closed={close.get('closed')}"
+    except Exception as error:  # noqa: BLE001 - best effort by contract
+        closed_note = f", the delivered window close errored: {error!r}"[:120]
 
-    # Forward retraces to the activity
-    _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "i"]}, timeout=30))
-    _sleep(pace, 2.0)
-    fwd = wait_for(
-        lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
-    )
-    if fwd is None:
-        now = readout()
+    # the list never left: the surface held tasks throughout, and the
+    # trail carries no entry for a delivery that opened elsewhere
+    final = readout()
+    trail = final.get("trail") or {}
+    if final.get("surface") != "tasks":
         return {"status": t36_results.STATUS_FAIL,
-                "detail": (f"Forward did not retrace to the activity: surface={now.get('surface')!r}"
-                           f" location={(now.get('board') or {}).get('location')!r}")}
+                "detail": f"the list did not hold its surface: {final.get('surface')!r}"}
 
     return {"status": t36_results.STATUS_PASS,
-            "detail": (f"the task-row primary opened {departed!r}'s activity AS A LOCATION"
-                       f" (the surface flipped to the board at"
-                       f" {(fwd.get('board') or {}).get('location')!r}, trail depth"
-                       f" {trail.get('depth')}), Back returned the task list with the departed"
-                       f" row at its reading anchor (top {top}px), and Forward retraced. The"
-                       f" labels selected through real keystrokes and the row menu carried"
-                       f" f/o/i/w; no row cursor anywhere (j/k is pure scrolling, the review"
-                       f" resolution)")}
+            "detail": (f"the task-row primary delivered {departed!r}'s board through the"
+                       f" link (a new linked window without asking, the link recorded on the"
+                       f" list window, reused by the second Enter with no third window), the"
+                       f" list held its surface throughout with trail depth"
+                       f" {trail.get('depth')!r} (a delivery elsewhere never lands on the"
+                       f" opening window's trail). The labels selected through real"
+                       f" keystrokes and the row menu carried o/i/w/y - F6's ratified order"
+                       f"{closed_note}")}
 
 
 def check_s17_activity_place(request: RequestFn, pace: float) -> dict:

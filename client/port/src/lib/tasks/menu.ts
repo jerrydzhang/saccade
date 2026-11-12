@@ -32,6 +32,9 @@ import type { ElsewhereAct } from "../elsewhere.ts";
 export type TaskPorts = Readonly<{
   open(spec: string): void;
   elsewhere?(spec: string, act: ElsewhereAct): void;
+  /** Copy text to the clipboard; injected so tests observe it and
+   * the menu never touches the DOM's clipboard itself. */
+  copy?(text: string): void;
 }>;
 
 import { createActMenu } from "../menu/create.ts";
@@ -75,16 +78,15 @@ export function taskRowActs(
   const link = target.part === null ? null : deps.rowLink(target.part);
   if (link === null || link.length === 0) return [];
   const spec = formatLocation({ machine, path: link });
-  const acts: MenuAct[] = [
-    {
-      key: "f",
-      action: {
-        id: "tasks.open-activity",
-        label: "open the task's activity here",
-        run: () => ports.open(spec),
-      },
-    },
-  ];
+  // F6 (the ratified primary, t-36 r109): the row's FIRST act is
+  // o 'open board through the link' - Enter and a plain click run
+  // it. With one window and no link, the elsewhere surface's
+  // one-window rule opens a new linked window without asking; the
+  // next Enter reuses the link. The prototype's f/in-place open
+  // never existed - the port's earlier first act reversed this.
+  // e 'show activity' is RECORDED ABSENT: no activity location is
+  // built yet (the inventory's B3); it returns with the surface.
+  const acts: MenuAct[] = [];
   if (ports.elsewhere !== undefined) {
     const elsewhere = ports.elsewhere;
     const open = (act: ElsewhereAct): Action => ({
@@ -102,6 +104,17 @@ export function taskRowActs(
       { key: "i", action: open("once") },
       { key: "w", action: open("new") },
     );
+  }
+  const copy = ports.copy;
+  if (copy !== undefined) {
+    acts.push({
+      key: "y",
+      action: {
+        id: "tasks.copy-reference",
+        label: "copy reference",
+        run: () => copy(spec),
+      },
+    });
   }
   return acts;
 }

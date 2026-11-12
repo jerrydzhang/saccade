@@ -110,6 +110,7 @@ interface Harness {
   attachment: InstrumentAttachment<TasksUI, TaskAnchor>;
   opened: string[];
   elsewhere: [string, ElsewhereAct][];
+  copied: string[];
   press(key: string): string;
   selectView(): unknown;
   menuView(): unknown;
@@ -157,9 +158,11 @@ function harness(t: import("node:test").TestContext, rows: { task: string; title
   const built = host.wire();
   built.host.activate();
   t.after(() => built.host.destroy());
+  const copied: string[] = [];
   attachment.presentation.setTaskPorts({
     open: (spec) => opened.push(spec),
     elsewhere: (spec, act) => elsewhere.push([spec, act]),
+    copy: (text) => copied.push(text),
   });
   const press = (key: string): string =>
     built.host.handleKey({ key, ctrl: false, shift: false, alt: false, meta: false });
@@ -168,6 +171,7 @@ function harness(t: import("node:test").TestContext, rows: { task: string; title
     attachment,
     opened,
     elsewhere,
+    copied,
     press,
     selectView: () => {
       let view: unknown = null;
@@ -250,18 +254,32 @@ test("label selection lands on the row and opens its act menu", async (t) => {
   const menu = h.menuView() as { open: boolean; label: string; acts: { key: string }[] };
   assert.equal(menu.open, true);
   assert.equal(menu.label, "t-0 the cited seed account");
-  assert.deepEqual(menu.acts.map((act) => act.key), ["f", "o", "i", "w"]);
+  assert.deepEqual(menu.acts.map((act) => act.key), ["o", "i", "w", "y"]);
 });
 
-test("Enter (the primary) opens the departed task's activity HERE through the open funnel", async (t) => {
+test("Enter (the primary) opens the task's board THROUGH THE LINK - F6's ratified primary", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "the cited seed account" }], ROW_BOUNDS);
   await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
   h.press("s");
   h.press("a");
   assert.deepEqual(h.opened, [], "no act ran on selection alone");
-  h.press("Enter");
-  assert.deepEqual(h.opened, ["tasks-test/t-0"]);
   assert.deepEqual(h.elsewhere, []);
+  h.press("Enter");
+  // the primary is the link act: with one window the elsewhere
+  // surface opens a new linked window without asking - never the
+  // in-place open that reversed the ratified order
+  assert.deepEqual(h.elsewhere, [["tasks-test/t-0", "link"]]);
+  assert.deepEqual(h.opened, [], "the primary never opens in place");
+});
+
+test("y (the last act) copies the task's reference", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "the cited seed account" }], ROW_BOUNDS);
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
+  h.press("s");
+  h.press("a");
+  h.press("y");
+  assert.deepEqual(h.elsewhere, [], "copy never opens anything");
+  assert.deepEqual(h.copied, ["tasks-test/t-0"]);
 });
 
 test("o/i/w target the label-selected task through the elsewhere surface", async (t) => {
@@ -307,7 +325,10 @@ test("a plain click runs the clicked row's first act directly", async (t) => {
   ], ROW_BOUNDS);
   await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
   h.attachment.presentation.rowPrimaryClick("/content/0/content/0/row/1");
-  assert.deepEqual(h.opened, ["tasks-test/t-1"]);
+  // F6: the row's first act is o through the link - a plain click
+  // delivers through the elsewhere surface, never in place
+  assert.deepEqual(h.elsewhere, [["tasks-test/t-1", "link"]]);
+  assert.deepEqual(h.opened, []);
 });
 
 test("departure capture records the row under the reading position; restore returns by identity plus offset", async (t) => {
