@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/6"
+ADAPTER_SET_REVISION = "t36-adapters/7"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -160,6 +160,21 @@ ADAPTERS: tuple[dict, ...] = (
         " through the shell's open door. The old-app half keeps its"
         " recorded FAIL evidence (the receiver never receives on any"
         " path); the oracle is untouched and the flip is expected.",
+    ),
+    _adapter(
+        "P7",
+        "port-unfocused-scroll",
+        KIND_INPUT,
+        ("D1",),
+        "D1 is the first-use verdict's defect 1 (t-36 r121): line and"
+        " page scrolling assigns scrollTop instead of scrollBy,"
+        " because WebKitGTK's scroll animator does not run for a"
+        " window the WM never activated and scrollBy is silently"
+        " dropped there (the birth path's new windows open without"
+        " focus by design). The check is port-only - the old app is"
+        " not the defect's subject - and switches the DRIVER's"
+        " context to the delivered window without native focus, the"
+        " exact state the human's new windows were in.",
     ),
     _adapter(
         "P6",

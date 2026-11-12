@@ -831,6 +831,12 @@ def register() -> None:
         t36_scenario_bodies.check_s04_deactivation,
         adapters=("P6",),
     ))
+    CHECKS.setdefault("D1", CheckSpec(
+        "D1",
+        "a never-focused window still scrolls",
+        t36_scenario_bodies.check_d1_unfocused_scrolling,
+        adapters=("P7",),
+    ))
     CHECKS.setdefault("S17", CheckSpec(
         "S17", "task activity is a place, not a popup", check_s17_activity_place,
         adapters=("A6",),

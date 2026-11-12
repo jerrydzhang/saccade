@@ -1494,3 +1494,110 @@ def check_s04_deactivation(request: RequestFn, pace: float = 1.0) -> dict:
                        f" = reset it; Escape closed it with the trail unchanged and the board"
                        f" still loaded - deactivation separated input from content, the felt"
                        f" behaviour end to end")}
+
+
+def check_d1_unfocused_scrolling(request: RequestFn, pace: float = 1.0) -> dict:
+    """D1, the first-use verdict's defect 1: j/k (and paging) were
+    dead in a NEW window while gg/G worked - WebKitGTK's scroll
+    animator does not run for a window the WM never activated, and
+    element.scrollBy is silently dropped there (assignments work;
+    start/end proved the same window). The scenario: open a board
+    through the birth path (a task row's primary with one window -
+    F6's delivery, focus never requested), switch the DRIVER's
+    context to that window (no native focus), drive j, and observe
+    scrollTop move; then G still lands at the bottom."""
+    import json
+    import time
+
+    import t36_port
+
+    if not t36_port.is_port(request):
+        raise CheckStopped("the port carries this defect; the old app is not the subject")
+
+    def readout() -> dict:
+        return t36_port.readout(request)
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(landing is not None, "no landing seed task for D1")
+
+    # a TALL current revision of the first task: the seed boards fit
+    # the lane's 1024x1280 viewport (nothing can scroll - the first
+    # repro's hole), so the check commits its own overflowing board
+    # through the real wire first; the tasks row then delivers it
+    # open the tasks page FIRST: the overflow revision commits to the
+    # task the FIRST ROW actually names (the page's own order, not
+    # the tracker's task-list order)
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/tasks", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        obs = readout()
+        if obs.get("surface") == "tasks" and (obs.get("tasks") or {}).get("status") == "loaded":
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped("the tasks page never loaded for D1")
+        _sleep(pace, 0.4)
+    rows = (readout().get("tasks") or {}).get("rows") or []
+    first = rows[0] if rows else None
+    _premise(first is not None and isinstance(first.get("task"), str),
+             f"the tasks page carries no first row for D1: {json.dumps(rows)[:160]}")
+    first_task = str(first["task"])
+    task_number = int(first_task.removeprefix("t-"))
+    blocks = "".join(f"  - text: D1 overflow block {n}\n" for n in range(1, 151))
+    tall = f"grammar: 1\ntask: {first_task}\ncontent:\n{blocks}"
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": tall,
+                          "message": "t36 D1: the overflow revision"}, timeout=60))
+    _premise(commit.get("revision") is not None,
+             f"the D1 overflow commit did not land: {json.dumps(commit)[:200]}")
+    _key(request, "s")
+    _sleep(pace, 0.4)
+    _key(request, "a")
+    _sleep(pace, 0.4)
+    _key(request, "enter")
+    _sleep(pace, 2.0)
+    delivered = readout()
+    link = (delivered.get("window") or {}).get("link")
+    _premise(isinstance(link, str) and link,
+             f"the row primary did not deliver through the link: {json.dumps(delivered.get('window'))[:120]}")
+
+    # switch the DRIVER to the delivered window - no native focus -
+    # and observe its scroll element before and after j
+    _ok(request({"cmd": "switch-window", "label": link}, timeout=30))
+
+    def scroll_top() -> float:
+        answer = _json_evaluate(
+            request,
+            "const el = document.querySelector('.port-content');"
+            " return el ? Math.round(el.scrollTop) : null;",
+        )
+        _premise(isinstance(answer, (int, float)), f"no scroll element in the delivered window: {answer!r}")
+        return float(answer)
+
+    geometry = _json_evaluate(
+        request,
+        "const el = document.querySelector('.port-content');"
+        " const b = window.__saccadePort.readout().board || {};"
+        " return {client: el.clientHeight, scroll: el.scrollHeight,"
+        " loc: b.location, status: b.status,"
+        " parts: (b.content && b.content.parts) ? b.content.parts.length : null};",
+    )
+    _premise(
+        isinstance(geometry, dict) and geometry.get("scroll", 0) > geometry.get("client", 0) + 400,
+        f"the delivered board does not overflow the viewport: {json.dumps(geometry)}",
+    )
+
+    _key(request, "j")
+    _sleep(pace, 0.5)
+    after_j = scroll_top()
+    _premise(after_j > 0,
+             f"j moved nothing in the never-focused window (scrollTop {after_j}) - defect 1's shape")
+    request({"cmd": "input", "kind": "hotkey", "keys": ["shift", "g"]}, 30)
+    _sleep(pace, 0.6)
+    after_g = scroll_top()
+    _premise(after_g > after_j, f"G did not land below j's line ({after_j} -> {after_g})")
+    _ok(request({"cmd": "switch-window", "label": "main"}, timeout=30))
+    return {"status": "pass" if True else "fail",
+            "detail": (f"j scrolled the never-focused birth window (scrollTop 0 -> {after_j:.0f}) and"
+                       f" G still landed below it ({after_g:.0f}); assignments, not scrollBy")}

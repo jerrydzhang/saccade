@@ -178,11 +178,14 @@ def constant_of(plan: dict) -> dict:
 
 
 def check_subset(spec: str) -> list[str]:
-    """A --checks subset: S-ids from the inventory, comma-separated."""
+    """A --checks subset: S-ids from the inventory plus the held-break
+    and first-use defect ids (F01, D1-D4), comma-separated."""
     import t36_results as results
 
     ids = [chunk.strip() for chunk in spec.split(",") if chunk.strip()]
     for scenario_id in ids:
+        if scenario_id in results.HELD_BREAK_IDS:
+            continue
         results.scenario_of(scenario_id)
     return ids
 
@@ -296,7 +299,8 @@ def lane_results_from_log(log_text: str, lane: str = "session", declared_checks:
         if status == t36_results.STATUS_FAIL and first_failure is None:
             first_failure = result
     for scenario_id in declared_checks:
-        t36_results.scenario_of(scenario_id)  # refuse unknown ids here
+        if scenario_id not in t36_results.HELD_BREAK_IDS:
+            t36_results.scenario_of(scenario_id)  # refuse unknown ids here
         already = any(r["id"] == scenario_id for r in results)
         if already:
             continue

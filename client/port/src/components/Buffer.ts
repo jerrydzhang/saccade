@@ -193,12 +193,20 @@ export function createViewport(): SliceBufferViewport {
       };
     },
     scrollLines(amount) {
-      if (element !== null) element.scrollBy({ top: amount * SCROLL_LINE_PX });
+      // ASSIGN scrollTop, never scrollBy: WebKitGTK's scroll
+      // animator does not run for a window that was never activated
+      // (F6's new windows open without focus, by design), and a
+      // scrollBy on that element is silently dropped - the
+      // first-use verdict's defect 1 (assignments always work;
+      // gg/G's start/end proved the pattern in the same window).
+      if (element !== null) {
+        element.scrollTop += amount * SCROLL_LINE_PX;
+      }
     },
     scrollPage(direction, extent) {
       if (element === null) return;
       const share = extent === "half" ? 0.5 : 1;
-      element.scrollBy({ top: direction * element.clientHeight * share });
+      element.scrollTop += direction * element.clientHeight * share;
     },
     start() {
       if (element !== null) element.scrollTop = 0;

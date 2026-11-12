@@ -21,7 +21,7 @@ class AdapterSetTest(unittest.TestCase):
         # P3 the port trail readout for S05/S07): the app-side ids stay
         # A1..A7, the port rows follow under their own prefix
         self.assertEqual(t36_adapters.ADAPTER_IDS[:7], tuple(f"A{n}" for n in range(1, 8)))
-        self.assertEqual(t36_adapters.ADAPTER_IDS[7:], ("P1", "P3", "P4", "P6", "P5", "P2"))
+        self.assertEqual(t36_adapters.ADAPTER_IDS[7:], ("P1", "P3", "P4", "P7", "P6", "P5", "P2"))
 
     def test_revision_is_a_printable_string(self) -> None:
         revision = t36_adapters.ADAPTER_SET_REVISION

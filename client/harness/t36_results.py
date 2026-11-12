@@ -101,11 +101,13 @@ GATES: tuple[dict, ...] = (
 
 GATE_IDS = tuple(g["id"] for g in GATES)
 
-# The held-break check ids (t-36 phase-2): bodies that exercise one
-# named held break each, not a whole scenario group. F01 is the
-# words-feed unknown-event survival probe (A7 oracle) - the held break
-# S19 expects red. make_result accepts these beside the S-ids.
-HELD_BREAK_IDS = ("F01",)
+# The held-break and first-use defect check ids (t-36 phase-2 and
+# r121): bodies that exercise one named break each, not a whole
+# scenario group. F01 is the words-feed unknown-event survival probe
+# (A7 oracle). The D family is the human's first-use verdict (r121):
+# each defect's scenario, landed BEFORE its fix per method rule 1.
+# make_result accepts these beside the S-ids.
+HELD_BREAK_IDS = ("F01", "D1", "D2", "D3", "D4")
 
 
 def gate_of(gate_id: str) -> dict:

@@ -620,6 +620,20 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         if not isinstance(label, str) or not label:
             raise WebDriverError("unknown error", f"open_suite_window answered {label!r}")
         return {"ok": True, "label": label, "windows": enumerate_windows(state.client)}, False
+    if command == "switch-window":
+        assert state.client is not None
+        label = request.get("label")
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("invalid argument", "switch-window needs a string label")
+        inventory = enumerate_windows(state.client)
+        match = next((w for w in inventory if w.get("label") == label), None)
+        if match is None:
+            raise WebDriverError("no such window", f"no window labelled {label!r}")
+        # the switch moves the WEBDRIVER's active context only - the
+        # webview never receives native focus, which is exactly the
+        # state D1 reproduces (a birth window the WM never activated)
+        state.client.switch_to_window(match["handle"])
+        return {"ok": True, "switched": label}, False
     if command == "focus-window":
         assert state.client is not None
         label = request.get("label")

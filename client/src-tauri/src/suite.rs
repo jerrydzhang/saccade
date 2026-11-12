@@ -155,8 +155,25 @@ pub fn open_suite_window(
     let built_label = label.clone();
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::default())
         .title("Saccade")
+        // An explicit inner size at creation: an unmapped webview
+        // sizes its viewport to CONTENT until the compositor maps
+        // it, and an unconstrained viewport cannot scroll at all
+        // (clientHeight == scrollHeight) - the first-use verdict's
+        // defect 1, where j/k and paging were dead in every window
+        // the WM had not yet activated. The size forces the layout
+        // constraint at creation; focus is still never requested.
+        .inner_size(1024.0, 768.0)
         .focused(false)
         .build()
+        .and_then(|window| {
+            // The builder's size is a request; an unactivated GTK
+            // window can defer its widget allocation, leaving the
+            // webview's viewport unconstrained (content-sized, so
+            // nothing can scroll - defect 1's shape). An explicit
+            // resize after build forces the allocation now.
+            window.set_size(tauri::LogicalSize::new(1024.0, 768.0))?;
+            Ok(window)
+        })
         .map(|_| built_label)
         .map_err(|error| {
             registry.take_binding(&label);
