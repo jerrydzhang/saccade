@@ -43,6 +43,9 @@ import type { Board, FigureBlock } from "../lib/board/model.ts";
 import { decodeBoard } from "../lib/board/decode.ts";
 import { crateVerdict } from "../lib/board/validate.ts";
 import { createFollow } from "../lib/board/follow.ts";
+import { createFindInteraction, type FindView } from "../lib/find/interaction.ts";
+import { findUnitsOf } from "../lib/find/units.ts";
+export type { FindView } from "../lib/find/interaction.ts";
 import type { HydrationHost } from "../lib/board/hydrate.ts";
 import { formatLocation, instrumentPath } from "../lib/location.ts";
 import { hostedTrackerLocation, parseLocation } from "../lib/location.ts";
@@ -91,6 +94,9 @@ export type BoardData = Readonly<{
  * select session's live view (label chips) - nothing else. Lifecycle
  * lives on the buffer, not here. */
 export interface BoardUI extends HydrationHost {
+  findView(): FindView;
+  subscribeFind(observer: (view: FindView) => void): () => void;
+  typeFind(query: string): void;
   /** The select session's live label view; null when inactive. */
   subscribeSelect(observer: (view: SelectSessionView | null) => void): () => void;
   /** The last label-selected target (identity = part path), if any. */
@@ -199,16 +205,28 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // again - only a real outcome change may republish).
   let publishedOutcomesKey = "";
 
-  function displayedGeneration(): number | null {
+  function displayedData(): Readonly<BoardData> | null {
     const state = buffer.snapshot();
     if (released || state.kind !== "alive") return null;
     const frame = state.content.kind === "available" ? state.content.value
       : state.content.kind === "pending" ? state.content.previous : null;
-    return frame?.value.generation ?? null;
+    return frame?.value ?? null;
   }
+  const displayedGeneration = (): number | null => displayedData()?.generation ?? null;
+  const find = createFindInteraction({
+    units: () => findUnitsOf(displayedData()?.board ?? null),
+    capture: (context) => buffer.interactions.capture(context),
+    reveal(occurrence) {
+      const bounds = buffer.geometry.bounds(occurrence.unit.id);
+      if (bounds !== null) buffer.viewport.reveal(bounds);
+    },
+  });
 
   const host: BoardUI = {
     displayedGeneration,
+    findView: find.view,
+    subscribeFind: find.subscribe,
+    typeFind: find.type,
     async loadFigureAsset(location: Location, block: FigureBlock) {
       if (released) return "stale";
       const token = displayedGeneration();
@@ -443,6 +461,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return { address, position: { kind: "default" } };
     },
     async request(address: Address): Promise<RefreshOutcome> {
+      // Explicit opens AND trail restores arrive here. Follow refreshes
+      // call load directly and do not end the interaction.
+      find.navigateAway();
       // Follow the asked bare address, never the pinned resolution.
       // An explicit open invalidates any in-flight poll immediately.
       const intent = ++openIntent;
@@ -518,6 +539,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     scrollToTop: () => buffer.viewport.start(),
     scrollToBottom: () => buffer.viewport.end(),
     enterSelect: () => selectSession.enter(),
+    enterFind: () => {
+      if (displayedData()?.board != null) find.enter();
+    },
   });
 
   const selectSession = createSelectSession({
@@ -565,8 +589,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   boardMenu.setOnNotify(() => notifyMenu());
 
 
-  // The reading context declares gg top, G bottom, s select; contexts
-  // validate at construction - a collision is an error at load.
+  // Live publication changes matches without rewinding the interaction
+  // or treating background refresh as explicit navigation.
+  const offFindContent = buffer.subscribe(() => find.contentChanged());
 
   return {
     presentation: host,
@@ -576,6 +601,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       released = true;
       generation += 1;
       follow.stop();
+      offFindContent();
+      find.close();
       selectSession.exit();
       boardMenu.session.outsidePointerDown();
     },

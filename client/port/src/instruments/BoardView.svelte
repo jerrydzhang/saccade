@@ -8,7 +8,7 @@ at the generation boundary. -->
 <script lang="ts">
   import { hydrate } from "../lib/board/hydrate.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
-  import type { BoardData, BoardUI, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
+  import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
   let { content, controller }: { content: BoardData; controller: BoardUI } = $props();
 
@@ -16,6 +16,10 @@ at the generation boundary. -->
   let renderNotes: string[] = $state([]);
   let select: SelectSessionView | null = $state(null);
   let menu: MenuView | null = $state(null);
+  let find: FindView = $state({ open: false, query: "", count: 0, active: -1 });
+  const findOpen = $derived(find.open);
+  let findInput: HTMLInputElement | null = $state(null);
+  let findValue = $state("");
 
   // The select session's live view: chips painted over the labeled
   // parts' rendered boxes. Presentation only - the narrowing logic
@@ -27,10 +31,20 @@ at the generation boundary. -->
     const offMenu = controller.subscribeMenu((view) => {
       menu = view;
     });
+    const offFind = controller.subscribeFind((view) => {
+      find = view;
+      if (document.activeElement !== findInput) findValue = view.query;
+    });
     return () => {
       off();
       offMenu();
+      offFind();
     };
+  });
+
+  $effect(() => {
+    // Count/query notifications do not refocus a blurred field.
+    if (findOpen) findInput?.focus({ preventScroll: true });
   });
 
   // Right-click opens the same act list at the pointer (scenario 9's
@@ -101,6 +115,21 @@ at the generation boundary. -->
   });
 </script>
 
+{#if findOpen}
+  <div class="port-find">
+    <input
+      bind:this={findInput}
+      bind:value={findValue}
+      data-port-control="find-input"
+      data-port-captured-input=""
+      placeholder="find in this revision"
+      oninput={(event) => controller.typeFind(event.currentTarget.value)}
+    />
+    <span class="port-find-status" data-port-find-status="">
+      {find.count > 0 ? `${find.active + 1} / ${find.count}` : "type to search"}
+    </span>
+  </div>
+{/if}
 <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
   </div>
   {#if select !== null}

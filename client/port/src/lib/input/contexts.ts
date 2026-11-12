@@ -14,12 +14,12 @@ import { validateNoCollisions } from "./key-matcher.ts";
 
 // The window's own surfaces. The picker is the open-location input (a
 // window surface, not a board-content action): space-space opens it,
-// / enters Find, Escape closes overlays. Bindings beyond these ride
-// the slices that build their surfaces (jump).
+// Escape closes the picker only while it is open. Find belongs to
+// the reading instrument, not this window command table.
 export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
-  openFind(): void;
+  pickerIsOpen(): boolean;
 }
 
 export function windowContext(actions: WindowActions): InputContext {
@@ -32,22 +32,14 @@ export function windowContext(actions: WindowActions): InputContext {
       },
       keys: [sequence(key(" "), key(" "))],
     },
-    {
-      action: {
-        id: "window.enter-find",
-        label: "find in this revision",
-        run: () => actions.openFind(),
-      },
-      keys: [sequence(key("/"))],
-    },
-    {
+    ...(actions.pickerIsOpen() ? [{
       action: {
         id: "window.close-overlays",
         label: "close overlays",
         run: () => actions.closeOverlays(),
       },
       keys: [sequence(key("Escape"))],
-    },
+    }] : []),
   ]);
   validateNoCollisions(context);
   return context;
@@ -62,6 +54,7 @@ export interface ReadingActions {
   scrollToTop(): void;
   scrollToBottom(): void;
   enterSelect(): void;
+  enterFind(): void;
 }
 
 export function boardReadingContext(actions: ReadingActions): InputContext {
@@ -89,6 +82,10 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         run: () => actions.enterSelect(),
       },
       keys: [sequence(key("s"))],
+    },
+    {
+      action: { id: "board.find", label: "find in this revision", run: () => actions.enterFind() },
+      keys: [sequence(key("/"))],
     },
   ]);
   validateNoCollisions(context);

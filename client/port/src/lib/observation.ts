@@ -31,7 +31,7 @@
 
 import type { BufferState } from "./contracts/buffer.ts";
 import type { RenderPair } from "./instruments/registry.ts";
-import type { BoardData, RenderOutcome } from "../instruments/board.ts";
+import type { BoardData, BoardUI, RenderOutcome } from "../instruments/board.ts";
 import type { StructuredIssue } from "./board/errors.ts";
 import type { Board, Block } from "./board/model.ts";
 
@@ -151,6 +151,15 @@ export function contentPartsOf(board: Board): readonly ContentPart[] {
   return parts;
 }
 
+function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
+  const content = state.kind === "alive" ? state.content : null;
+  const pair = content?.kind === "available" ? content.value
+    : content?.kind === "pending" ? content.previous : null;
+  const controller = pair?.props["controller"] as Pick<BoardUI, "findView"> | undefined;
+  return typeof controller?.findView === "function" ? controller.findView()
+    : { open: false, query: "", count: 0, active: -1 };
+}
+
 export function buildReadout(
   input: Readonly<{
     windowLabel: string | null;
@@ -159,7 +168,6 @@ export function buildReadout(
     doors: DoorsState;
     trail: PortObservation["trail"];
     viewport: PortObservation["viewport"];
-    find: PortObservation["find"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -184,7 +192,7 @@ export function buildReadout(
     doors: input.doors,
     trail: input.trail,
     viewport: input.viewport,
-    find: input.find,
+    find: findViewOf(input.state),
   };
 }
 

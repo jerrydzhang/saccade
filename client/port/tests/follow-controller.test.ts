@@ -63,6 +63,14 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   };
   await attachment.places.request({ machine, path: "t-1" });
   assert.notEqual(job, null);
+  built.host.activate();
+  const press = (key: string) => built.host.handleKey({ key, ctrl: false, shift: false, alt: false, meta: false });
+  press("/");
+  attachment.presentation.typeFind("revision");
+  assert.equal(attachment.presentation.findView().open, true);
+  assert.equal(attachment.presentation.findView().count, 1);
+  assert.equal(press("s"), "allow-default", "ordinary typing in captured text entry never starts selection");
+  assert.equal(attachment.presentation.getSelection(), null);
   await tick();
   assert.deepEqual(reads, ["t-1"]);
   revision = 2;
@@ -71,6 +79,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   await tick();
   assert.deepEqual(reads, ["t-1", "t-1", "t-1"]);
   assert.deepEqual(polls, [1, 1, 1]);
+  assert.equal(attachment.presentation.findView().open, true, "background follow does not end Find");
   const beforeFailure = built.host.snapshot();
   revision = 4;
   failRead = true;
@@ -90,12 +99,27 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   await tick();
   assert.equal(reads.length, 5, "same bare intent retries after failure");
   assert.notDeepEqual(built.host.snapshot(), afterFailure, "recovery publishes the newer revision");
+  assert.equal(attachment.presentation.findView().open, true, "failure/recovery does not restore old interaction state");
   await attachment.places.request({ machine, path: "t-1@r4" });
+  assert.equal(attachment.presentation.findView().open, false, "explicit open ends Find");
   assert.equal(job, null, "explicit pinned open stops follow");
   await tick();
   assert.equal(reads.length, 6);
+  press("/");
+  assert.equal(attachment.presentation.findView().query, "revision");
+  press("Escape");
+  assert.equal(attachment.presentation.findView().open, false, "declared Escape releases the captured context");
+  press("/");
+  const restore = built.host.places.restore({
+    bufferId: "b", address: { machine, path: "t-1@r4" }, position: { kind: "default" },
+  });
+  assert.equal(attachment.presentation.findView().open, false, "trail restore shares the explicit-open funnel");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(restore.snapshot(), "restored");
   await attachment.places.request({ machine, path: "t-1" });
   assert.notEqual(job, null);
+  press("/");
   built.host.destroy();
+  assert.equal(attachment.presentation.findView().open, false);
   assert.equal(job, null, "release cancels follow");
 });

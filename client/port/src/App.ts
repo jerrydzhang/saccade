@@ -5,11 +5,10 @@
 // opens through the port's own model, so the receiving window owns the
 // act; the shell already guaranteed focus.
 //
-// Slice-1 scope: one board buffer per window, opens through the real
-// path (the lanes' test-open channel riding model open - the same
-// openInput path every control uses), the doors, and the observation
-// readout. No picker, no keymap beyond the routing seam, no trail UI:
-// later slices.
+// The window owns its picker, explicit-open trail, shell doors and
+// routing seam. Reading interactions (Find, select, target menus)
+// belong to the instrument. Every opener uses the same openSpec path;
+// the observation module projects the read-only inspection contract.
 //
 // Log markers ("[viewer] startup", "[viewer] test open board FAILED")
 // are the LANE's boot-evidence gates, parsed from the app log by the
@@ -40,23 +39,13 @@ import {
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
 import { selectToPart } from "./lib/board/targets.ts";
-import type { Board } from "./lib/board/model.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
-import { createFindSession, type FindOccurrence } from "./lib/find/session.ts";
-import { findUnitsOf } from "./lib/find/units.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
-
-export interface FindView {
-  readonly open: boolean;
-  readonly query: string;
-  readonly count: number;
-  readonly active: number;
-}
 
 export interface StripView {
   location: string | null;
@@ -77,11 +66,6 @@ export interface PortWindow {
   trailView(): TrailView;
   openPicker(): void;
   closePicker(): void;
-  findEnter(): void;
-  findType(text: string): readonly FindOccurrence[];
-  findMove(delta: number): { part: string | null; count: number; active: number };
-  findEscape(): void;
-  subscribeFind(observer: (view: FindView) => void): () => void;
   submitPicker(spec: string): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
   readout(): PortObservation;
@@ -111,48 +95,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // picker stays native (scenario 10).
   const picker = createPickerController((spec) => openSpec(spec));
 
-  // -- Find: a facility of the shown revision (scenario 16) ----------
-  // Bare / enters (ratified entry; adapter A2 carries the prototype's
-  // space-/ difference); typing is native in the field; movement is
-  // never trail navigation; Escape ends; a reference activation ends
-  // it (navigateAway); a click alone never closes it.
-  const find = createFindSession(() =>
-    findUnitsOf(
-      lastFrame.kind === "alive" && lastFrame.content.kind === "available"
-        ? ((lastFrame.content.value.props["content"] as { board?: Board | null }).board ?? null)
-        : null,
-    ),
-  );
-  const findObservers = new Set<(view: FindView) => void>();
-  function findView(): FindView {
-    return {
-      open: find.isOpen(),
-      query: find.query(),
-      count: find.occurrences().length,
-      active: find.occurrences().length > 0 ? find.active() : -1,
-    };
-  }
-  function notifyFind(): void {
-    const view = findView();
-    for (const observer of [...findObservers]) observer(view);
-  }
-
-  // The window's own context: space-space opens the picker, / enters
-  // Find, Escape closes overlays. Unmatched strokes flow to the
-  // active buffer's reading context through the one chain (never an
-  // inactive buffer).
+  // Window commands own the picker. Reading interactions and their
+  // captured field commands belong to the active instrument.
   const windowHost: HostMatcher = createHostMatcher(
     windowContext({
       openPicker: () => picker.open(),
-      closeOverlays: () => {
-        picker.close();
-        if (find.isOpen()) find.escape();
-        notifyFind();
-      },
-      openFind: () => {
-        find.enter();
-        notifyFind();
-      },
+      closeOverlays: () => picker.close(),
+      pickerIsOpen: () => picker.snapshot().open,
     }),
   );
 
@@ -279,11 +228,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
       console.log("[port] shifted citation open deferred (suite slice)");
       return;
     }
-    if (find.isOpen()) {
-      // a reference activation ends Find (scenario 16); the open rides
-      find.navigateAway();
-      notifyFind();
-    }
     const part = typeof detail.select === "string" ? selectToPart(detail.select) : null;
     openSpec(`${detail.machine}:${detail.path}`, part === "" ? null : part);
   });
@@ -292,23 +236,25 @@ export function createPortWindow(windowId = "main"): PortWindow {
   window.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
-    if (
-      target !== null &&
-      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-    ) {
-      return;
-    }
+    const field = target !== null &&
+      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    // Declared captured fields use their active buffer's text-entry
+    // context. Other fields (including the window picker) stay native.
+    if (field && !target?.closest("[data-port-captured-input]")) return;
     // Modifier chords stay native until the IME/native-editing
     // boundary set is pinned (draft-open, grouped decision): the port
     // never eats an OS or browser chord while the boundary is unset.
     if (event.ctrlKey || event.altKey || event.metaKey) return;
-    const disposition = dispatchStroke(windowHost, instrument, {
+    const stroke = {
       key: event.key,
       ctrl: event.ctrlKey,
       shift: event.shiftKey,
       alt: event.altKey,
       meta: event.metaKey,
-    });
+    };
+    const disposition = field
+      ? instrument.handleKey(stroke)
+      : dispatchStroke(windowHost, instrument, stroke);
     if (disposition === "consume") event.preventDefault();
   });
 
@@ -391,7 +337,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
         width: metrics.width,
         height: metrics.height,
       },
-      find: findView(),
     });
   }
 
@@ -426,35 +371,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
     trailView: () => trail.view(),
     openPicker: () => picker.open(),
     closePicker: () => picker.close(),
-    findEnter: () => {
-      find.enter();
-      notifyFind();
-    },
-    findType: (text) => {
-      const out = find.type(text);
-      notifyFind();
-      return out;
-    },
-    findMove: (delta) => {
-      const occurrence = find.move(delta);
-      notifyFind();
-      return {
-        part: occurrence === null ? null : occurrence.unit.id,
-        count: find.occurrences().length,
-        active: find.occurrences().length > 0 ? find.active() : -1,
-      };
-    },
-    findEscape: () => {
-      find.escape();
-      notifyFind();
-    },
-    subscribeFind(observer) {
-      findObservers.add(observer);
-      observer(findView());
-      return () => {
-        findObservers.delete(observer);
-      };
-    },
     submitPicker: (spec) => picker.submit(spec),
     subscribePicker(observer) {
       return picker.subscribe(observer);

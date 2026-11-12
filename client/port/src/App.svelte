@@ -18,9 +18,6 @@ from the registry's reviewed erasure boundary. -->
   let picker = $state<PickerState>({ open: false });
   let pickerInput: HTMLInputElement | null = $state(null);
   let pickerValue = $state("");
-  let findView: { open: boolean; query: string; count: number; active: number } | null = $state(null);
-  let findInput: HTMLInputElement | null = $state(null);
-  let findValue = $state("");
 
   onMount(() => {
     const windowPort = createPortWindow();
@@ -35,16 +32,11 @@ from the registry's reviewed erasure boundary. -->
       picker = state;
       if (state.open) pickerValue = "";
     });
-    const offFind = windowPort.subscribeFind((state) => {
-      findView = state;
-      if (state.open && document.activeElement !== findInput) findValue = state.query;
-    });
     void windowPort.boot();
     return () => {
       offFrame();
       offStrip();
       offPicker();
-      offFind();
       windowPort.destroy();
       port = null;
     };
@@ -62,16 +54,6 @@ from the registry's reviewed erasure boundary. -->
     if (picker.open) pickerInput?.focus();
   });
 
-  // Find opens focused the same way; movement scrolls the part into
-  // view through the presentation's own DOM (presentation owns DOM
-  // adaptation; the session owns the semantics).
-  $effect(() => {
-    if (findView?.open) findInput?.focus();
-  });
-
-  function revealPart(part: string): void {
-    scroller?.querySelector(`[data-port-part=${JSON.stringify(part)}]`)?.scrollIntoView({ block: "center" });
-  }
 </script>
 
 <div class="port-shell">
@@ -103,32 +85,6 @@ from the registry's reviewed erasure boundary. -->
           }
         }}
       />
-    </div>
-  {/if}
-  {#if findView?.open}
-    <div class="port-find">
-      <input
-        bind:this={findInput}
-        bind:value={findValue}
-        data-port-control="find-input"
-        placeholder="find in this revision"
-        oninput={() => {
-          port?.findType(findValue);
-        }}
-        onkeydown={(event) => {
-          if (event.key === "Enter") {
-            const moved = port?.findMove(event.shiftKey ? -1 : 1);
-            if (moved?.part != null) revealPart(moved.part);
-          } else if (event.key === "Escape") {
-            port?.findEscape();
-          }
-        }}
-      />
-      {#if findView !== null}
-        <span class="port-find-status" data-port-find-status="">
-          {findView.count > 0 ? `${findView.active + 1} / ${findView.count}` : "type to search"}
-        </span>
-      {/if}
     </div>
   {/if}
   <main class="port-content" bind:this={scroller}>

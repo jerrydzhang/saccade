@@ -63,8 +63,8 @@ test("collisions between different actions are errors at load", () => {
 });
 
 test("the real port contexts validate at construction", () => {
-  windowContext({ openPicker: () => {}, closeOverlays: () => {}, openFind: () => {} });
-  boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, enterSelect: () => {} });
+  windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false });
+  boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, enterSelect: () => {}, enterFind: () => {} });
 });
 
 test("gg runs the scroll-top action through the host matcher; a lone g expires consumed", () => {
@@ -75,6 +75,7 @@ test("gg runs the scroll-top action through the host matcher; a lone g expires c
       scrollToTop: () => ran.push("top"),
       scrollToBottom: () => ran.push("bottom"),
       enterSelect: () => {},
+      enterFind: () => {},
     }),
     { scheduler },
   );
@@ -90,7 +91,7 @@ test("gg runs the scroll-top action through the host matcher; a lone g expires c
 test("shift-G scrolls to bottom; unmatched keys are consumed, not native", () => {
   const ran: string[] = [];
   const host = createHostMatcher(
-    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), enterSelect: () => {} }),
+    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), enterSelect: () => {}, enterFind: () => {} }),
     { scheduler: manualScheduler() },
   );
   assert.equal(host.apply(host.stroke(stroke("G", { shift: true }))), "consume");
@@ -102,7 +103,7 @@ test("the matcher's expiry fires the completed spelling when it is its own bindi
   let clock = 0;
   const ran: string[] = [];
   const matcher = createMatcher(
-    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), enterSelect: () => {} }),
+    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), enterSelect: () => {}, enterFind: () => {} }),
     { now: () => clock },
   );
   // a binding of 'g' alone would make g-g ambiguous; here only gg is
@@ -119,12 +120,13 @@ test("the matcher's expiry fires the completed spelling when it is its own bindi
 test("the window chain: space-space opens the picker at the window level; other keys reach the buffer", () => {
   const windowEvents: string[] = [];
   const bufferEvents: KeyInput[] = [];
+  let pickerOpen = false;
   const scheduler = manualScheduler();
   const windowHost = createHostMatcher(
     windowContext({
-      openPicker: () => windowEvents.push("picker"),
-      closeOverlays: () => windowEvents.push("close"),
-      openFind: () => windowEvents.push("find"),
+      openPicker: () => { pickerOpen = true; windowEvents.push("picker"); },
+      closeOverlays: () => { pickerOpen = false; windowEvents.push("close"); },
+      pickerIsOpen: () => pickerOpen,
     }),
     { scheduler },
   );
@@ -146,6 +148,11 @@ test("the window chain: space-space opens the picker at the window level; other 
   // escape closes overlays at the window level
   assert.equal(dispatchStroke(windowHost, buffer, stroke("Escape")), "consume");
   assert.deepEqual(windowEvents, ["picker", "close"]);
+  // Closed window surfaces cannot steal Escape from a buffer capture.
+  dispatchStroke(windowHost, buffer, stroke("Escape"));
+  assert.equal(bufferEvents.at(-1)?.key, "Escape");
+  dispatchStroke(windowHost, buffer, stroke("/"));
+  assert.equal(bufferEvents.at(-1)?.key, "/", "Find entry is content-owned");
 });
 
 test("the picker controller: submit goes through the one open funnel, then closes", () => {

@@ -165,6 +165,12 @@ body {
 
 /* Placement only: the find bar. */
 .port-find {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--port-color-background);
   display: flex;
   gap: 0.5rem;
   align-items: center;
