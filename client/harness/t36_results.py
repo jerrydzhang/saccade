@@ -315,8 +315,15 @@ def validate_manifest(manifest: dict, require_seeds: bool = False, require_proto
         _refusal(manifest, "app", "expected an object with bin and ref", refusals)
     else:
         app_bin = app.get("bin")
-        if not isinstance(app_bin, str) or not app_bin.startswith("/nix/store/") or not os.path.isfile(app_bin) or not os.access(app_bin, os.X_OK):
-            _refusal(manifest, "app.bin", "expected an executable /nix/store path", refusals)
+        # a store path (the authoritative build) or the lane's debug
+        # pin (r88): iteration records carry the pin, and the
+        # manifest records which - an authoritative run always names
+        # the store
+        app_bin_accepted = isinstance(app_bin, str) and (
+            app_bin.startswith("/nix/store/") or app_bin.startswith("/var/tmp/saccade-app-1000/debug-bin/")
+        )
+        if not app_bin_accepted or not os.path.isfile(app_bin) or not os.access(app_bin, os.X_OK):
+            _refusal(manifest, "app.bin", "expected an executable /nix/store path or the lane debug pin", refusals)
         app_ref = app.get("ref")
         if not isinstance(app_ref, str) or not _REF.match(app_ref or ""):
             _refusal(manifest, "app.ref", "expected a nonempty printable build ref (the commit the binary was built from)", refusals)

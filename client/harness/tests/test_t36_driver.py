@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import unittest.mock
+from unittest import mock
 import pathlib
 import shutil
 import sys
@@ -655,3 +656,62 @@ class T36RelaunchWiringTest(unittest.TestCase):
         session_request({"probe": 2})
         self.assertEqual(state["requests"][-1], "sock-1")
         self.assertEqual(state["ups"][0], ("up", "root"))
+
+
+class BaselineCacheTest(unittest.TestCase):
+    """The baseline verdict cache (r88): the key covers everything the
+    baseline lane's verdicts can depend on; entries load only when
+    whole and matching; corrupt or partial entries are ignored."""
+
+    def _plan(self, harness_commit="a" * 40):
+        return {
+            "role": "baseline",
+            "lane": "t36",
+            "app_bin": "/nix/store/0000000000000000000000000000000-saccade-app-0.1.0/bin/saccade-app",
+            "app_ref": "4d59c351a63b9a6448b4b5971f50284249211c4d",
+            "manifest": {"harness_commit": harness_commit, "run_id": "run-x"},
+        }
+
+    def _options(self, checks="", board="/tmp/b/board.yaml"):
+        return argparse.Namespace(
+            baseline_bin="x", baseline_ref="x", candidate_bin="x", candidate_ref="x",
+            board=board, tracker_db="/tmp/seed.db",
+            serve_bin="/nix/store/0000000000000000000000000000000-saccade/bin/sac",
+            serve_ref="4d59c351a63b9a6448b4b5971f50284249211c4d",
+            checks=checks, lane="t36", fresh_baseline=False,
+        )
+
+    def test_key_is_stable_and_covers_harness_checks_and_constants(self):
+        base = t36_driver.baseline_cache_key(self._plan(), self._options())
+        # stable for identical inputs
+        self.assertEqual(base, t36_driver.baseline_cache_key(self._plan(), self._options()))
+        # a different harness commit changes the key
+        self.assertNotEqual(base, t36_driver.baseline_cache_key(self._plan(harness_commit="b" * 40), self._options()))
+        # a different checks subset changes the key
+        self.assertNotEqual(base, t36_driver.baseline_cache_key(self._plan(), self._options(checks="S08")))
+        # a different board changes the key
+        self.assertNotEqual(base, t36_driver.baseline_cache_key(self._plan(), self._options(board="/tmp/other.yaml")))
+
+    def test_store_then_load_roundtrip_and_corruption_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(t36_driver, "BASELINE_CACHE_ROOT", pathlib.Path(tmp)):
+                key = "k" * 24
+                t36_driver.baseline_cache_store(
+                    key, [{"id": "S08", "status": "pass"}], {"run_id": "origin-1", "harness_commit": "a" * 40}, 1,
+                )
+                entry = pathlib.Path(tmp) / key
+                self.assertTrue((entry / "results.json").exists())
+                loaded = t36_driver.baseline_cache_load(key)
+                self.assertIsNotNone(loaded)
+                self.assertEqual(loaded["results"], [{"id": "S08", "status": "pass"}])
+                self.assertEqual(loaded["meta"]["origin_run"], "origin-1")
+                self.assertEqual(loaded["meta"]["exit_code"], 1)
+                # a mismatched meta key is rejected
+                (entry / "meta.json").write_text(json.dumps({"key": "other"}), encoding="utf-8")
+                self.assertIsNone(t36_driver.baseline_cache_load(key))
+                # a missing results file is rejected
+                t36_driver.baseline_cache_store(
+                    key, [{"id": "S08", "status": "pass"}], {"run_id": "origin-2"}, 1,
+                )
+                (entry / "results.json").unlink()
+                self.assertIsNone(t36_driver.baseline_cache_load(key))

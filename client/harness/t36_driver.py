@@ -61,8 +61,17 @@ def _validate_app_binary(role: str, app_bin: str, refusals: list[str]) -> None:
     if not os.path.isabs(app_bin):
         refusals.append(f"{role} app binary must be an absolute path as given: {app_bin!r}")
         return
-    if not app_bin.startswith("/nix/store/"):
-        refusals.append(f"{role} app binary must be a /nix/store path (the packaged app is store-pinned): {app_bin!r}")
+    # a store path (the authoritative, reproducible build) or the
+    # debug iteration pin (r88): the lane's own debug root, whose
+    # runtime is reproduced from the cached authoritative build. The
+    # manifest records whichever was used - a debug-pin run is an
+    # iteration record, never an authoritative one
+    accepted = app_bin.startswith("/nix/store/") or app_bin.startswith("/var/tmp/saccade-app-1000/debug-bin/")
+    if not accepted:
+        refusals.append(
+            f"{role} app binary must be a /nix/store path or the lane's debug pin"
+            f" (the packaged app is store-pinned): {app_bin!r}"
+        )
         return
     if not os.path.isfile(app_bin) or not os.access(app_bin, os.X_OK):
         refusals.append(f"{role} app binary is not an executable file: {app_bin!r}")
@@ -180,6 +189,70 @@ def check_subset(spec: str) -> list[str]:
 LANE_CHECK_LINE = re.compile(r"^\[webdriver\] (ok|FAIL): (.+)$")
 
 LANES = ("tracker", "t36")
+
+# The baseline lane's verdict cache (r88): the baseline is pinned and
+# its record is stable for a given harness + binary + constants +
+# checks shape, so iteration runs reuse it instead of paying the lane
+# every time. A fresh run (--fresh-baseline) regenerates the entry and
+# doubles as the cache's own validation; phase gates run fresh.
+BASELINE_CACHE_ROOT = pathlib.Path("/var/tmp/saccade-app-1000/t36-baseline-cache")
+
+
+def baseline_cache_key(plan: dict, options: argparse.Namespace) -> str:
+    """Everything the baseline lane's verdicts can depend on: the
+    binary and its ref, the harness commit and adapter set, the shared
+    constants (board, tracker db, serve binary and ref, lane), and the
+    checks subset actually executed."""
+    import hashlib
+
+    material = {
+        "app_ref": plan["app_ref"],
+        "app_bin": str(pathlib.Path(plan["app_bin"]).resolve()),
+        "harness_commit": plan["manifest"].get("harness_commit"),
+        "adapter_set_revision": t36_adapters.ADAPTER_SET_REVISION,
+        "board": str(pathlib.Path(options.board).resolve()),
+        "tracker_db": options.tracker_db,
+        "serve_ref": options.serve_ref,
+        "serve_bin": str(pathlib.Path(options.serve_bin).resolve()),
+        "checks": sorted(check_subset(options.checks)) if options.checks else [],
+        "lane": plan.get("lane"),
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def baseline_cache_load(key: str) -> dict | None:
+    """A valid cache entry or None: corrupt, mismatched or partial
+    entries are ignored (the lane just runs fresh)."""
+    entry = BASELINE_CACHE_ROOT / key
+    try:
+        results = json.loads((entry / "results.json").read_text(encoding="utf-8"))
+        meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(results, list) or not isinstance(meta, dict):
+        return None
+    if meta.get("key") != key or not isinstance(meta.get("plan_manifest"), dict):
+        return None
+    if not isinstance(meta.get("exit_code"), int):
+        return None
+    return {"results": results, "meta": meta}
+
+
+def baseline_cache_store(key: str, results: list[dict], plan_manifest: dict, exit_code: int) -> None:
+    """Record one baseline lane run for reuse; never a cleanup sweep."""
+    import time as _time
+
+    entry = BASELINE_CACHE_ROOT / key
+    entry.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "key": key,
+        "origin_run": plan_manifest.get("run_id"),
+        "recorded": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "exit_code": exit_code,
+        "plan_manifest": plan_manifest,
+    }
+    (entry / "results.json").write_text(json.dumps(results) + "\n", encoding="utf-8")
+    (entry / "meta.json").write_text(json.dumps(meta, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def t36_inventory_ids() -> list[str]:
@@ -402,6 +475,31 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
     exit_codes: dict[str, int] = {}
     role_results: dict[str, list[dict]] = {}
     for plan in plans:
+        # the baseline lane rides its verdict cache (r88): a pinned
+        # baseline, an unchanged harness and constants, the same
+        # checks shape - the lane need not re-run for pairing alone.
+        # --fresh-baseline forces the re-run and regenerates the entry
+        cache_key = None
+        cached = None
+        if plan["role"] == "baseline" and not getattr(options, "fresh_baseline", False):
+            cache_key = baseline_cache_key(plan, options)
+            cached = baseline_cache_load(cache_key)
+        if cached is not None:
+            run_root = isolation.make_run_root(f"t36-{plan['role']}")
+            t36_results.write_manifest(str(run_root / "manifest.json"), plan["manifest"])
+            # the TAP carries the ORIGIN run's manifest - the run that
+            # actually produced these results; this run's manifest.json
+            # records what would have run
+            origin_manifest = cached["meta"]["plan_manifest"]
+            tap_path = write_run_tap(run_root, plan["role"], cached["results"], origin_manifest)
+            exit_codes[plan["role"]] = cached["meta"]["exit_code"]
+            role_results[plan["role"]] = cached["results"]
+            print(
+                f"[t36-driver] baseline lane CACHED key={cache_key}"
+                f" origin_run={cached['meta'].get('origin_run')} tap={tap_path}",
+                flush=True,
+            )
+            continue
         run_root = isolation.make_run_root(f"t36-{plan['role']}")
         manifest_path = run_root / "manifest.json"
         t36_results.write_manifest(str(manifest_path), plan["manifest"])
@@ -460,7 +558,8 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
                 try:
                     t36_differential.attach(prototype)
                     t36_checks.set_relauncher(relaunch)
-                    results = t36_checks.run_checks(request=session_request, check_ids=t36_inventory_ids(), pace=1.0)
+                    check_ids = check_subset(options.checks) if options.checks else t36_inventory_ids()
+                    results = t36_checks.run_checks(request=session_request, check_ids=check_ids, pace=1.0)
                 finally:
                     t36_checks.set_relauncher(None)
                     t36_differential.attach(None)
@@ -473,6 +572,9 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
         tap_path = write_run_tap(run_root, plan["role"], results, plan["manifest"])
         exit_codes[plan["role"]] = t36_results.tap_exit_code(t36_results.emit_tap(results))
         role_results[plan["role"]] = results
+        if plan["role"] == "baseline" and cache_key is not None:
+            baseline_cache_store(cache_key, results, plan["manifest"], exit_codes[plan["role"]])
+            print(f"[t36-driver] baseline lane cached for reuse key={cache_key}", flush=True)
         deps.down()
         print(
             f"[t36-driver] {plan['role']} run root: {run_root} tap={tap_path}"
@@ -502,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serve-bin", help="absolute path to the real sac binary used for seeding and the lane")
     parser.add_argument("--serve-ref", help="the commit the serve binary was built from (t-36@r58: catches serve skew)")
     parser.add_argument("--checks", default="", help="optional comma-separated scenario subset (S08,S18)")
+    parser.add_argument("--fresh-baseline", action="store_true", help="run the baseline lane fresh, regenerating its verdict cache (phase gates)")
     parser.add_argument("--lane", default="tracker", choices=list(LANES), help="tracker (default) or t36 (up-t36 + the check inventory with the prototype half)")
     parser.add_argument("--execute", action="store_true", help="run both lanes (default is --dry-run)")
     options = parser.parse_args(argv)
