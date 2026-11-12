@@ -506,6 +506,20 @@ def check_s12_label_case_fold(request: RequestFn, pace: float = DEFAULT_PACE) ->
 def _s12_port(request: RequestFn, pace: float) -> dict:
     import time
 
+    # ground the probe on a board that carries an uppercase label (the
+    # cited seed's group): the check must not inherit whatever board a
+    # previous check left on screen (the tall sequence board's labels
+    # are all lowercase, which stranded the premise after S10 started
+    # passing)
+    from t36_differential import _wait_port_loaded
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    if cited is not None:
+        t36_port.open_via_port_picker(request, f"{base}/seedtracker/{cited}", pace)
+        _wait_port_loaded(request, pace, f"/{cited}")
     _key(request, "escape")
     _sleep(pace, 0.3)
     _key(request, "s")

@@ -648,6 +648,8 @@ class PortWidenedBodiesTest(unittest.TestCase):
                     self.typed_spec = payload.get("text")
             if payload.get("cmd") == "input" and payload.get("kind") in ("key", "hotkey"):
                 keys = payload.get("keys") or []
+                if keys == [" ", " "]:
+                    self.typed_spec = None  # the picker opened fresh: the field is empty
                 if "G" in keys or ("shift" in keys and "g" in keys):
                     self.viewport_top = 900.0
                 if payload.get("kind") == "hotkey" and "shift" in keys and ";" in keys:
@@ -795,6 +797,8 @@ class S15SignatureGateTest(unittest.TestCase):
                     self.typed = (self.typed or "") + ":"  # shift+; is the chord for ':'
             if payload.get("cmd") == "input" and payload.get("kind") == "key":
                 keys = payload.get("keys") or []
+                if keys == [" ", " "]:
+                    self.typed = None  # the picker opened fresh: the field is empty
                 if keys and len(keys[0]) == 1 and keys[0] not in ("escape", " "):
                     self.typed = (self.typed or "") + keys[0]
                 if "enter" in keys and self.typed:

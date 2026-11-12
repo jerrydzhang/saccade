@@ -165,21 +165,21 @@ def part_rect(request, part: str) -> dict:
 
 def type_text(request, target: str, text: str, pace: float, timeout: float = 15.0) -> None:
     """Target-addressed real typing: a real click on the known field
-    (focus), the clear via the existing input verb, the actual focus
-    asserted through read-only observation, then the WHOLE text
-    through the type verb's send_keys - every response _ok'd and the
-    whole operation bounded from BEFORE the click. The target is a port
-    control id (port:<name>). This distinguishes stale focus or an
-    appended old query from product meaning: the helper's own premise
-    (focused, cleared) is asserted, never assumed.
+    (focus), the field asserted fresh (the picker and find fields open
+    empty - residue stops, never typed over), then the WHOLE text
+    through the type verb's send_keys with the delivered value
+    asserted - every response _ok'd and the whole operation bounded
+    from BEFORE the click. The target is a port control id
+    (port:<name>).
 
-    The delivery channel is send_keys, not per-character key events:
-    the key verb synthesizes codepoints and the live lane delivered a
-    shifted symbol wrong ('@' landed as '2' - shift+2 without its
-    shift - recorded on the f447de1 run), while send_keys carried
-    full specs including '@' and ':' verbatim in the 6e30b80
-    authoritative run (S15 passed there). The value assertion after
-    typing is the guard: any divergence stops naming the field."""
+    The delivery channel is send_keys into a fresh field, the only
+    combination the live lane has delivered verbatim (the 6e30b80
+    authoritative run). Both alternatives are proven broken on this
+    stack, each with a recorded stop: a clear_element before send_keys
+    poisons the delivery (':' lands as ';'), and the per-character key
+    verb synthesizes codepoints without their shift ('@' lands as
+    '2'). The value assertions on both sides of typing are the guard:
+    any divergence stops naming the field."""
     import time
 
     from t36_checks import _evaluate, _ok, _sleep
@@ -220,16 +220,24 @@ def type_text(request, target: str, text: str, pace: float, timeout: float = 15.
             f"the field {target!r} is not focused after the click (stale or wrong focus)"
         )
 
-    # the clear via the existing input verb (clear_element + empty send)
-    _ok(request({"cmd": "input", "kind": "type", "target": target, "text": ""}, timeout=min(30.0, remaining())))
-    _sleep(pace, 0.2)
-    # the clear and the focus are asserted BEFORE typing: an empty
-    # value under focus is the helper's own premise, never assumed
+    # the field is expected EMPTY (the picker and the find field
+    # open fresh): asserted, never cleared. A clear_element before
+    # send_keys POISONS the delivery on this stack - the shifted keys
+    # land unshifted (':' as ';', recorded live twice: the 4cfbebf
+    # readiness observations and the 5a44c71 run3 stops) - and the
+    # per-character key verb is no fallback either ('@' landed as '2',
+    # the f447de1 run2 stop). send_keys into a fresh field carried
+    # full specs verbatim in the 6e30b80 authoritative run. Residue in
+    # the field stops naming the field; it is never silently typed
+    # over.
     if not focused_now():
-        raise CheckStopped(f"the field {target!r} lost focus during the clear")
-    cleared = field_value()
-    if cleared not in ("", None):
-        raise CheckStopped(f"the clear did not empty {target!r} (value {cleared!r})")
+        raise CheckStopped(f"the field {target!r} lost focus before typing")
+    residue = field_value()
+    if residue not in ("", None):
+        raise CheckStopped(
+            f"the field {target!r} is not fresh (carries {residue!r}); the real-input"
+            " clear path needs its own grounded design - no silent typing over residue"
+        )
 
     # the whole text through one send_keys (the delivery evidence in
     # the docstring); bounded, response checked, the value asserted
