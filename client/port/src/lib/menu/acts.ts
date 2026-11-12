@@ -152,6 +152,27 @@ export function actsFor(
     }
     return acts;
   }
+  if (target.kind === "text" && target.part !== null) {
+    // F5 + B10 (ruled): every part's menu OPENS - a text block's
+    // act is y 'copy citation' (the shown revision plus the part's
+    // full canonical path). This is the block's PRIMARY while
+    // annotate (a) and history (t) are unbuilt: Enter or a plain
+    // click on a paragraph copies, never annotates. The ruled
+    // difference from the prototype's a-first order is recorded.
+    const citation = deps.partCitation(target.part);
+    const ports = deps.referencePorts();
+    if (citation === null || ports === null) return [];
+    return [
+      {
+        key: "y",
+        action: {
+          id: "block.copy-citation",
+          label: "copy citation",
+          run: () => ports.copy(citation),
+        },
+      },
+    ];
+  }
   if (target.kind === "reference" && target.part !== null) {
     const source = deps.referenceOf(target.part);
     const ports = deps.referencePorts();

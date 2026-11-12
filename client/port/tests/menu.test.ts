@@ -26,6 +26,19 @@ test("groups carry fold/unfold; other kinds carry nothing yet", () => {
   assert.equal(acts.length, 1);
   assert.equal(acts[0]?.key, "z");
   assert.equal(acts[0]?.action.label, "unfold");
+  // F5: a text block carries y copy citation when its citation and
+  // the ports exist; without them it stays act-less (no menu)
+  const textActs = actsFor({ kind: "text", label: "prose", part: "/content/0" }, {
+    isFolded: () => false,
+    toggleFold: () => {},
+    referenceOf: () => null,
+    referencePorts: () => ({ copy: () => {}, open: () => {}, figureEnlarge: () => {} }),
+    referenceMachine: () => null,
+    partCitation: () => "t-9@r4:/content/0",
+  });
+  assert.equal(textActs.length, 1);
+  assert.equal(textActs[0]?.key, "y");
+  assert.equal(textActs[0]?.action.label, "copy citation");
   assert.deepEqual(actsFor({ kind: "text", label: "prose", part: "/content/0" }, {
     isFolded: () => false,
     toggleFold: () => {},
@@ -130,9 +143,10 @@ function menuHarness(folded: Set<string>) {
 test("the board menu host: selection opens for groups, capture/restore ride the lease, z folds", () => {
   const folded = new Set<string>();
   const { menu, events, context } = menuHarness(folded);
-  // an act-less kind opens nothing
+  // F5: a text part OPENS with its copy act (the ruled primary);
+  // an act-less kind (no citation composed) still opens nothing
   menu.openFor({ part: "/content/0", kind: "text", label: "prose" });
-  assert.deepEqual(events, []);
+  assert.deepEqual(events, [], "no ports injected: nothing opens");
   assert.equal(context(), null);
   // a group opens, captures, and the declared act key folds it
   menu.openFor({ part: "/content/1", kind: "group", label: "the group" });
