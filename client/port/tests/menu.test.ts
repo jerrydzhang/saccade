@@ -279,3 +279,51 @@ test("a plain click on the citation runs the same ACT as the menu paths (id and 
     assert.deepEqual(entry, { spec: "seedtracker/t-0@r1", part: "/content/0/content/1" });
   }
 });
+
+// -- the OPEN acts (S18): o/i/w ride the window's elsewhere port ------
+
+test("with the elsewhere port the citation carries the OPEN acts in the KINDS order: f, o, i, w, y", () => {
+  const { deps } = referenceHarness({
+    ports: {
+      open: () => {},
+      copy: () => {},
+      elsewhere: () => {},
+    },
+  });
+  const acts = actsFor({ kind: "reference", label: "t-0@r1", part: "/content/1" }, deps);
+  assert.deepEqual(
+    acts.map((act) => act.key),
+    ["f", "o", "i", "w", "y"],
+  );
+  assert.equal(acts[1]?.action.label, "open at the link");
+  assert.equal(acts[2]?.action.label, "open elsewhere once");
+  assert.equal(acts[3]?.action.label, "open in a new viewer");
+});
+
+test("the OPEN acts deliver the composed spec with their act; without the port they never appear", () => {
+  const elsewhere: { spec: string; act: string }[] = [];
+  const withPort = referenceHarness({
+    ports: {
+      open: () => {},
+      copy: () => {},
+      elsewhere: (spec, act) => { elsewhere.push({ spec, act }); },
+    },
+  });
+  const acts = actsFor({ kind: "reference", label: "t-0@r1", part: "/content/1" }, withPort.deps);
+  acts[1]?.action.run();
+  acts[2]?.action.run();
+  acts[3]?.action.run();
+  assert.deepEqual(elsewhere, [
+    { spec: "seedtracker/t-0@r1", act: "link" },
+    { spec: "seedtracker/t-0@r1", act: "once" },
+    { spec: "seedtracker/t-0@r1", act: "new" },
+  ]);
+  // the unbound window (no state yet) offers follow and copy only -
+  // the same honest absence as the ports-null case
+  const without = referenceHarness();
+  const bare = actsFor({ kind: "reference", label: "t-0@r1", part: "/content/1" }, without.deps);
+  assert.deepEqual(
+    bare.map((act) => act.key),
+    ["f", "y"],
+  );
+});

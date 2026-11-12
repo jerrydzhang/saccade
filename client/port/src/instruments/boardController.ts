@@ -118,7 +118,11 @@ export interface BoardUI extends HydrationHost {
   /** The window services the reference acts ride (the one open
    * funnel and the copy observation); injected by the window, and no
    * reference act is offered before then. */
-  setReferencePorts(ports: { open(spec: string, part: string | null): void; copy(payload: string): void }): void;
+  setReferencePorts(ports: {
+    open(spec: string, part: string | null): void;
+    copy(payload: string): void;
+    elsewhere?(spec: string, act: "link" | "once" | "new"): void;
+  }): void;
   /** Update outcomes for the actual shown frame's generation;
    * rendering never enters or invalidates the loading queue. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;

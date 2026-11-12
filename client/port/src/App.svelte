@@ -18,6 +18,9 @@ from the registry's reviewed erasure boundary. -->
   let picker = $state<PickerState>({ open: false });
   let pickerInput: HTMLInputElement | null = $state(null);
   let pickerValue = $state("");
+  let ask = $state<import("./lib/elsewhere.ts").AskState | null>(null);
+  let askInput: HTMLInputElement | null = $state(null);
+  let askValue = $state("");
 
   onMount(() => {
     const windowPort = createPortWindow();
@@ -32,11 +35,16 @@ from the registry's reviewed erasure boundary. -->
       picker = state;
       if (state.open) pickerValue = "";
     });
+    const offAsk = windowPort.subscribeAsk((state) => {
+      ask = state;
+      if (state !== null) askValue = "";
+    });
     void windowPort.boot();
     return () => {
       offFrame();
       offStrip();
       offPicker();
+      offAsk();
       windowPort.destroy();
       port = null;
     };
@@ -52,6 +60,12 @@ from the registry's reviewed erasure boundary. -->
   // the board keymap.
   $effect(() => {
     if (picker.open) pickerInput?.focus();
+  });
+
+  // The ask opens focused the same way: typing answers a window chip,
+  // Enter delivers, Escape cancels (the chips ride the strip).
+  $effect(() => {
+    if (ask !== null) askInput?.focus();
   });
 
 </script>
@@ -70,6 +84,23 @@ from the registry's reviewed erasure boundary. -->
       <span class="port-strip-chip">{strip.jumpChip}</span>
     {/if}
   </header>
+  {#if ask !== null}
+    <div class="port-picker">
+      <input
+        bind:this={askInput}
+        bind:value={askValue}
+        data-port-control="ask-input"
+        placeholder="deliver to window chip: {ask.chips.map((entry) => entry.chip).join(", ")}"
+        onkeydown={(event) => {
+          if (event.key === "Enter") {
+            port?.answerAsk(askValue);
+          } else if (event.key === "Escape") {
+            port?.cancelAsk();
+          }
+        }}
+      />
+    </div>
+  {/if}
   {#if picker.open}
     <div class="port-picker">
       <input

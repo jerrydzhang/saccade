@@ -43,6 +43,15 @@ import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { isPinnedWindowChord, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
+import {
+  assignChips,
+  elsewhereDecision,
+  type AskState,
+  type ElsewhereAct,
+  type SuiteWindow,
+} from "./lib/elsewhere.ts";
+import { WindowStore } from "./lib/windows.ts";
+import { serverBase } from "./lib/tracker.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
@@ -68,6 +77,9 @@ export interface PortWindow {
   closePicker(): void;
   submitPicker(spec: string): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
+  answerAsk(chip: string): void;
+  cancelAsk(): void;
+  subscribeAsk(observer: (state: AskState | null) => void): () => void;
   readout(): PortObservation;
 }
 
@@ -94,6 +106,224 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // semantics: the key seam skips field targets, so typing inside the
   // picker stays native (scenario 10).
   const picker = createPickerController((spec) => openSpec(spec));
+
+  // -- the elsewhere surface (S18): the window's o/i/w OPEN acts -----
+  // The window binds a window-store state on the home tracker (the
+  // state carries this window's link - the o act's remembered
+  // receiver); binding happens when a tracker is first reached (the
+  // store lives there, and at boot none is known yet).
+  let windowStore: WindowStore | null = null;
+  let windowStateId: string | null = null;
+  let linkLabel: string | null = null;
+  let ask: AskState | null = null;
+  let elsewhereNote: string | null = null;
+  const askObservers = new Set<(state: AskState | null) => void>();
+
+  function notifyAsk(): void {
+    for (const observer of askObservers) observer(ask);
+  }
+
+  async function suiteWindows(): Promise<SuiteWindow[]> {
+    const invoke = tauriInvoke();
+    return (await invoke("suite_windows")) as SuiteWindow[];
+  }
+
+  async function ensureWindowState(): Promise<string | null> {
+    if (windowStore !== null) return null;
+    let restored: string | null = null;
+    try {
+      const base = serverBase();
+      const invoke = tauriInvoke();
+      const binding = (await invoke("window_binding")) as {
+        label: string;
+        // the shell skips the field when no state is bound (serde
+        // skip_serializing_if): absent means unbound, not null
+        state_id?: string | null;
+      };
+      windowStore = new WindowStore({ base });
+      if (typeof binding.state_id === "string" && binding.state_id.length > 0) {
+        windowStateId = binding.state_id;
+        await windowStore.attach(windowStateId);
+      } else {
+        const fresh =
+          typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        await windowStore.create(fresh, {});
+        await windowStore.attach(fresh);
+        await invoke("bind_window_state", {
+          stateId: fresh,
+          server: base.toString(),
+          device: windowStore.device,
+        });
+        windowStateId = fresh;
+      }
+      const state = await windowStore.getState(windowStateId);
+      restored = state.location;
+      await refreshLink();
+      injectReferenceElsewhere();
+      notifyStrip();
+    } catch (error) {
+      // no bridge, or the store refused: the elsewhere acts stay
+      // unoffered and the note records why (the honest refusal, never
+      // a fake surface)
+      elsewhereNote = `elsewhere unavailable: ${String(error instanceof Error ? error.message : error)}`;
+      notifyStrip();
+    }
+    return restored;
+  }
+
+  async function refreshLink(): Promise<void> {
+    linkLabel = null;
+    if (windowStore === null || windowStateId === null) return;
+    try {
+      const state = await windowStore.getState(windowStateId);
+      const linked = state.link;
+      if (linked === null || linked.length === 0) return;
+      const windows = await suiteWindows();
+      linkLabel = windows.find((entry) => entry.state_id === linked)?.label ?? null;
+    } catch {
+      // a dead store read: the link resolves null until the next
+      // refresh; o asks rather than delivering into a guess
+    }
+  }
+
+  async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
+    if (windowStore === null || windowStateId === null) return;
+    const invoke = tauriInvoke();
+    const fresh =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    // the delivery rides the state's birth location: the receiver
+    // restores it at boot through its own model (no eval into a
+    // half-loaded webview - the race the old app shipped as its
+    // linked-delivery hole)
+    await windowStore.create(fresh, { location: spec });
+    const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
+    if (becomeLink) {
+      // the store refuses links between windows not both attached on
+      // this device, and the receiver attaches when ITS boot binds -
+      // bounded wait for the attach, then the link (never an unbounded
+      // or dishonest success)
+      await setLinkWhenAttached(windowStateId, fresh);
+      await refreshLink();
+      notifyStrip();
+    }
+  }
+
+  async function setLinkWhenAttached(from: string, to: string, tries = 24): Promise<void> {
+    if (windowStore === null) return;
+    for (let attempt = 0; attempt < tries; attempt++) {
+      try {
+        await windowStore.setLink(from, to);
+        return;
+      } catch {
+        const state = await windowStore.getState(to).catch(() => null);
+        if (state !== null && state.attachedHere) {
+          // attached on this device and still refused: not a race -
+          // the honest give-up names it
+          throw new Error(`the link could not be set even after ${to} attached`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    throw new Error(`the receiver ${to} never attached on this device`);
+  }
+
+  async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
+    if (windowStore === null || windowStateId === null) {
+      await ensureWindowState();
+      if (windowStore === null || windowStateId === null) {
+        note = elsewhereNote ?? "the window store is not serving this window";
+        notifyStrip();
+        return;
+      }
+    }
+    const invoke = tauriInvoke();
+    const windows = await suiteWindows();
+    const decision = elsewhereDecision(act, { linkLabel, windows });
+    if (decision.kind === "deliver") {
+      await invoke("open_in_window", { label: decision.label, location: spec });
+      return;
+    }
+    if (decision.kind === "new-window") {
+      await openInNewWindow(spec, decision.becomeLink);
+      return;
+    }
+    // the ask: chips on every window, the answer typed here
+    await invoke("broadcast_jump_labels", {
+      labels: assignChips(windows.map((entry) => entry.label)).map((entry) => ({
+        window: entry.window,
+        chip: entry.chip,
+      })),
+    });
+    ask = { act, spec, chips: assignChips(windows.map((entry) => entry.label)) };
+    notifyAsk();
+    notifyStrip();
+  }
+
+  async function answerAsk(chip: string): Promise<void> {
+    const asking = ask;
+    if (asking === null) return;
+    ask = null;
+    const invoke = tauriInvoke();
+    await invoke("broadcast_jump_labels_clear");
+    const match = asking.chips.find((entry) => entry.chip === chip.trim());
+    if (match === undefined) {
+      notifyAsk();
+      notifyStrip();
+      return;
+    }
+    await invoke("open_in_window", { label: match.window, location: asking.spec });
+    if (asking.act === "link" && windowStore !== null && windowStateId !== null) {
+      const windows = await suiteWindows();
+      const target = windows.find((entry) => entry.label === match.window);
+      if (target?.state_id !== undefined && target.state_id !== null) {
+        await windowStore.setLink(windowStateId, target.state_id);
+        await refreshLink();
+      }
+    }
+    notifyAsk();
+    notifyStrip();
+  }
+
+  async function cancelAsk(): Promise<void> {
+    if (ask === null) return;
+    ask = null;
+    try {
+      const invoke = tauriInvoke();
+      await invoke("broadcast_jump_labels_clear");
+    } catch {
+      // the broadcast already cleared or the bridge left; the ask is
+      // closed either way
+    }
+    notifyAsk();
+    notifyStrip();
+  }
+
+  /** The reference acts grow the OPEN acts once the window state is
+   * bound (the ports object is injected once at build; this re-taps
+   * the controller's ports with the elsewhere member present). */
+  function injectReferenceElsewhere(): void {
+    const ui = instrument.presentation as BoardUI;
+    ui.setReferencePorts({
+      open: (spec, part) => openSpec(spec, part),
+      copy: (payload) => {
+        lastCopy = { payload, at: Date.now() };
+        try {
+          void navigator.clipboard.writeText(payload);
+        } catch {
+          // the lane's webview may refuse the clipboard API; the
+          // recorded payload is the act's truth either way
+        }
+        notifyStrip();
+      },
+      elsewhere: (spec, act) => {
+        void openElsewhere(spec, act);
+      },
+    });
+  }
 
   // Window commands own the picker. Reading interactions and their
   // captured field commands belong to the active instrument.
@@ -196,6 +426,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
       return;
     }
     note = null;
+    // every tracker reach funnels through here, and the parse above is
+    // what registers the tracker the store lives on: the window state
+    // (and with it the elsewhere acts) binds on the first reach (S18)
+    void ensureWindowState();
     // One operation schedules the content request; the refresh
     // pipeline publishes. A citation naming a part anchors the open
     // there (fold reveal rides the placement, scenario 8). The open
@@ -295,6 +529,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
     try {
       console.log("[viewer] startup: bridge present");
+      const restored = await ensureWindowState();
+      if (restored !== null && restored.length > 0) {
+        console.log(`[viewer] startup: restoring the bound state's location: ${restored}`);
+        openSpec(restored);
+        return true;
+      }
       const spec = (await invoke("test_open")) as string | null;
       if (!spec) {
         console.log("[viewer] no test open; starting empty");
@@ -350,6 +590,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const metrics = viewport.metrics();
     return buildReadout({
       windowLabel: nativeWindowLabel(),
+      link: linkLabel,
+      ask: ask === null
+        ? null
+        : { act: ask.act, spec: ask.spec, chips: ask.chips },
       state: lastFrame,
       diagnostics: diagnostics.entries(),
       doors,
@@ -398,6 +642,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
     submitPicker: (spec) => picker.submit(spec),
     subscribePicker(observer) {
       return picker.subscribe(observer);
+    },
+    answerAsk: (chip) => {
+      void answerAsk(chip);
+    },
+    cancelAsk: () => {
+      void cancelAsk();
+    },
+    subscribeAsk(observer) {
+      askObservers.add(observer);
+      observer(ask);
+      return () => {
+        askObservers.delete(observer);
+      };
     },
     destroy() {
       windowHost.dispose();

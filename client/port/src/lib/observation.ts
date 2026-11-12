@@ -39,7 +39,15 @@ export const PORT_SURFACE = "__saccadePort" as const;
 
 export type PortObservation = {
   app: Readonly<{ name: "saccade-app-port"; slice: number }>;
-  window: Readonly<{ label: string | null }>;
+  window: Readonly<{
+    label: string | null;
+    /** The live window carrying this window's link (the o act's
+     * remembered receiver), or null (S18). */
+    link: string | null;
+    /** A live ask: the act that asked, the spec, the answerable
+     * chips (S18). */
+    ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
+  }>;
   board: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
     asked: string | null;
@@ -168,6 +176,8 @@ function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
 export function buildReadout(
   input: Readonly<{
     windowLabel: string | null;
+    link: string | null;
+    ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
     state: BufferState<RenderPair>;
     diagnostics: readonly DiagnosticEntryView[];
     doors: DoorsState;
@@ -180,7 +190,7 @@ export function buildReadout(
   const board = frame?.board ?? null;
   return {
     app: { name: "saccade-app-port", slice: 1 },
-    window: { label: input.windowLabel },
+    window: { label: input.windowLabel, link: input.link, ask: input.ask },
     board: {
       status,
       asked: frame ? frame.asked : null,

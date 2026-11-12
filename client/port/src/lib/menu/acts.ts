@@ -18,6 +18,7 @@ import type { Action, InputContext, KeyInput, KeyResolution } from "../input/inp
 import { selectToPart } from "../board/targets.ts";
 import { formatLocation } from "../location.ts";
 import { createMenuSession, type MenuAct, type MenuSession, type MenuTarget } from "./session.ts";
+import type { ElsewhereAct } from "../elsewhere.ts";
 
 /** A model-authored citation source (the incorporation block's). */
 export type ReferenceSource = Readonly<{
@@ -33,6 +34,9 @@ export type ReferenceSource = Readonly<{
 export type ReferencePorts = Readonly<{
   open(spec: string, part: string | null): void;
   copy(payload: string): void;
+  /** The elsewhere acts (o/i/w, S18): present only when the window
+   * has bound its window-store state - the acts appear with it. */
+  elsewhere?: (spec: string, act: ElsewhereAct) => void;
 }>;
 
 export interface BoardMenuDeps {
@@ -223,6 +227,37 @@ export function actsFor(
           run: () => ports.open(spec, anchorPart === "" ? null : anchorPart),
         },
       },
+      // the OPEN acts (the r90 KINDS order: follow-here first, then
+      // open elsewhere, then copy): o delivers at the link, i asks
+      // once without touching the link, w opens a new viewer
+      ...(ports.elsewhere
+        ? ([
+            {
+              key: "o",
+              action: {
+                id: "reference.open-at-link",
+                label: "open at the link",
+                run: () => ports.elsewhere?.(spec, "link"),
+              },
+            },
+            {
+              key: "i",
+              action: {
+                id: "reference.open-once",
+                label: "open elsewhere once",
+                run: () => ports.elsewhere?.(spec, "once"),
+              },
+            },
+            {
+              key: "w",
+              action: {
+                id: "reference.open-new",
+                label: "open in a new viewer",
+                run: () => ports.elsewhere?.(spec, "new"),
+              },
+            },
+          ] as const)
+        : []),
       {
         key: "y",
         action: {
