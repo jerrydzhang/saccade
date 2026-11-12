@@ -20,13 +20,17 @@
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "useUnknownInCatchVariables": true
+    "useUnknownInCatchVariables": true,
+    "paths": {
+      "#scenario": ["./tests/scenarios/kit/browser.ts"]
+    }
   },
   "include": [
     "src/**/*.ts",
     "src/**/*.svelte",
     "tests/**/*.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "node_modules",

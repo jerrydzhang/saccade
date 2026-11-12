@@ -4,7 +4,7 @@
 // ancestor walk. Pure tests with fakes - no DOM.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { partAncestors, selectToPart } from "../src/lib/board/targets.ts";
 import { SliceBufferHost as BufferController } from "../src/components/Buffer.ts";
 import type { BufferBuild, BuiltBuffer } from "../src/components/Buffer.ts";

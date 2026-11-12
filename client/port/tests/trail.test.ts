@@ -3,7 +3,7 @@
 // places - never folds, zoom or drafts (scenario 14).
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createTrail } from "../src/lib/navigation/trail.ts";
 import type { SavedPlace } from "../src/lib/contracts/places.ts";
 

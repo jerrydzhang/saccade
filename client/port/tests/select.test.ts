@@ -5,7 +5,7 @@
 // model-derived target walk. Pure - no DOM, no sources.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createSelectSession } from "../src/lib/select/session.ts";
 import type { SelectableTarget } from "../src/lib/select/session.ts";
 import { assignLabels } from "../src/lib/select/label-select.ts";

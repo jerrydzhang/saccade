@@ -5,7 +5,7 @@
 // builds with; no DOM, no svelte runtime (the component type enters
 // the glue only as opaque data).
 
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import type { Component } from "svelte";
 import {

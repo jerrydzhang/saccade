@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createFindInteraction } from "../src/lib/find/interaction.ts";
 import type { FindUnit } from "../src/lib/find/session.ts";
 import { createHostMatcher } from "../src/lib/input/host.ts";

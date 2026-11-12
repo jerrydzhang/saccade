@@ -7,7 +7,7 @@
 // payload. Pure tests - no DOM, no sources.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createBoardMenu, actsFor, type ReferencePorts } from "../src/lib/menu/acts.ts";
 import { createMenuSession } from "../src/lib/menu/session.ts";
 import type { Action } from "../src/lib/contracts/input.ts";

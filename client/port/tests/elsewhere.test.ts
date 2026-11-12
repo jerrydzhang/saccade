@@ -2,7 +2,7 @@
 // the ask's chips, and their honest edges. Pure: no store, no shell.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { assignChips, elsewhereDecision, type SuiteWindow } from "../src/lib/elsewhere.ts";
 

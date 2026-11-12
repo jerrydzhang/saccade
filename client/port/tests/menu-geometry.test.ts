@@ -2,7 +2,7 @@
 // beside-the-target with the flip, clamped. Pure math tests.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { menuPlacement } from "../src/lib/menu/geometry.ts";
 

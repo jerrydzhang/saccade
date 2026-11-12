@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, onTestFinished, vi } from "vitest";
 import { createViewport, SliceBufferHost } from "../src/components/Buffer.ts";
 import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import { connectBoard } from "../src/instruments/boardController.ts";
@@ -13,7 +13,7 @@ test("retained-frame hydration and folding cannot supersede a pending board open
   const source = sourceFor(machine) as TrackerSource;
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
-  t.mock.method(source, "loadText", async (location: { path: string }) => {
+  vi.spyOn(source, "loadText").mockImplementation(async (location: { path: string }) => {
     if (location.path.startsWith("t-2")) await gate;
     if (location.path.startsWith("t-3")) throw new Error("C could not load");
     return {
@@ -23,9 +23,9 @@ test("retained-frame hydration and folding cannot supersede a pending board open
   });
   let finishAsset!: () => void;
   const bytes = new Uint8Array([1, 2, 3]);
-  t.mock.method(source, "loadAsset", async () => {
+  vi.spyOn(source, "loadAsset").mockImplementation(async () => {
     await new Promise<void>((resolve) => { finishAsset = resolve; });
-    return { bytes };
+    return { bytes } as never;
   });
   let attachment!: InstrumentAttachment<BoardUI, BoardAnchor>;
   const controller = new SliceBufferHost<BoardData, BoardUI, BoardAnchor>({
@@ -34,7 +34,7 @@ test("retained-frame hydration and folding cannot supersede a pending board open
     connect(buffer) { attachment = connectBoard(buffer); return attachment; },
   });
   const built = controller.wire();
-  t.after(() => built.host.destroy());
+  onTestFinished(() => built.host.destroy());
   await attachment.places.request({ machine, path: "t-1@r1" });
   const a = built.host.snapshot();
   assert.ok(a.kind === "alive" && a.content.kind === "available");

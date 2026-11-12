@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, onTestFinished } from "vitest";
 import { createViewport, SliceBufferHost } from "../src/components/Buffer.ts";
 import type { BufferAccess } from "../src/components/Buffer.ts";
 import { commandContext } from "../src/lib/contracts/input.ts";
@@ -29,7 +29,7 @@ test("part bounds and viewport reveal share content coordinates after scrolling"
   });
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
   Object.defineProperty(globalThis, "HTMLElement", { value: FakeElement, configurable: true });
-  t.after(() => {
+  onTestFinished(() => {
     if (descriptor) Object.defineProperty(globalThis, "HTMLElement", descriptor);
     else Reflect.deleteProperty(globalThis, "HTMLElement");
   });
@@ -55,7 +55,7 @@ test("part bounds and viewport reveal share content coordinates after scrolling"
     },
   });
   const built = controller.wire();
-  t.after(() => built.host.destroy());
+  onTestFinished(() => built.host.destroy());
   const expected = { left: 80, top: 550, right: 180, bottom: 590 };
   assert.deepEqual(access.geometry.bounds("/content/0"), expected);
   viewport.reveal(expected);

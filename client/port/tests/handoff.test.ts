@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createViewport, SliceBufferHost } from "../src/components/Buffer.ts";
 import type { BufferAccess } from "../src/components/Buffer.ts";
 import { commandContext, key, sequence } from "../src/lib/contracts/input.ts";

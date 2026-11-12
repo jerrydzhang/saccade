@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, onTestFinished } from "vitest";
 import { createViewport, SliceBufferHost } from "../src/components/Buffer.ts";
 import type { BufferAccess, ContentFrame } from "../src/components/Buffer.ts";
 import { commandContext } from "../src/lib/contracts/input.ts";
@@ -52,7 +52,7 @@ function harness() {
 }
 
 test("a displayed fold during a delayed open does not cancel that open", async (t) => {
-  const h = harness(); t.after(() => h.host.destroy());
+  const h = harness(); onTestFinished(() => h.host.destroy());
   await h.access.updates.refresh(() => ({ kind: "ready", value: frame("A") }));
   const gate = deferred();
   const opening = h.access.updates.refresh(async () => { await gate.promise; return { kind: "ready", value: frame("B") }; });
@@ -64,7 +64,7 @@ test("a displayed fold during a delayed open does not cancel that open", async (
 });
 
 test("displayed patches preserve pending state and only a newer load supersedes a load", async (t) => {
-  const h = harness(); t.after(() => h.host.destroy());
+  const h = harness(); onTestFinished(() => h.host.destroy());
   await h.access.updates.refresh(() => ({ kind: "ready", value: frame("A") }));
   const b = deferred(), c = deferred();
   const openingB = h.access.updates.refresh(async () => { await b.promise; return { kind: "ready", value: frame("B") }; });
@@ -81,7 +81,7 @@ test("displayed patches preserve pending state and only a newer load supersedes 
 });
 
 test("a failed delayed load retains the patched displayed frame and reports failure", async (t) => {
-  const h = harness(); t.after(() => h.host.destroy());
+  const h = harness(); onTestFinished(() => h.host.destroy());
   await h.access.updates.refresh(() => ({ kind: "ready", value: frame("A") }));
   const gate = deferred();
   const opening = h.access.updates.refresh(async () => {

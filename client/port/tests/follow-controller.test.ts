@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, onTestFinished, vi } from "vitest";
 import { SliceBufferHost } from "../src/components/Buffer.ts";
 import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import { connectBoard } from "../src/instruments/boardController.ts";
@@ -19,7 +19,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   let failRead = false;
   const reads: string[] = [];
   const polls: number[] = [];
-  t.mock.method(source, "loadText", async (location: { path: string }) => {
+  vi.spyOn(source, "loadText").mockImplementation(async (location: { path: string }) => {
     reads.push(location.path);
     if (failRead) throw new Error("temporary source failure");
     return {
@@ -27,19 +27,19 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
       location: { machine, path: `t-1@r${revision}` },
     };
   });
-  t.mock.method(source, "currentBoardPage", async (task: number) => {
+  vi.spyOn(source, "currentBoardPage").mockImplementation(async (task: number) => {
     polls.push(task);
-    return { location: `t-1@r${revision}` };
+    return { location: `t-1@r${revision}` } as never;
   });
   let job: (() => void) | null = null;
   const realTimeout = globalThis.setTimeout;
   const realClear = globalThis.clearTimeout;
   const timerId = 99999;
-  t.mock.method(globalThis, "setTimeout", (run: () => void, ms: number, ...args: unknown[]) => {
-    if (ms === FOLLOW_POLL_MS) { job = run; return timerId; }
-    return realTimeout(run, ms, ...args);
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((run: () => void, ms?: number, ...args: unknown[]) => {
+    if (ms === FOLLOW_POLL_MS) { job = run; return timerId as never; }
+    return realTimeout(run, ms, ...args) as never;
   });
-  t.mock.method(globalThis, "clearTimeout", (id: number) => {
+  vi.spyOn(globalThis, "clearTimeout").mockImplementation((id) => {
     if (id === timerId) job = null;
     else realClear(id);
   });
@@ -54,7 +54,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
     connect(buffer) { attachment = connectBoard(buffer); return attachment; },
   });
   const built = controller.wire();
-  t.after(() => built.host.destroy());
+  onTestFinished(() => built.host.destroy());
   const tick = async () => {
     const run = job;
     job = null;

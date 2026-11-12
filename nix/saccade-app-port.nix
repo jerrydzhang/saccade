@@ -49,7 +49,7 @@
     pname = "saccade-app-port-web";
     version = "0.1.0";
     inherit src;
-    npmDepsHash = "sha256-4If+YQ7JzFfDAoPN83hxCxm5J5Sbk9aboK2zF8EzBrw=";
+    npmDepsHash = "sha256-QwFOmsvsdmqVWfxfNMGS0NFF12vd5UaQKPq4C1PBMKo=";
   };
   webDist = buildNpmPackage (npm
     // {
