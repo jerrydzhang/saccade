@@ -34,6 +34,7 @@ test("part ancestors walk outermost-first", () => {
 function buildFake(behaviour: {
   reveal: (call: number) => { kind: "found"; bounds: Bounds } | { kind: "pending" } | { kind: "missing" };
   unfoldCalls: string[];
+  vetAfterRequest?: boolean;
 }): {
   built: BuiltBuffer<{ block: string }, Record<string, never>>;
   revealed: Bounds[];
@@ -56,14 +57,24 @@ function buildFake(behaviour: {
     moveTo: (next) => { moved.push(next); position = { ...next }; },
   };
   let revealCalls = 0;
+  let appliedRequests = 0;
   const attachment: InstrumentAttachment<Record<string, never>, BoardAnchor> = {
     presentation: {},
     input: commandContext(() => []),
     places: {
       captureDisplayed: () => ({ address: { machine: "m", path: "/p" }, position: { kind: "default" } }),
-      request: async () => "applied",
-      acceptsAnchor: (data: AnchorData): data is BoardAnchor =>
-        (data as { kind?: string }).kind === "board-part",
+      request: async () => {
+        appliedRequests += 1;
+        return "applied";
+      },
+      // when the vet must be destination-aware, the anchor is only
+      // acceptable AFTER a request applied: a pre-request vet fails
+      // this check (the S08 regression shape)
+      acceptsAnchor: behaviour.vetAfterRequest === true
+        ? (data: AnchorData): data is BoardAnchor =>
+            appliedRequests > 0 && (data as { kind?: string }).kind === "board-part"
+        : (data: AnchorData): data is BoardAnchor =>
+            (data as { kind?: string }).kind === "board-part",
       revealAnchor: (anchor: BoardAnchor) => {
         behaviour.unfoldCalls.push(anchor.path);
         return behaviour.reveal(revealCalls++);
@@ -151,6 +162,50 @@ test("a confirmed-missing anchor defaults AT the same place", async () => {
   await settled(job.snapshot.bind(job));
   assert.equal(job.snapshot(), "defaulted");
   assert.deepEqual(revealed, []);
+});
+
+test("a cross-board anchored open vets the anchor against the destination, not the display", async () => {
+  // the S08 live finding: a citation names a part of the board it
+  // opens. The anchor exists in the DESTINATION model and not in the
+  // currently displayed one - the pre-request vet rejected every
+  // such open, so the citation landed with its fold never unfolded.
+  // The fake only accepts an anchor AFTER a request applied: a
+  // pre-request vet fails the job, the destination-aware vet restores
+  // it with the reveal.
+  const unfoldCalls: string[] = [];
+  const { built } = buildFake({
+    reveal: () => ({ kind: "found", bounds: { left: 0, top: 20, right: 100, bottom: 40 } }),
+    unfoldCalls,
+    vetAfterRequest: true,
+  });
+  const job = built.host.places.restore({
+    bufferId: "b",
+    address: { machine: "m", path: "/destination" },
+    position: { kind: "anchor", anchor: { kind: "board-part", path: "/content/0/content/0" }, viewportOffset: { left: 0, top: 0 } },
+  });
+  await settled(job.snapshot.bind(job));
+  assert.equal(job.snapshot(), "restored", "the anchor of the opened board reveals instead of being rejected pre-open");
+  assert.deepEqual(unfoldCalls, ["/content/0/content/0"], "the reveal ran after the open applied");
+});
+
+test("an anchor missing at the destination defaults AT the same requested place", async () => {
+  // the vet runs AFTER the open applies: a destination-missing anchor
+  // is confirmed missing - default position at the same place with
+  // the rejection reported, never a silent nothing (scenario 7)
+  const unfoldCalls: string[] = [];
+  const { built } = buildFake({
+    reveal: () => ({ kind: "found", bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+    unfoldCalls,
+    vetAfterRequest: true,
+  });
+  const job = built.host.places.restore({
+    bufferId: "b",
+    address: { machine: "m", path: "/p" },
+    position: { kind: "anchor", anchor: { kind: "not-a-board-part" } as unknown as BoardAnchor, viewportOffset: { left: 0, top: 0 } },
+  });
+  await settled(job.snapshot.bind(job));
+  assert.equal(job.snapshot(), "defaulted");
+  assert.deepEqual(unfoldCalls, [], "no reveal for an anchor the destination does not carry");
 });
 
 async function settled(snapshot: () => string): Promise<void> {

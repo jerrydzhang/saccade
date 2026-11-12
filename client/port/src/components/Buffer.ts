@@ -504,17 +504,13 @@ export class SliceBufferHost<
       job.finish("cancelled");
       return;
     }
-    if (place.position.kind === "anchor" && !attached.places.acceptsAnchor(place.position.anchor)) {
-      this.diagnostics.report(
-        this.context,
-        knownIssue({
-          code: "anchor-rejected",
-          message: "the restored place's anchor does not belong to this buffer's content",
-        }),
-      );
-      job.finish("failed");
-      return;
-    }
+    // The anchor is vetted AFTER the open applies, against the
+    // DESTINATION frame - never before, against whatever the buffer
+    // happens to display. A citation names a part of the board it
+    // opens: vetting pre-request rejected every cross-board anchored
+    // open (the S08 live finding - the citation landed correctly and
+    // the fold never unfolded, because the anchor was checked against
+    // the citing board's targets).
     const outcome = await attached.places.request(place.address);
     if (this.destroyed || job.cancelled) {
       job.finish("cancelled");
@@ -528,6 +524,24 @@ export class SliceBufferHost<
     }
     if (place.position.kind !== "anchor") {
       job.finish("restored");
+      return;
+    }
+    // Confirmed missing at the DESTINATION (the open applied; the
+    // anchor names no part of the frame it produced): the default
+    // position at the SAME requested address - never a viewer-state
+    // reset, never a silent nothing (scenario 7) - with the rejection
+    // reported as a diagnostic
+    if (!attached.places.acceptsAnchor(place.position.anchor)) {
+      this.diagnostics.report(
+        this.context,
+        knownIssue({
+          code: "anchor-rejected",
+          message: "the restored place's anchor does not belong to this buffer's content",
+        }),
+      );
+      const position = attached.places.defaultPosition(this.viewport.metrics());
+      this.viewport.moveTo(position);
+      job.finish("defaulted");
       return;
     }
     // The anchor placement: reveal (which may unfold containers and
