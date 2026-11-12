@@ -38,6 +38,7 @@ import {
   type PortObservation,
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
+import { formatLocation } from "./lib/location.ts";
 import { selectToPart } from "./lib/board/targets.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
@@ -229,7 +230,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
       return;
     }
     const part = typeof detail.select === "string" ? selectToPart(detail.select) : null;
-    openSpec(`${detail.machine}:${detail.path}`, part === "" ? null : part);
+    // The open takes the parseable location form, never a hand-rolled
+    // machine:path join: a tracker machine ("tracker:seedtracker") with
+    // a colon join parses as nothing ("not a location" - the S08 live
+    // finding). formatLocation builds the form the picker and the
+    // header field take back; the tracker's host resolves through the
+    // registry the first hosted open registered.
+    openSpec(formatLocation({ machine: detail.machine, path: detail.path }), part === "" ? null : part);
   });
 
   // -- the key routing seam: window context, then the active buffer ---
