@@ -12,7 +12,7 @@
 // releasing on destruction.
 
 import type { BufferAccess, ContentFrame, InstrumentAttachment } from "../components/Buffer.ts";
-import { failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
+import { createLoadScope, failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
 import { knownIssue } from "../lib/contracts/buffer.ts";
 import type {
   KnownIssue,
@@ -154,11 +154,8 @@ const EMPTY_FRAME: BoardData = {
 export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<BoardUI, BoardAnchor> {
   // Controller state: the open generation, the resolved location the
   // shown frame was read at, and the outcomes its hydration reported.
-  let generation = 0;
+  const scope = createLoadScope<BoardData>(EMPTY_FRAME);
   let resolved: Location | null = null;
-  let askedSpec = "";
-  let lastFrame: BoardData = EMPTY_FRAME;
-  let released = false;
   // Folded group part paths: view state, survives refreshes of this
   // buffer (folds are never rewound by anything but their own act).
   const foldedSet = new Set<string>();
@@ -180,7 +177,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       }
     },
     shownRevision() {
-      return lastFrame.resolved !== null ? lastFrame.resolved.path : null;
+      const resolved = scope.frame().resolved;
+      return resolved !== null ? resolved.path : null;
     },
     async refresh() {
       const address = followAddress;
@@ -203,7 +201,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
 
   function displayedData(): Readonly<BoardData> | null {
     const state = buffer.snapshot();
-    if (released || state.kind !== "alive") return null;
+    if (scope.isDestroyed() || state.kind !== "alive") return null;
     const frame = state.content.kind === "available" ? state.content.value
       : state.content.kind === "pending" ? state.content.previous : null;
     return frame?.value ?? null;
@@ -224,7 +222,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     subscribeFind: find.subscribe,
     typeFind: find.type,
     async loadFigureAsset(location: Location, block: FigureBlock) {
-      if (released) return "stale";
+      if (scope.isDestroyed()) return "stale";
       const token = displayedGeneration();
       if (token === null) return "stale";
       try {
@@ -267,7 +265,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // the same action object every path runs: the citation's target
       // built from the MODEL (label = the address, as the prototype's
       // menu head reads el.dataset.loc)
-      const target = lastFrame.targets.find((entry) => entry.part === part);
+      const target = scope.frame().targets.find((entry) => entry.part === part);
       if (target === undefined || target.source === undefined) return;
       const label = `${target.source.task}@r${target.source.revision}`;
       boardMenu.session.primaryClick({ kind: "reference", label, part });
@@ -279,10 +277,11 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // every invocation uses
       // the label is the figure's own citation (the menu head), the
       // same composition the copy act uses
-      const match = /@r(\d+)$/.exec(lastFrame.location);
+      const frame = scope.frame();
+      const match = /@r(\d+)$/.exec(frame.location);
       const citation =
-        match !== null && lastFrame.board !== null && lastFrame.board.task.length > 0
-          ? `${lastFrame.board.task}@r${match[1]}:${part}`
+        match !== null && frame.board !== null && frame.board.task.length > 0
+          ? `${frame.board.task}@r${match[1]}:${part}`
           : part;
       boardMenu.session.primaryClick({ kind: "figure", label: citation ?? part, part });
       notifyMenu();
@@ -291,7 +290,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       referencePorts = ports;
     },
     reportRenderOutcomes(reported, outcomes) {
-      if (released || reported !== displayedGeneration()) return;
+      if (scope.isDestroyed() || reported !== displayedGeneration()) return;
       const key = JSON.stringify([reported, outcomes]);
       if (key === publishedOutcomesKey) return;
       buffer.updates.updateDisplayed((frame) => {
@@ -309,19 +308,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   };
 
   async function load(address: Address): Promise<PreparedContent<BoardData>> {
-    if (released)
+    if (scope.isDestroyed())
       return {
         kind: "failed",
         issue: failureIssue("lane-unavailable", "the buffer was destroyed"),
       };
-    const token = ++generation;
+    const token = scope.begin();
     // a new open starts with no published outcomes
     publishedOutcomesKey = "";
     const asked = formatLocation({
       machine: address.machine,
       path: address.path,
     });
-    askedSpec = asked;
+    scope.setAsked(asked);
     const location: Location = { machine: address.machine, path: address.path };
     const page = instrumentPath(location.path);
     if (page !== null) {
@@ -339,7 +338,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     let resolvedLocation: Location = location;
     try {
       const loaded = await sourceFor(location.machine).loadText(location);
-      if (token !== generation)
+      if (scope.isStale(token))
         return {
           kind: "failed",
           issue: failureIssue("lane-unavailable", "superseded"),
@@ -349,7 +348,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // revision that answered, and its figures read the same tree
       resolvedLocation = loaded.location;
     } catch (error) {
-      if (token !== generation)
+      if (scope.isStale(token))
         return {
           kind: "failed",
           issue: failureIssue("lane-unavailable", "superseded"),
@@ -371,13 +370,13 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         message: error instanceof Error ? error.message : String(error),
       };
     }
-    if (token !== generation)
+    if (scope.isStale(token))
       return {
         kind: "failed",
         issue: failureIssue("lane-unavailable", "superseded"),
       };
     const result = decodeBoard(text);
-    if (token !== generation)
+    if (scope.isStale(token))
       return {
         kind: "failed",
         issue: failureIssue("lane-unavailable", "superseded"),
@@ -395,7 +394,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return {
         kind: "ready",
         value: {
-          asked: askedSpec,
+          asked: scope.asked(),
           location: formatLocation(resolvedLocation),
           resolved: resolvedLocation,
           status: "invalid",
@@ -417,7 +416,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         return {
           kind: "ready",
           value: {
-            asked: askedSpec,
+            asked: scope.asked(),
             location: formatLocation(resolvedLocation),
             resolved: resolvedLocation,
             status: "invalid",
@@ -433,7 +432,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return {
         kind: "ready",
         value: {
-          asked: askedSpec,
+          asked: scope.asked(),
           location: formatLocation(resolvedLocation),
           resolved: resolvedLocation,
           status: "invalid",
@@ -446,9 +445,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         },
       };
     }
-    lastFrame = {
+    scope.adopt({
       generation: token,
-      asked: askedSpec,
+      asked: scope.asked(),
       location: formatLocation(resolvedLocation),
       resolved: resolvedLocation,
       status: "loaded",
@@ -457,8 +456,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       renderOutcomes: [],
       targets: boardTargetsOf(result.board),
       folded: [...foldedSet],
-    };
-    return { kind: "ready", value: lastFrame };
+    });
+    return { kind: "ready", value: scope.frame() };
   }
 
   const places: ContentPlaces<BoardAnchor> = {
@@ -471,7 +470,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // position. Geometry is live measurement; a target with no
       // measurable presentation is skipped, never guessed.
       const viewTop = viewport.position.top;
-      for (const target of lastFrame.targets) {
+      for (const target of scope.frame().targets) {
         const bounds = buffer.geometry.bounds(target.part);
         if (bounds === null) continue;
         if (viewTop >= bounds.top && viewTop < bounds.bottom) {
@@ -498,7 +497,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
         });
       } finally {
-        if (!released && intent === openIntent) {
+        if (!scope.isDestroyed() && intent === openIntent) {
           const task = /^t-(\d+)$/.exec(address.path);
           if (task !== null && address.machine.startsWith("tracker:")) {
             followAddress = { ...address };
@@ -515,7 +514,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         (data as { kind?: unknown }).kind === "board-part" &&
         typeof (data as { path?: unknown }).path === "string" &&
         // the anchor must name a part of THIS frame's model
-        lastFrame.targets.some((target) => target.part === (data as { path: string }).path)
+        scope.frame().targets.some((target) => target.part === (data as { path: string }).path)
       );
     },
     revealAnchor(anchor: BoardAnchor): AnchorLocation {
@@ -568,7 +567,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   });
 
   const selectSession = createSelectSession({
-    targets: () => lastFrame.targets,
+    targets: () => scope.frame().targets,
     visible(target) {
       const metrics = buffer.viewport.metrics();
       const viewTop = metrics.position.top;
@@ -593,18 +592,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),
     referenceOf: (part) => {
-      const target = lastFrame.targets.find((entry) => entry.part === part);
+      const target = scope.frame().targets.find((entry) => entry.part === part);
       if (target === undefined || target.source === undefined) return null;
       return { task: target.source.task, revision: target.source.revision, select: target.source.select };
     },
     referencePorts: () => referencePorts,
-    referenceMachine: () => lastFrame.resolved?.machine ?? null,
+    referenceMachine: () => scope.frame().resolved?.machine ?? null,
     partCitation: (part) => {
       // the SHOWN revision (a bare open displays its resolved pin)
       // plus the part's full canonical path - never the parent
-      const match = /@r(\d+)$/.exec(lastFrame.location);
-      if (match === null || lastFrame.board === null || lastFrame.board.task.length === 0) return null;
-      return `${lastFrame.board.task}@r${match[1]}:${part}`;
+      const frame = scope.frame();
+      const match = /@r(\d+)$/.exec(frame.location);
+      if (match === null || frame.board === null || frame.board.task.length === 0) return null;
+      return `${frame.board.task}@r${match[1]}:${part}`;
     },
     capture: (context) => buffer.interactions.capture(context),
   });
@@ -636,8 +636,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     input: reading,
     places,
     release() {
-      released = true;
-      generation += 1;
+      scope.destroy();
       follow.stop();
       offFindContent();
       find.close();

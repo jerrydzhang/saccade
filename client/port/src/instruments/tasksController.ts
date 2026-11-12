@@ -20,7 +20,7 @@
 // 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
-import { failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
+import { createLoadScope, failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
 import { knownIssue } from "../lib/contracts/buffer.ts";
 import type {
   KnownIssue,
@@ -121,11 +121,8 @@ function lastFrameStillCarries(model: TasksPageModel, task: string): boolean {
 }
 
 export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachment<TasksUI, TaskAnchor> {
-  let generation = 0;
+  const scope = createLoadScope<TasksData>(EMPTY_FRAME);
   let resolved: Location | null = null;
-  let askedSpec = "";
-  let lastFrame: TasksData = EMPTY_FRAME;
-  let released = false;
 
   const menuObservers = new Set<(view: MenuView | null) => void>();
 
@@ -133,7 +130,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   let ports: TaskPorts | null = null;
 
   function machine(): string | null {
-    return lastFrame.resolved?.machine ?? null;
+    return scope.frame().resolved?.machine ?? null;
   }
 
   function menuView(): MenuView | null {
@@ -156,7 +153,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
 
   const tasksMenu: TasksMenu = createTasksMenu({
     machine,
-    rowLink: (part) => taskRowOf(lastFrame.page ?? { groups: [] }, part)?.location ?? null,
+    rowLink: (part) => taskRowOf(scope.frame().page ?? { groups: [] }, part)?.location ?? null,
     ports: () => ports,
     capture: (context) => buffer.interactions.capture(context),
   });
@@ -169,7 +166,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   // leaves the page clears - never a silent neighbour.
   let selectedTask: string | null = null;
   const selectSession = createSelectSession({
-    targets: () => lastFrame.targets,
+    targets: () => scope.frame().targets,
     visible(target) {
       const metrics = buffer.viewport.metrics();
       const viewTop = metrics.position.top;
@@ -204,7 +201,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       return selectedTask;
     },
     rowPrimaryClick(part) {
-      const target = lastFrame.targets.find((entry) => entry.part === part);
+      const target = scope.frame().targets.find((entry) => entry.part === part);
       if (target === undefined) return;
       tasksMenu.session.primaryClick({ kind: target.kind, label: target.text, part });
       notifyMenu();
@@ -218,14 +215,14 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   };
 
   async function load(address: Address): Promise<PreparedContent<TasksData>> {
-    if (released)
+    if (scope.isDestroyed())
       return {
         kind: "failed",
         issue: failureIssue("lane-unavailable", "the buffer was destroyed"),
       };
-    const token = ++generation;
+    const token = scope.begin();
     const asked = formatLocation({ machine: address.machine, path: address.path });
-    askedSpec = asked;
+    scope.setAsked(asked);
     const location: Location = { machine: address.machine, path: address.path };
     const page = instrumentPath(location.path);
     if (page !== "tasks") {
@@ -242,7 +239,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     try {
       source = sourceFor(location.machine);
     } catch (error) {
-      if (token !== generation) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
+      if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
       resolved = null;
       return { kind: "failed", issue: issueOf(error) };
     }
@@ -256,11 +253,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     try {
       viewPage = await source.instrumentPage("tasks");
     } catch (error) {
-      if (token !== generation) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
+      if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
       resolved = null;
       return { kind: "failed", issue: issueOf(error) };
     }
-    if (token !== generation) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
+    if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
     const model = tasksPageOf(viewPage);
     resolved = location;
     // scenario 12's identity rule: a selection whose task left the
@@ -268,17 +265,17 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     if (selectedTask !== null && !lastFrameStillCarries(model, selectedTask)) {
       selectedTask = null;
     }
-    lastFrame = {
+    scope.adopt({
       generation: token,
-      asked: askedSpec,
+      asked: scope.asked(),
       location: formatLocation(location),
       resolved: location,
       status: "loaded",
       page: model,
       targets: tasksTargetsOf(model),
       errors: [],
-    };
-    return { kind: "ready", value: lastFrame };
+    });
+    return { kind: "ready", value: scope.frame() };
   }
 
   const places: ContentPlaces<TaskAnchor> = {
@@ -291,11 +288,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       // Geometry is live measurement; a row with no measurable
       // presentation is skipped, never guessed.
       const viewTop = viewport.position.top;
-      for (const target of lastFrame.targets) {
+      for (const target of scope.frame().targets) {
         const bounds = buffer.geometry.bounds(target.part);
         if (bounds === null) continue;
         if (viewTop >= bounds.top && viewTop < bounds.bottom) {
-          const row = taskRowOf(lastFrame.page ?? { groups: [] }, target.part);
+          const row = taskRowOf(scope.frame().page ?? { groups: [] }, target.part);
           if (row === undefined) continue;
           return {
             address,
@@ -319,11 +316,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
         (data as { kind?: unknown }).kind === "task" &&
         typeof (data as { task?: unknown }).task === "string" &&
         // the anchor must name a row of THIS frame's page
-        lastFrame.targets.some((target) => target.task === (data as { task: string }).task)
+        scope.frame().targets.some((target) => target.task === (data as { task: string }).task)
       );
     },
     revealAnchor(anchor: TaskAnchor): AnchorLocation {
-      const target = lastFrame.targets.find(
+      const target = scope.frame().targets.find(
         (entry) => entry.task === anchor.task,
       );
       if (target === undefined) return { kind: "missing" };
@@ -352,8 +349,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     input: reading,
     places,
     release() {
-      released = true;
-      generation += 1;
+      scope.destroy();
       selectSession.exit();
       tasksMenu.session.outsidePointerDown();
     },
