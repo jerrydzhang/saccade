@@ -296,6 +296,153 @@ def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
 # -- S17: activity is a place, not a popup --------------------------------
 
 
+def _s17_port(request: RequestFn, pace: float) -> dict:
+    """S17's port branch: activity is a place, through the Tasks
+    instrument (the i-21 slice). Real driving throughout: the picker
+    opens the tasks page, real label keystrokes select a row, the row
+    menu's primary opens the task's activity AS A LOCATION (the
+    surface flips to the board), the trail retains it, Back returns
+    the list with the departed row at its reading anchor, Forward
+    retraces."""
+    import json as _json
+    import time as _time
+
+    from t36_checks import _key, _ok, _premise, _sleep
+
+    def readout() -> dict:
+        return t36_port.readout(request)
+
+    def wait_for(predicate, what: str, timeout: float = 15.0) -> dict | None:
+        deadline = _time.monotonic() + timeout * pace
+        while True:
+            obs = readout()
+            if predicate(obs):
+                return obs
+            if _time.monotonic() >= deadline:
+                return None
+            _sleep(pace, 0.4)
+        del what
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/tasks", pace)
+    grounded = wait_for(
+        lambda r: r.get("surface") == "tasks" and (r.get("tasks") or {}).get("status") == "loaded",
+        "the tasks page",
+    )
+    _premise(grounded is not None, "the tasks page never loaded as a surface through the picker")
+
+    rows = ((grounded or {}).get("tasks") or {}).get("rows") or []
+    _premise(len(rows) >= 2, f"the tasks page carries too few rows to walk: {len(rows)}")
+
+    # the labels paint over visible rows; a real label keystroke selects
+    _key(request, "s")
+    _sleep(pace, 0.5)
+    chips = _json_evaluate(
+        request,
+        "return JSON.stringify([...document.querySelectorAll('[data-port-label]')]"
+        ".map(el => ({label: el.getAttribute('data-port-label'),"
+        " part: el.getAttribute('data-port-part')})));",
+    )
+    _premise(isinstance(chips, list) and len(chips) > 0, f"the label chips never painted: {chips!r}")
+    first = chips[0]
+    departed = next(
+        (str(row.get("task")) for row in rows if row.get("part") == first.get("part")),
+        None,
+    )
+    _premise(departed is not None, f"the chip's row carries no task identity: {first!r}")
+    _key(request, str(first.get("label")))
+    _sleep(pace, 0.8)
+    selected = readout()
+    selection = ((selected.get("tasks") or {}).get("selection")) or None
+    menu_open = _json_evaluate(
+        request, 'return !!document.querySelector("[data-port-menu]");'
+    )
+    if selection is None or menu_open is not True:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the real label keystroke did not select the row and open its"
+                           f" menu: selection={selection!r} menu={menu_open!r}")}
+    acts = _json_evaluate(
+        request,
+        'return [...document.querySelectorAll("[data-port-menu-act]")].map(el =>'
+        " el.getAttribute('data-port-menu-act'));",
+    )
+    if acts != ["f", "o", "i", "w"]:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the row menu carries the wrong acts: {acts!r} (expected f, o, i, w)"}
+
+    # the primary (Enter runs act 0): the task's activity opens AS A
+    # LOCATION - the surface flips to the board at the task's revision
+    _key(request, "enter")
+    _sleep(pace, 1.0)
+    activity = wait_for(
+        lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
+        "the activity location",
+    )
+    if activity is None:
+        now = readout()
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the task-row primary did not open {departed!r}'s activity as a"
+                           f" location: surface={now.get('surface')!r}"
+                           f" location={(now.get('board') or {}).get('location')!r}")}
+    trail = activity.get("trail") or {}
+    if not (isinstance(trail.get("depth"), int) and trail["depth"] >= 2 and trail.get("canBack") is True):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the activity open is not retained in the trail: {trail!r}"}
+
+    # Back returns the list with the departed row at its reading anchor
+    _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "o"]}, timeout=30))
+    back = wait_for(
+        lambda r: r.get("surface") == "tasks" and (r.get("tasks") or {}).get("status") == "loaded",
+        "the tasks return",
+    )
+    if back is None:
+        now = readout()
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"Back did not return the task list: surface={now.get('surface')!r}"}
+    departed_part = next(
+        (str(row.get("part")) for row in ((back.get("tasks") or {}).get("rows") or [])
+        if row.get("task") == departed),
+        None,
+    )
+    if departed_part is None:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the departed row {departed!r} left the page on return (identity walk)"}
+    box = _json_evaluate(
+        request,
+        f"const el = document.querySelector('[data-port-part={_json.dumps(departed_part)}]');"
+        " if (!el) return null; const b = el.getBoundingClientRect();"
+        " return {top: Math.round(b.top)};",
+    )
+    top = box.get("top") if isinstance(box, dict) else None
+    if not (isinstance(top, (int, float)) and -60 <= top <= 200):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the departed row is not at its reading anchor after Back: top={top!r}"}
+
+    # Forward retraces to the activity
+    _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "i"]}, timeout=30))
+    _sleep(pace, 2.0)
+    fwd = wait_for(
+        lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
+        "the forward retrace",
+    )
+    if fwd is None:
+        now = readout()
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"Forward did not retrace to the activity: surface={now.get('surface')!r}"
+                           f" location={(now.get('board') or {}).get('location')!r}")}
+
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the task-row primary opened {departed!r}'s activity AS A LOCATION"
+                       f" (the surface flipped to the board at"
+                       f" {(fwd.get('board') or {}).get('location')!r}, trail depth"
+                       f" {trail.get('depth')}), Back returned the task list with the departed"
+                       f" row at its reading anchor (top {top}px), and Forward retraced. The"
+                       f" labels selected through real keystrokes and the row menu carried"
+                       f" f/o/i/w; no row cursor anywhere (j/k is pure scrolling, the review"
+                       f" resolution)")}
+
+
 def check_s17_activity_place(request: RequestFn, pace: float) -> dict:
     """S17, app-only judgment (A6 - the prototype's activity overlay is
     the superseded implementation; the agreed text says activity is a
@@ -309,6 +456,12 @@ def check_s17_activity_place(request: RequestFn, pace: float) -> dict:
     no-row-cursor readout rides the same scenario: the app's task rows
     carry data-task (single) and no cursor state; A3 drops the
     prototype's cursor when its half runs."""
+    # the port flavor: the same agreed judgment through the port's own
+    # surfaces (the tasks instrument, the label chips, the row act
+    # menu, the surface-routing readout)
+    if t36_port.is_port(request):
+        return _s17_port(request, pace)
+
     # the tasks instrument: rows live in the tasks window state; the
     # main window's own tasks surface (the tasks page) carries the rows
     rows = _json_evaluate(

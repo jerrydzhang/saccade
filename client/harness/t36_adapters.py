@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/4"
+ADAPTER_SET_REVISION = "t36-adapters/5"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -160,6 +160,20 @@ ADAPTERS: tuple[dict, ...] = (
         " through the shell's open door. The old-app half keeps its"
         " recorded FAIL evidence (the receiver never receives on any"
         " path); the oracle is untouched and the flip is expected.",
+    ),
+    _adapter(
+        "P5",
+        "port-tasks-surface",
+        KIND_INPUT,
+        ("S17",),
+        "On the port flavor the tasks surface is the port's own Tasks"
+        " instrument (the i-21 slice): the pipeline page restated as"
+        " rows with task identities, label chips over visible rows,"
+        " the row act menu (f primary, then the window's o/i/w), and"
+        " the surface-routing readout (surface, the tasks section, the"
+        " per-surface trail). The old-app half keeps its recorded"
+        " FAIL/stop evidence (activity as the superseded overlay); the"
+        " agreed activity-as-location judgment is unchanged.",
     ),
     _adapter(
         "P2",
