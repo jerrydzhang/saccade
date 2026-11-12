@@ -95,6 +95,47 @@ export function windowContext(actions: WindowActions): InputContext {
   return context;
 }
 
+// The figure inspection context (S04): the temporary surface's own
+// keys - the prototype's `+ - =` (zoom in, zoom out, reset) and Escape
+// (close, handing input back to the board's reading context). Every
+// stroke is answered: unmatched keys are CONSUMED inert while the
+// inspector is open (no silent fall-through to the board beneath).
+export interface InspectionActions {
+  zoomIn(): void;
+  zoomOut(): void;
+  zoomReset(): void;
+  close(): void;
+}
+
+export function inspectionContext(actions: InspectionActions): InputContext {
+  const ctx: InputContext = {
+    ...commandContext(() => [
+      {
+        action: { id: "inspection.zoom-in", label: "zoom in", run: () => actions.zoomIn() },
+        keys: [sequence(key("+"))],
+      },
+      {
+        action: { id: "inspection.zoom-out", label: "zoom out", run: () => actions.zoomOut() },
+        keys: [sequence(key("-"))],
+      },
+      {
+        action: { id: "inspection.zoom-reset", label: "reset the zoom", run: () => actions.zoomReset() },
+        keys: [sequence(key("="))],
+      },
+      {
+        action: { id: "inspection.close", label: "close the inspection", run: () => actions.close() },
+        keys: [sequence(key("Escape"))],
+      },
+    ]),
+    // the inspector is modal: anything it does not define is consumed
+    // WITHOUT action - the board beneath never sees it (no silent
+    // fall-through, scenario 4)
+    onUnmatched: () => ({ kind: "consume" }),
+  };
+  validateNoCollisions(ctx);
+  return ctx;
+}
+
 // The Board instrument's reading context: viewport reading commands
 // and the select-mode entry, declared by the content owner. The
 // viewport operations belong to the buffer's own viewport port

@@ -37,6 +37,9 @@ export type ReferencePorts = Readonly<{
   /** The elsewhere acts (o/i/w, S18): present only when the window
    * has bound its window-store state - the acts appear with it. */
   elsewhere?: (spec: string, act: ElsewhereAct) => void;
+  /** The figure's enlarge act (S04): opens the window's inspection
+   * surface for the part. */
+  figureEnlarge?: (part: string) => void;
 }>;
 
 export interface BoardMenuDeps {
@@ -197,6 +200,37 @@ export function actsFor(
         key: "y",
         action: {
           id: "board.copy-citation",
+          label: "copy citation",
+          run: () => ports.copy(citation),
+        },
+      });
+    }
+    return acts;
+  }
+  if (target.kind === "figure" && target.part !== null) {
+    // the prototype's figure kind (inst16 :47): 'x' Enlarge FIRST -
+    // a plain click enlarges - then 'a' Annotate and the OPEN/copy
+    // acts. 'a' waits for the drafts surface (the port has none yet -
+    // recorded, never silently dropped); 'o' opens through a link the
+    // port's board figures do not carry yet (offered when they do)
+    const ports = deps.referencePorts();
+    if (ports === null) return [];
+    const citation = deps.partCitation(target.part);
+    const acts: MenuAct[] = [
+      {
+        key: "x",
+        action: {
+          id: "figure.enlarge",
+          label: "enlarge",
+          run: () => ports.figureEnlarge?.(target.part ?? ""),
+        },
+      },
+    ];
+    if (citation !== null) {
+      acts.push({
+        key: "y",
+        action: {
+          id: "figure.copy-citation",
           label: "copy citation",
           run: () => ports.copy(citation),
         },

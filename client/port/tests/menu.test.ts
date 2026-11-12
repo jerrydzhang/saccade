@@ -172,7 +172,7 @@ function referenceHarness(options?: {
     referenceOf: () => source,
     referencePorts: () => ports,
     referenceMachine: () => machine,
-    partCitation: () => null,
+    partCitation: (part: string) => `t-0@r1:${part}`,
   };
   return { deps, opened, copied };
 }
@@ -325,5 +325,35 @@ test("the OPEN acts deliver the composed spec with their act; without the port t
   assert.deepEqual(
     bare.map((act) => act.key),
     ["f", "y"],
+  );
+});
+
+// -- the figure acts (S04): x enlarges first, y copies, a/o wait ------
+
+test("a figure's acts: x enlarge first (the primary a plain click runs), then y copy citation; a/o wait for their surfaces", () => {
+  const copied: string[] = [];
+  const enlarged: string[] = [];
+  const { deps } = referenceHarness({
+    ports: {
+      open: () => {},
+      copy: (payload) => { copied.push(payload); },
+      figureEnlarge: (part) => { enlarged.push(part); },
+    },
+  });
+  const acts = actsFor({ kind: "figure", label: "t-0@r1:/content/0", part: "/content/0" }, deps);
+  assert.deepEqual(
+    acts.map((act) => act.key),
+    ["x", "y"],
+  );
+  assert.equal(acts[0]?.action.label, "enlarge");
+  acts[0]?.action.run();
+  acts[1]?.action.run();
+  assert.deepEqual(enlarged, ["/content/0"]);
+  assert.deepEqual(copied, ["t-0@r1:/content/0"]);
+  // no ports, no acts - the honest absence
+  const bare = referenceHarness({ ports: null });
+  assert.deepEqual(
+    actsFor({ kind: "figure", label: "x", part: "/content/0" }, bare.deps),
+    [],
   );
 });

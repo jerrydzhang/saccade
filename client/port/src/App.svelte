@@ -21,6 +21,7 @@ from the registry's reviewed erasure boundary. -->
   let ask = $state<import("./lib/elsewhere.ts").AskState | null>(null);
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
+  let inspection = $state<import("./lib/figures/inspection.ts").InspectionState | null>(null);
 
   onMount(() => {
     const windowPort = createPortWindow();
@@ -39,12 +40,16 @@ from the registry's reviewed erasure boundary. -->
       ask = state;
       if (state !== null) askValue = "";
     });
+    const offInspection = windowPort.subscribeInspection((state) => {
+      inspection = state;
+    });
     void windowPort.boot();
     return () => {
       offFrame();
       offStrip();
       offPicker();
       offAsk();
+      offInspection();
       windowPort.destroy();
       port = null;
     };
@@ -84,6 +89,16 @@ from the registry's reviewed erasure boundary. -->
       <span class="port-strip-chip">{strip.jumpChip}</span>
     {/if}
   </header>
+  {#if inspection !== null}
+    <div class="port-inspection" data-port-control="inspection">
+      <figure class="port-inspection-figure">
+        <img src={inspection.src} alt={inspection.caption || inspection.part} style="transform: scale({inspection.zoom})" />
+        {#if inspection.caption}
+          <figcaption>{inspection.caption}</figcaption>
+        {/if}
+      </figure>
+    </div>
+  {/if}
   {#if ask !== null}
     <div class="port-picker">
       <input

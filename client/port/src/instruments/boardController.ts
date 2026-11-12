@@ -117,6 +117,9 @@ export interface BoardUI extends HydrationHost {
    * same action object every invocation path runs (scenario 9). The
    * part names the citation's incorporation block. */
   referencePrimaryClick(part: string): void;
+  /** A plain click on a figure runs its first act (enlarge) through
+   * the shared menu path. */
+  figurePrimaryClick(part: string): void;
   /** The window services the reference acts ride (the one open
    * funnel and the copy observation); injected by the window, and no
    * reference act is offered before then. */
@@ -124,6 +127,9 @@ export interface BoardUI extends HydrationHost {
     open(spec: string, part: string | null): void;
     copy(payload: string): void;
     elsewhere?(spec: string, act: "link" | "once" | "new"): void;
+    /** The figure's enlarge act (S04): the window opens its
+     * inspection surface for the part. */
+    figureEnlarge?(part: string): void;
   }): void;
   /** Update outcomes for the actual shown frame's generation;
    * rendering never enters or invalidates the loading queue. */
@@ -281,6 +287,20 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (target === undefined || target.source === undefined) return;
       const label = `${target.source.task}@r${target.source.revision}`;
       boardMenu.session.primaryClick({ kind: "reference", label, part });
+      notifyMenu();
+    },
+    figurePrimaryClick(part: string) {
+      // the figure's own target kind; the primary act is enlarge
+      // (actsFor's figure branch), run through the SAME session path
+      // every invocation uses
+      // the label is the figure's own citation (the menu head), the
+      // same composition the copy act uses
+      const match = /@r(\d+)$/.exec(lastFrame.location);
+      const citation =
+        match !== null && lastFrame.board !== null && lastFrame.board.task.length > 0
+          ? `${lastFrame.board.task}@r${match[1]}:${part}`
+          : part;
+      boardMenu.session.primaryClick({ kind: "figure", label: citation ?? part, part });
       notifyMenu();
     },
     setReferencePorts(ports) {

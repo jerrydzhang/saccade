@@ -56,6 +56,13 @@ import {
 } from "./lib/elsewhere.ts";
 import { WindowStore } from "./lib/windows.ts";
 import { serverBase } from "./lib/tracker.ts";
+import {
+  zoomIn as inspectionZoomIn,
+  zoomOut as inspectionZoomOut,
+  zoomReset as inspectionZoomReset,
+  type InspectionState,
+} from "./lib/figures/inspection.ts";
+import { inspectionContext } from "./lib/input/contexts.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
@@ -84,6 +91,8 @@ export interface PortWindow {
   answerAsk(chip: string): void;
   cancelAsk(): void;
   subscribeAsk(observer: (state: AskState | null) => void): () => void;
+  closeInspection(): void;
+  subscribeInspection(observer: (state: InspectionState | null) => void): () => void;
   readout(): PortObservation;
 }
 
@@ -173,6 +182,71 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   function notifyAsk(): void {
     for (const observer of askObservers) observer(ask);
+  }
+
+  let attachedViewport: HTMLElement | null = null;
+
+  // -- figure inspection (S04): a TEMPORARY window surface ----------
+  // It dies on close, never enters the trail, and while open it is
+  // modal for keys: the inspector's context answers every stroke
+  // (its own + - = and Escape act; anything else consumed inert), so
+  // nothing falls through to the board beneath - which keeps its
+  // updates the whole time (deactivation decouples input from
+  // content).
+  let inspection: InspectionState | null = null;
+  const inspectionObservers = new Set<(state: InspectionState | null) => void>();
+
+  function notifyInspection(): void {
+    for (const observer of inspectionObservers) observer(inspection);
+  }
+
+  const inspectionHost: HostMatcher = createHostMatcher(
+    inspectionContext({
+      zoomIn: () => {
+        if (inspection !== null) inspection = { ...inspection, zoom: inspectionZoomIn(inspection.zoom) };
+        notifyInspection();
+        notifyStrip();
+      },
+      zoomOut: () => {
+        if (inspection !== null) inspection = { ...inspection, zoom: inspectionZoomOut(inspection.zoom) };
+        notifyInspection();
+        notifyStrip();
+      },
+      zoomReset: () => {
+        if (inspection !== null) inspection = { ...inspection, zoom: inspectionZoomReset() };
+        notifyInspection();
+        notifyStrip();
+      },
+      close: () => {
+        inspection = null;
+        notifyInspection();
+        notifyStrip();
+      },
+    }),
+  );
+
+  function openInspection(part: string): void {
+    // enlarge what is SHOWN: the displayed figure's own asset (the
+    // hydration's data: URL) and its caption, read at open time
+    // the part element may BE the figure block (figure parts carry
+    // data-port-part on the block itself) or contain one
+    const partElement = (attachedViewport ?? document).querySelector(
+      `[data-port-part="${part}"]`,
+    );
+    const element =
+      partElement instanceof HTMLElement && partElement.classList.contains("block-figure")
+        ? partElement
+        : (partElement?.querySelector(".block-figure") ?? null);
+    const img = (element?.querySelector("img.figure-img") as HTMLImageElement | null) ?? null;
+    if (element === null || img === null) {
+      note = `the figure at ${part} is not displayed (no asset to enlarge)`;
+      notifyStrip();
+      return;
+    }
+    const caption = element.querySelector("figcaption")?.textContent ?? "";
+    inspection = { part, src: img.src, caption, zoom: inspectionZoomReset() };
+    notifyInspection();
+    notifyStrip();
   }
 
   async function suiteWindows(): Promise<SuiteWindow[]> {
@@ -405,6 +479,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (board !== undefined) {
       (board.presentation as BoardUI).setReferencePorts({
         open: (spec: string, part: string | null) => openSpec(spec, part),
+        figureEnlarge: (part: string) => {
+          openInspection(part);
+        },
         copy: (payload: string) => {
           lastCopy = { payload, at: Date.now() };
           try {
@@ -595,9 +672,26 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let lastCopy: { payload: string; at: number } | null = null;
   injectPorts();
 
-  // -- the key routing seam: window context, then the active buffer ---
+  // -- the key routing seam: inspection (modal), then the window
+  // context, then the active buffer ---
   window.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
+    // the inspection surface owns every stroke while it is open: its
+    // own keys act, everything else is consumed inert - the board
+    // beneath never sees a key (scenario 4)
+    if (inspection !== null) {
+      const stroke = {
+        key: event.key,
+        ctrl: event.ctrlKey,
+        shift: event.shiftKey,
+        alt: event.altKey,
+        meta: event.metaKey,
+      };
+      const resolution = inspectionHost.stroke(stroke);
+      inspectionHost.apply(resolution);
+      event.preventDefault();
+      return;
+    }
     const target = event.target as HTMLElement | null;
     const field = target !== null &&
       (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
@@ -728,6 +822,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         height: metrics.height,
       },
       copy: lastCopy,
+      inspection: inspection === null ? null : { part: inspection.part, zoom: inspection.zoom },
     });
   }
 
@@ -739,6 +834,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   return {
     attachViewport(element: HTMLElement | null) {
       viewport.attachElement(element);
+      attachedViewport = element;
     },
     openSpec,
     boot,
@@ -777,6 +873,18 @@ export function createPortWindow(windowId = "main"): PortWindow {
       observer(ask);
       return () => {
         askObservers.delete(observer);
+      };
+    },
+    closeInspection: () => {
+      inspection = null;
+      notifyInspection();
+      notifyStrip();
+    },
+    subscribeInspection(observer) {
+      inspectionObservers.add(observer);
+      observer(inspection);
+      return () => {
+        inspectionObservers.delete(observer);
       };
     },
     destroy() {

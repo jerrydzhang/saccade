@@ -87,6 +87,10 @@ export type PortObservation = {
    * observation surface, like find; the clipboard itself is an
    * environment capability, never the source of truth. */
   copy: Readonly<{ payload: string; at: number }> | null;
+  /** The figure inspection surface (S04): the inspected part and its
+   * zoom while open, null when closed (the temporary surface adds no
+   * trail entry; the board beneath keeps its updates). */
+  inspection: Readonly<{ part: string; zoom: number }> | null;
   /** The tasks surface's shown page (the pipeline): the rows with
    * their tasks and links, the label selection, and the groups'
    * titles. Null on every other surface. */
@@ -255,6 +259,7 @@ export function buildReadout(
     trail: PortObservation["trail"];
     viewport: PortObservation["viewport"];
     copy: PortObservation["copy"];
+    inspection: PortObservation["inspection"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -283,6 +288,7 @@ export function buildReadout(
     viewport: input.viewport,
     find: input.surface === "board" ? findViewOf(input.state) : { open: false, query: "", count: 0, active: -1 },
     copy: input.copy,
+    inspection: input.inspection,
     tasks: input.surface === "tasks"
       ? tasksViewOf(tasksFrame, input.state)
       : null,

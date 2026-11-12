@@ -41,6 +41,9 @@ export interface HydrationHost {
   /** A plain (unshifted, primary-button) click on the citation whose
    * incorporation part is `part`. */
   referencePrimaryClick(part: string): void;
+  /** A plain click on the figure whose part is `part` (the primary
+   * act, scenario 4's enlarge). */
+  figurePrimaryClick(part: string): void;
 }
 
 export async function hydrate(
@@ -145,6 +148,29 @@ async function hydrateCitations(
       console.log("[port] middle-click citation open deferred (elsewhere slice)");
     });
     span.replaceChildren(link);
+  }
+
+  // the figures' plain click runs THEIR first act (enlarge, scenario
+  // 4) through the same shared menu path; the right-gesture guard
+  // applies identically (the synthesized post-contextmenu click never
+  // enlarges)
+  const figureBlocks = Array.from(container.querySelectorAll<HTMLElement>(".block-figure"));
+  for (const block of figureBlocks) {
+    const part = block.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+    if (part === null) continue;
+    let figureContextmenuAt = 0;
+    block.addEventListener("contextmenu", () => {
+      figureContextmenuAt = performance.now();
+    });
+    block.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (performance.now() - figureContextmenuAt < 250) return;
+      if (event.shiftKey) {
+        console.log("[port] shifted figure open deferred (elsewhere slice)");
+        return;
+      }
+      _host.figurePrimaryClick(part);
+    });
   }
 }
 
