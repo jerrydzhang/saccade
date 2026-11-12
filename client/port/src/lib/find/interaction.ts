@@ -6,7 +6,17 @@ import type { FindOccurrence, FindUnit } from "./session.ts";
 import { key, sequence, shift, textEntryContext } from "../contracts/input.ts";
 import type { InputContext } from "../contracts/input.ts";
 
-export type FindView = Readonly<{ open: boolean; query: string; count: number; active: number }>;
+export type FindView = Readonly<{
+  open: boolean;
+  query: string;
+  count: number;
+  active: number;
+  /** The occurrence parts (their unit ids), for match marks. */
+  unitParts: readonly string[];
+  /** The ACTIVE occurrence's part (D2's mark target), or null when
+   * no occurrence is active. */
+  activeUnit: string | null;
+}>;
 export interface FindInteractionDeps {
   units(): readonly FindUnit[];
   capture(context: InputContext): { release(): void };
@@ -17,8 +27,17 @@ export function createFindInteraction(deps: FindInteractionDeps) {
   const observers = new Set<(view: FindView) => void>();
   let lease: { release(): void } | null = null;
   const view = (): FindView => {
-    const count = session.occurrences().length;
-    return { open: session.isOpen(), query: session.query(), count, active: count > 0 ? session.active() : -1 };
+    const occurrences = session.occurrences();
+    const count = occurrences.length;
+    const active = count > 0 ? session.active() : -1;
+    return {
+      open: session.isOpen(),
+      query: session.query(),
+      count,
+      active,
+      unitParts: occurrences.map((occurrence) => occurrence.unit.id),
+      activeUnit: active >= 0 && active < count ? occurrences[active]!.unit.id : null,
+    };
   };
   const notify = () => { for (const observer of [...observers]) observer(view()); };
   function close(): void {
@@ -80,6 +99,11 @@ export function createFindInteraction(deps: FindInteractionDeps) {
     clearSearch(): void {
       session.clearSearch();
       notify();
+    },
+    /** The current view, for mark painting on changes the session
+     * itself does not notify (commit, clear). */
+    viewNow(): FindView {
+      return view();
     },
     subscribe(observer: (view: FindView) => void): () => void {
       observers.add(observer);

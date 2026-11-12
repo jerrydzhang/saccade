@@ -18,7 +18,39 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
   let renderNotes: string[] = $state([]);
   let select: SelectSessionView | null = $state(null);
   let menu: MenuView | null = $state(null);
-  let find: FindView = $state({ open: false, query: "", count: 0, active: -1 });
+  let find: FindView = $state({
+    open: false,
+    query: "",
+    count: 0,
+    active: -1,
+    unitParts: [],
+    activeUnit: null,
+  });
+
+  // D2: the match marks and the committed position indicator. The
+  // marks paint on every find-view change (typing, stepping,
+  // commit, clear); the active occurrence carries its own attribute
+  // so behaviour checks can see which part is active - form stays
+  // open (the floor's law), the tint rides the tokens.
+  $effect(() => {
+    const element = host;
+    if (element === null) return;
+    for (const marked of element.querySelectorAll("[data-find-match]")) {
+      marked.removeAttribute("data-find-match");
+      marked.removeAttribute("data-find-active");
+    }
+    if (find.query.length === 0) return;
+    for (const part of find.unitParts) {
+      const target = element.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
+      if (target instanceof HTMLElement) target.setAttribute("data-find-match", "");
+    }
+    if (find.activeUnit !== null) {
+      const target = element.querySelector(
+        `[data-port-part=${JSON.stringify(find.activeUnit)}]`,
+      );
+      if (target instanceof HTMLElement) target.setAttribute("data-find-active", "");
+    }
+  });
   const findOpen = $derived(find.open);
   let findInput: HTMLInputElement | null = $state(null);
   let findValue = $state("");
@@ -179,6 +211,10 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     <span class="port-find-status" data-port-find-status="">
       {find.count > 0 ? `${find.active + 1} / ${find.count}` : "type to search"}
     </span>
+  </div>
+{:else if find.count > 0}
+  <div class="port-find-indicator" data-find-indicator="">
+    {find.active + 1} / {find.count}
   </div>
 {/if}
 <div class="port-board-stage">

@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/7"
+ADAPTER_SET_REVISION = "t36-adapters/8"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -160,6 +160,20 @@ ADAPTERS: tuple[dict, ...] = (
         " through the shell's open door. The old-app half keeps its"
         " recorded FAIL evidence (the receiver never receives on any"
         " path); the oracle is untouched and the flip is expected.",
+    ),
+    _adapter(
+        "P8",
+        "port-committed-find",
+        KIND_INPUT,
+        ("D2",),
+        "D2 is the first-use verdict's defect 2 (t-36 r121): a"
+        " committed search (the r110 ruling - Enter commits, n/N step"
+        " in the reading context) must carry its own feedback: the"
+        " active occurrence is marked and distinguishable, all"
+        " matches stay marked, and a position indicator lives"
+        " outside the field so it survives the commit. Behaviour"
+        " level, form open (the floor's law). The old app is not the"
+        " defect's subject.",
     ),
     _adapter(
         "P7",

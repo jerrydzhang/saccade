@@ -831,6 +831,12 @@ def register() -> None:
         t36_scenario_bodies.check_s04_deactivation,
         adapters=("P6",),
     ))
+    CHECKS.setdefault("D2", CheckSpec(
+        "D2",
+        "a committed search carries its marks and its indicator",
+        t36_scenario_bodies.check_d2_committed_find,
+        adapters=("P8",),
+    ))
     CHECKS.setdefault("D1", CheckSpec(
         "D1",
         "a never-focused window still scrolls",

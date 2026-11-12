@@ -286,6 +286,23 @@ body {
   border-top: 1px solid var(--port-color-muted);
 }
 
+/* D2's marks and indicator: behaviour-level feedback, form open.
+ * The match tint and the active tint ride the tokens. */
+[data-find-match] {
+  background: var(--port-color-hover);
+}
+
+[data-find-active] {
+  background: var(--port-color-selection);
+}
+
+.port-find-indicator {
+  padding: 0.125rem 0.5rem;
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-muted);
+}
+
 .port-find input {
   flex: 1;
   font: inherit;

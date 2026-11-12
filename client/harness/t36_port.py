@@ -109,7 +109,7 @@ def part_selector(part: str) -> str:
 # port observation branch. Everything else stops with the recorded
 # premise - driving old-app selectors into the fresh app is exactly
 # what the adapter must not do.
-PORT_SERVED = frozenset({"F01", "D1", "S04", "S05", "S07", "S08", "S09", "S10", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S20"})
+PORT_SERVED = frozenset({"F01", "D1", "D2", "S04", "S05", "S07", "S08", "S09", "S10", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S20"})
 
 # the recorded non-runnables: their verdicts are registry stops that
 # name why the scenario does not execute through this harness at all -

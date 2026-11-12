@@ -1601,3 +1601,133 @@ def check_d1_unfocused_scrolling(request: RequestFn, pace: float = 1.0) -> dict:
     return {"status": "pass" if True else "fail",
             "detail": (f"j scrolled the never-focused birth window (scrollTop 0 -> {after_j:.0f}) and"
                        f" G still landed below it ({after_g:.0f}); assignments, not scrollBy")}
+
+
+def check_d2_committed_find(request: RequestFn, pace: float = 1.0) -> dict:
+    """D2, the first-use verdict's defect 2: n/N appeared to do
+    nothing and nothing was highlighted - the matches are whole
+    parts, reveal only scrolls when off-screen, and the counter sat
+    inside the field's block which commit closes. The scenario: on a
+    board whose every occurrence is ON SCREEN, commit a search, then
+    n must move the ACTIVE MARK (the marked element's part changes)
+    and a committed indicator must carry the position without the
+    field."""
+    import json
+    import time
+
+    import t36_port
+
+    if not t36_port.is_port(request):
+        raise CheckStopped("the port carries this defect; the old app is not the subject")
+
+    def readout() -> dict:
+        return t36_port.readout(request)
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(landing is not None, "no landing seed task for D2")
+    # a SHORT board whose two text blocks share a word: both
+    # occurrences are units, the board FITS the viewport, so every
+    # occurrence is on screen (the defect's exact condition)
+    task_number = int(str(landing).removeprefix("t-"))
+    shared = (
+        f"grammar: 1\ntask: {landing}\ncontent:\n"
+        "  - text: the D2 shared alpha block\n"
+        "  - text: the D2 shared beta block\n"
+    )
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": shared,
+                          "message": "t36 D2: the shared-word revision"}, timeout=60))
+    revision = commit.get("revision")
+    _premise(revision is not None,
+             f"the D2 commit did not land: {json.dumps(commit)[:200]}")
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/{landing}@r{revision}", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        board = (readout().get("board") or {})
+        if board.get("status") == "loaded" and f"/{landing}@r" in str(board.get("location") or ""):
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"the landing board never loaded for D2: {json.dumps(board)[:160]}")
+        _sleep(pace, 0.4)
+
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, "/")
+    _sleep(pace, 0.6)
+    t36_port.type_text(request, "port:find-input", "shared", pace)
+    _sleep(pace, 1.0)
+
+    def find_state() -> dict:
+        value = readout().get("find")
+        return value if isinstance(value, dict) else {}
+
+    state = find_state()
+    _premise(state.get("open") is True and isinstance(state.get("count"), int) and state["count"] >= 2,
+             f"the committed search needs 2+ on-screen occurrences: {json.dumps(state)[:160]}")
+
+    # the active mark BEFORE commit: the marked part is observable
+    def active_mark() -> str | None:
+        answer = _json_evaluate(
+            request,
+            'const el = document.querySelector("[data-find-active]");'
+            " return JSON.stringify(el ? el.getAttribute('data-port-part') : null);",
+        )
+        return answer if isinstance(answer, str) else None
+
+    before = active_mark()
+    _premise(before is not None, "no active mark painted while the field was open")
+
+    # Enter commits: the field closes, the matches stay, the active
+    # mark survives, and a committed indicator carries the position
+    _key(request, "enter")
+    _sleep(pace, 0.6)
+    committed = find_state()
+    _premise(committed.get("open") is False and committed.get("count") == state["count"],
+             f"the commit lost the search: {json.dumps(committed)[:160]}")
+    after_commit = active_mark()
+    _premise(after_commit == before,
+             f"the active mark did not survive the commit: {before!r} -> {after_commit!r}")
+
+    indicator = _json_evaluate(
+        request,
+        'const el = document.querySelector("[data-find-indicator]");'
+        " return JSON.stringify(el ? el.textContent.trim() : null);",
+    )
+    _premise(isinstance(indicator, str) and indicator.startswith("1 /"),
+             f"no committed position indicator visible: {indicator!r}")
+
+    # n moves the ACTIVE MARK even though every occurrence is on
+    # screen - the defect's own condition
+    _key(request, "n")
+    _sleep(pace, 0.6)
+    moved = active_mark()
+    _premise(moved is not None and moved != after_commit,
+             f"n did not move the active mark ({after_commit!r} -> {moved!r}) with all occurrences on screen")
+    indicator2 = _json_evaluate(
+        request,
+        'const el = document.querySelector("[data-find-indicator]");'
+        " return JSON.stringify(el ? el.textContent.trim() : null);",
+    )
+    _premise(isinstance(indicator2, str) and indicator2.startswith("2 /"),
+             f"the indicator did not advance: {indicator2!r}")
+
+    # Escape clears: no marks, no indicator
+    _key(request, "escape")
+    _sleep(pace, 0.5)
+    cleared = find_state()
+    gone = active_mark()
+    indicator3 = _json_evaluate(
+        request,
+        'const el = document.querySelector("[data-find-indicator]");'
+        " return JSON.stringify(el ? el.textContent.trim() : null);",
+    )
+    _premise(cleared.get("count") in (0, None) and gone is None and indicator3 is None,
+             f"Escape did not clear the search: find={json.dumps(cleared)[:120]} mark={gone!r} ind={indicator3!r}")
+
+    return {"status": "pass",
+            "detail": (f"the committed search carried its marks: the active mark survived Enter"
+                       f" ({after_commit!r}), n moved it ({after_commit!r} -> {moved!r}) with every"
+                       f" occurrence on screen, the indicator advanced ('{indicator}' -> '{indicator2}'),"
+                       f" and Escape cleared everything")}
