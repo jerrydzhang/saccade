@@ -25,6 +25,7 @@ import time
 import t36_adapters
 import t36_results
 import t36_port
+import t36_scenario_bodies
 from t36_checks import (
     CheckSpec,
     CHECKS,
@@ -599,8 +600,8 @@ def _s14_port(request: RequestFn, pace: float) -> dict:
         "detail": (
             f"the trail recorded the two explicit openings (depth {depth}, cursor {cursor},"
             f" entries {locations}) with canBack true and canForward false; {fold_note};"
-            " the trail stayed untouched. The back/forward key bindings still pin"
-            " (chunk E has none), so the state is read from the readout, not driven"
+            " the trail stayed untouched. The state is read from the readout;"
+            " the back/forward CHORDS are driven by S07's journey"
         ),
     }
 
@@ -612,9 +613,7 @@ STOP_REASONS: dict[str, str] = {
     "S02": "pure and component lanes only; the native harness has no failure-injection port for a board source",
     "S03": "the pure lane owns the reporting contract; the app-only native half needs a diagnostics-raising flow that no real-input path exercises yet",
     "S04": "the native-delta half needs the figure-inspection surface and a live-content source; not grounded at baseline",
-    "S05": "the trail and buffer lifecycle readouts the journey asserts are not exposed by inspection() (the S14 gap applies)",
     "S06": "pure and component lanes (presentation attachment is a component fixture concern)",
-    "S07": "return-place records are not readable through inspection(); the differential would stop on every step of the journey (the S14 gap applies)",
     "S09": "authored next: the four invocations (menu key, right-click Enter, right-click click, plain click) need right-click plumbing in webdriver_client before the literals can compare",
     "S10": "authored next: gg through the shared matcher and unmatched-key consumption are drivable, but the matcher's consume-vs-fallthrough oracle needs the input-context data the baseline ships as draft",
     "S11": "pure and component lanes (handoff contracts); the Find journey itself is S16",
@@ -646,6 +645,16 @@ def register() -> None:
     CHECKS.setdefault("S14", CheckSpec(
         "S14", "the trail records explicit openings only", check_s14_trail_flags,
         adapters=("A5",),
+    ))
+    CHECKS.setdefault("S07", CheckSpec(
+        "S07", "return place restores the passage, not the presentation",
+        t36_scenario_bodies.check_s07_return_place,
+        adapters=("P3",),
+    ))
+    CHECKS.setdefault("S05", CheckSpec(
+        "S05", "temporary buffers die with their scope; ordinary buffers are retained",
+        t36_scenario_bodies.check_s05_temporary_buffers,
+        adapters=("P3",),
     ))
     for scenario_id, reason in STOP_REASONS.items():
         if scenario_id in CHECKS:

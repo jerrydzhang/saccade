@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/2"
+ADAPTER_SET_REVISION = "t36-adapters/3"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -130,6 +130,22 @@ ADAPTERS: tuple[dict, ...] = (
         " oracles stay untouched. Fields the shown build cannot produce"
         " REQUIRE_FIELDS-stop naming where they land (trail/viewport ride"
         " the Board instrument, slice 2) - the old STOP rule, port side.",
+    ),
+    _adapter(
+        "P3",
+        "port-trail-readout",
+        KIND_READOUT,
+        ("S05", "S07"),
+        "On the port flavor the S05/S07 observation layer reads the"
+        " window.__saccadePort.readout() trail, viewport and location"
+        " (the port's own observation contract, chunk E) and drives"
+        " Back/Forward as the app's pinned chords (Ctrl-o/Ctrl-i - the"
+        " old app's own bindings) through explicit hotkey synthesis."
+        " The old-app lane stops: its inspection() projects no trail"
+        " entries, back/forward state or return-place records (the"
+        " S14-class readout gap), so the journeys cannot observe"
+        " through it; the oracles stay untouched, the flip is the"
+        " recorded readout gap.",
     ),
     _adapter(
         "P2",

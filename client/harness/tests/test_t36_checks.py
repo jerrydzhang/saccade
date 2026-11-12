@@ -583,13 +583,13 @@ class PortAdapterTest(unittest.TestCase):
         with self.assertRaises(t36_checks.CheckStopped) as caught:
             t36_port.ensure_served("S02")
         self.assertIn("the port surface does not serve", str(caught.exception))
-        self.assertIn("back/forward", str(caught.exception))  # the still-missing list
-        # the served set widened with the reference acts (S09/S13); the
-        # recorded non-runnables pass through (their bodies carry the
-        # recorded reason)
-        for served in ("F01", "S08", "S09", "S10", "S12", "S13", "S14", "S16", "S20"):
+        self.assertIn("linked-delivery", str(caught.exception))  # the still-missing list
+        # the served set widened with the reference acts (S09/S13) and
+        # the pinned back/forward chords (S05/S07); the recorded
+        # non-runnables pass through (their bodies carry the reason)
+        for served in ("F01", "S05", "S07", "S08", "S09", "S10", "S12", "S13", "S14", "S16", "S20"):
             t36_port.ensure_served(served)
-        for not_driven in ("S01", "S03", "S05", "S07", "S11", "S19"):
+        for not_driven in ("S01", "S03", "S11", "S19"):
             t36_port.ensure_served(not_driven)
 
     def test_run_check_port_gate_stops_unserved_before_the_body(self) -> None:

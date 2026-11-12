@@ -1101,3 +1101,278 @@ def _s15_port(request: RequestFn, pace: float) -> dict:
                        f" r{revision}); the explicitly opened r1 held ({pinned_at}) while"
                        f" r{commit.get('revision')} landed; the raw-length oracle's adaptation"
                        " rides the location+part-kind signature (the port has no rawLength)")}
+
+
+def _s07_state(request) -> dict:
+    """The S07 observation triple: shown location, the trail, the live
+    reading position (the readout's viewport.top is the scroller's
+    scrollTop)."""
+    obs = t36_port.readout(request)
+    t36_port.require_fields(obs, "trail", "viewport")
+    board = obs.get("board") or {}
+    return {
+        "location": str(board.get("location") or ""),
+        "status": str(board.get("status") or ""),
+        "trail": obs.get("trail") or {},
+        "top": float((obs.get("viewport") or {}).get("top") or 0.0),
+    }
+
+
+def _s07_hotkey(request, *keys: str) -> None:
+    from t36_checks import _ok
+
+    _ok(request({"cmd": "input", "kind": "hotkey", "keys": list(keys)}))
+
+
+def _s07_wait_place(request, pace: float, needle: str, timeout: float = 15.0) -> dict:
+    """Wait until the shown board carries the needle AND its reading
+    position settles (two reads agreeing within 3px, or the timeout).
+    The restore is async - the place lands after the content and the
+    geometry."""
+    import time
+
+    deadline = time.monotonic() + timeout * pace
+    state = _s07_state(request)
+    while True:
+        state = _s07_state(request)
+        if needle in state["location"] and state["status"] == "loaded":
+            break
+        if time.monotonic() >= deadline:
+            return state
+        _sleep(pace, 0.4)
+    deadline = time.monotonic() + 5.0 * pace
+    settled = state
+    while True:
+        nxt = _s07_state(request)
+        if needle in nxt["location"] and abs(nxt["top"] - settled["top"]) <= 3:
+            return nxt
+        settled = nxt
+        if time.monotonic() >= deadline:
+            return nxt
+        _sleep(pace, 0.3)
+
+
+def check_s07_return_place(request: RequestFn, pace: float = 1.0) -> dict:
+    """S07 return place restores the passage, not the presentation.
+
+    Script: read a tall board at a place (scrolled to its end), open a
+    second board, press Back: the addressed place AND the reading
+    position left there come back, requested without advancing the
+    trail; Forward retraces. Back/Forward are the app's own pinned
+    chords (Ctrl-o / Ctrl-i), delivered as explicit hotkey chords (the
+    lane's surviving synthesis; bare codepoints lose their modifiers).
+
+    The variant journeys (anchor pending geometry, anchor confirmed
+    absent, failed load) need fixtures and failure-injection ports the
+    native harness does not carry: the failed load follows S02's
+    recorded no-injection stop; the anchor variants have no authored
+    fixture. They stay recorded, not asserted here.
+    """
+    import time
+
+    if not t36_port.is_port(request):
+        raise CheckStopped(
+            "the app's inspection() projects no return-place records (no trail"
+            " entries, no back/forward state - the S14 readout gap): the journey"
+            " would stop on every step; the port half carries the oracle through"
+            " its own observation contract"
+        )
+
+    # the tall board beside the session's own (the S10 premise shape)
+    tall = _tall_fixture_path(request)
+    blocks = "".join(f"  - text: return-place block {n}\n" for n in range(1, 151))
+    tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    open_answer = _evaluate(
+        request,
+        'return Promise.resolve(window.__suiteOpenAt("host:/board/t36-tall-board.yaml"))'
+        '.then(function () { return "opened"; },'
+        ' function (e) { return "open-error: " + e; });',
+    )
+    _premise(open_answer == "opened",
+             f"the port's open door refused the tall board: {open_answer!r}")
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        state = _s07_state(request)
+        if "t36-tall-board" in state["location"] and state["status"] == "loaded":
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"the tall board never loaded: {state['location']!r} {state['status']!r}")
+        _sleep(pace, 0.4)
+
+    # read the board at a place: gg first (the retained buffer may
+    # still carry an earlier reading position - retention is S05's own
+    # oracle), then the G chord scrolls to the end
+    _key(request, "g")
+    _sleep(pace, 0.15)
+    _key(request, "g")
+    deadline = time.monotonic() + 5.0 * pace
+    while True:
+        state = _s07_state(request)
+        if "t36-tall-board" in state["location"] and state["top"] <= 2:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.2)
+    before_top = state["top"]
+    _s07_hotkey(request, "shift", "g")
+    deadline = time.monotonic() + 5.0 * pace
+    placed = before_top
+    while True:
+        placed = _s07_state(request)["top"]
+        if placed > before_top + 100:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.2)
+    _premise(placed > before_top + 100,
+             f"G did not scroll the tall board ({before_top} -> {placed}); the journey needs a nonzero departure place")
+    left_top = placed
+
+    # navigate elsewhere in the same window: the picker opens the landing board
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(landing is not None, "the landing seed is missing from the tracker")
+    host = str(tracker.get("base") or "").replace("http://", "")
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{landing}", pace)
+    elsewhere = _s07_wait_place(request, pace, f"/{landing}")
+    _premise(f"/{landing}" in elsewhere["location"],
+             f"the landing board never loaded: {elsewhere['location']!r}")
+    depth = elsewhere["trail"].get("depth")
+    _premise(isinstance(depth, int) and depth >= 2,
+             f"the trail never carried the two openings: {elsewhere['trail']}")
+
+    # Back: the addressed place and the reading position come back,
+    # without advancing the trail
+    _s07_hotkey(request, "ctrl", "o")
+    back = _s07_wait_place(request, pace, "t36-tall-board")
+    trail_back = back["trail"]
+    if "t36-tall-board" not in back["location"]:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"Back did not return to the addressed place: {back['location']!r}"}
+    if trail_back.get("depth") != depth or trail_back.get("cursor") != depth - 2:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"Back moved the trail, not just the cursor: depth"
+                           f" {depth}->{trail_back.get('depth')} cursor"
+                           f" {trail_back.get('cursor')} (expected depth {depth}, cursor {depth - 2})")}
+    if abs(back["top"] - left_top) > 3:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"Back restored the place but not the passage: reading"
+                           f" position {left_top} was left, {back['top']} came back")}
+
+    # Forward retraces without new entries
+    _s07_hotkey(request, "ctrl", "i")
+    fwd = _s07_wait_place(request, pace, f"/{landing}")
+    trail_fwd = fwd["trail"]
+    if f"/{landing}" not in fwd["location"]:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"Forward did not retrace to the landing board: {fwd['location']!r}"}
+    if trail_fwd.get("depth") != depth or trail_fwd.get("cursor") != depth - 1:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"Forward changed the trail: depth {trail_fwd.get('depth')}"
+                           f" cursor {trail_fwd.get('cursor')} (expected {depth}, {depth - 1})")}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"Back restored the tall board at its left reading position"
+                       f" ({left_top}px came back as {back['top']}px) with the trail"
+                       f" unchanged (depth {depth}, cursor {trail_back.get('cursor')})"
+                       f" and Forward retraced to the landing board (cursor"
+                       f" {trail_fwd.get('cursor')}); the chords are the pinned"
+                       f" Ctrl-o/Ctrl-i delivered as explicit hotkey synthesis. The"
+                       f" pending-geometry, absent-anchor and failed-load variants"
+                       f" stay recorded: they need fixtures and a failure-injection"
+                       f" port the native harness does not carry")}
+
+
+def check_s05_temporary_buffers(request: RequestFn, pace: float = 1.0) -> dict:
+    """S05 temporary buffers die with their scope; ordinary buffers
+    are retained - the native half.
+
+    Script: open a board, scroll it to a place, open a SECOND board
+    through the window picker (the temporary surface), press Back: the
+    picker never appears as a trail destination, exactly one entry was
+    added for the submitted opening, and Back lands on the first board
+    at its departure place. The board->tasks->Back half and the
+    window-close half wait for the tasks surface and the linked-window
+    work (recorded, not asserted here); the figure-inspection chain
+    link is a pure-lane fixture (the scenario's own note).
+    """
+    import time
+
+    if not t36_port.is_port(request):
+        raise CheckStopped(
+            "the app's inspection() projects neither the trail nor buffer"
+            " lifecycle state (the S14 readout gap): the picker-never-a-destination"
+            " assertion has no observation surface; the port half carries it"
+        )
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    _premise(landing is not None and cited is not None, "the S05 seeds are missing from the tracker")
+    host = str(tracker.get("base") or "").replace("http://", "")
+
+    # the retained ordinary buffer: the tall fixture (S10's premise
+    # shape - the journey needs a scrollable first board), opened
+    # through the picker itself so BOTH openings ride the temporary
+    # surface the scenario is about
+    tall = _tall_fixture_path(request)
+    blocks = "".join(f"  - text: temporary-buffer block {n}\n" for n in range(1, 151))
+    tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
+    t36_port.open_via_port_picker(request, "host:/board/t36-tall-board.yaml", pace)
+    first = _s07_wait_place(request, pace, "t36-tall-board")
+    _premise("t36-tall-board" in first["location"],
+             f"the tall board never loaded through the picker: {first['location']!r}")
+    before_top = first["top"]
+    _s07_hotkey(request, "shift", "g")
+    deadline = time.monotonic() + 5.0 * pace
+    placed = before_top
+    while True:
+        placed = _s07_state(request)["top"]
+        if placed > before_top + 100:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.2)
+    _premise(placed > before_top + 100,
+             f"G did not scroll the first board ({before_top} -> {placed}); the journey needs a departure place")
+    left_top = placed
+    depth_first = first["trail"].get("depth")
+
+    # the temporary surface again, to a second board
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{cited}", pace)
+    second = _s07_wait_place(request, pace, f"/{cited}")
+    _premise(f"/{cited}" in second["location"],
+             f"the second board never loaded: {second['location']!r}")
+    trail = second["trail"]
+    depth = trail.get("depth")
+    entries = [str(e.get("location") or "") for e in (trail.get("entries") or [])]
+    if not (isinstance(depth, int) and isinstance(depth_first, int) and depth == depth_first + 1):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the picker journey added {None if not isinstance(depth, int) else depth - depth_first}"
+                           f" entries (expected exactly 1): {entries}")}
+    if any("picker" in location.lower() for location in entries):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the picker itself landed on the trail: {entries}"}
+
+    # Back lands on the first board at its departure place
+    _s07_hotkey(request, "ctrl", "o")
+    back = _s07_wait_place(request, pace, "t36-tall-board")
+    if "t36-tall-board" not in back["location"]:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"Back from the second board did not land on the first: {back['location']!r}"}
+    if abs(back["top"] - left_top) > 3:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"Back landed on the first board but not at its departure"
+                           f" place: {left_top}px was left, {back['top']}px came back")}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the picker journey added exactly one trail entry (depth"
+                       f" {depth_first}->{depth}, entries {entries}) - the picker is"
+                       f" never a destination - and Back from the second board landed"
+                       f" on the first at its departure place ({left_top}px came back"
+                       f" as {back['top']}px). The board->tasks->Back and window-close"
+                       f" halves wait for the tasks surface and linked windows"
+                       f" (recorded); the inspector->picker chain stays a pure-lane"
+                       f" fixture by the scenario's own note")}
