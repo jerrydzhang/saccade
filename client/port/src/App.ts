@@ -31,6 +31,10 @@ import {
 } from "./components/Buffer.ts";
 import { boardInstrument, parseOpenSpec } from "./instruments/board.ts";
 import type { BoardUI } from "./instruments/board.ts";
+import { tasksInstrument } from "./instruments/tasks.ts";
+import type { TasksUI } from "./instruments/tasks.ts";
+import { instrumentPath } from "./lib/location.ts";
+import type { Address } from "./lib/contracts/places.ts";
 import {
   PORT_SURFACE,
   buildReadout,
@@ -88,18 +92,66 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const buffers = createBufferFactory(windowId);
   const viewport: SliceBufferViewport = createViewport();
 
-  const registration = registerInstrument(boardInstrument());
-  const context = { bufferId: `${windowId}-board-1`, windowId };
-  const environment: WindowEnvironment = {
-    context,
-    viewport,
-    diagnostics,
-    buffers,
-  };
-  const instrument: RunningInstrument = constructInstrument(registration, environment);
-  // The window's one buffer starts active; focus switching is a later
-  // slice's surface.
-  instrument.activate();
+  // The window's buffers, one per surface kind, retained: the board
+  // constructs at assembly, the tasks buffer constructs at its first
+  // open (the glue's "called only when the window needs a NEW
+  // buffer"). Exactly one surface is ACTIVE - keys, the trail and the
+  // readout route to it; the other keeps its state (the trail's
+  // return lands back on it).
+  type Surface = "board" | "tasks";
+  const instruments: Partial<Record<Surface, RunningInstrument>> = {};
+  let activeSurface: Surface = "board";
+
+  function surfaceOfAddress(address: Address): Surface {
+    return instrumentPath(address.path) !== null ? "tasks" : "board";
+  }
+
+  function instrumentFor(surface: Surface): RunningInstrument {
+    const existing = instruments[surface];
+    if (existing !== undefined) return existing;
+    if (surface === "tasks") {
+      const registration = registerInstrument(tasksInstrument());
+      const instrument = constructInstrument(registration, {
+        context: { bufferId: `${windowId}-tasks-1`, windowId },
+        viewport,
+        diagnostics,
+        buffers,
+      });
+      instrument.activate();
+      instruments.tasks = instrument;
+      injectPorts();
+      unsubscribeTasksFrame = subscribeSurface(instrument, "tasks");
+      return instrument;
+    }
+    const registration = registerInstrument(boardInstrument());
+    const instrument = constructInstrument(registration, {
+      context: { bufferId: `${windowId}-board-1`, windowId },
+      viewport,
+      diagnostics,
+      buffers,
+    });
+    instrument.activate();
+    instruments.board = instrument;
+    return instrument;
+  }
+
+  function activeInstrument(): RunningInstrument {
+    const instrument = instruments[activeSurface];
+    if (instrument === undefined) throw new Error("the active surface carries no buffer");
+    return instrument;
+  }
+
+  function setActive(surface: Surface): void {
+    if (activeSurface === surface) return;
+    instruments[activeSurface]?.deactivate();
+    activeSurface = surface;
+    instruments[activeSurface]?.activate();
+    notifyStrip();
+  }
+
+  // The board buffer constructs at assembly and starts active (the
+  // tasks buffer joins at its first open).
+  instrumentFor("board");
 
   // The open-location picker: the window's open surface, submitting
   // through the ONE open funnel below (openSpec). Text-entry
@@ -203,7 +255,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         boundId === null ? null : await windowStore.getState(boundId).catch(() => null);
       restored = state === null ? null : state.location;
       await refreshLink();
-      injectReferenceElsewhere();
+      injectPorts();
       notifyStrip();
     } catch (error) {
       // no bridge, or the store refused: the elsewhere acts stay
@@ -344,27 +396,39 @@ export function createPortWindow(windowId = "main"): PortWindow {
     notifyStrip();
   }
 
-  /** The reference acts grow the OPEN acts once the window state is
-   * bound (the ports object is injected once at build; this re-taps
-   * the controller's ports with the elsewhere member present). */
-  function injectReferenceElsewhere(): void {
-    const ui = instrument.presentation as BoardUI;
-    ui.setReferencePorts({
-      open: (spec, part) => openSpec(spec, part),
-      copy: (payload) => {
-        lastCopy = { payload, at: Date.now() };
-        try {
-          void navigator.clipboard.writeText(payload);
-        } catch {
-          // the lane's webview may refuse the clipboard API; the
-          // recorded payload is the act's truth either way
-        }
-        notifyStrip();
-      },
-      elsewhere: (spec, act) => {
-        void openElsewhere(spec, act);
-      },
-    });
+  /** The controller ports over every constructed surface: the open
+   * funnel, the copy observation, the elsewhere acts. The closures
+   * read the live world at call time, so a rebinding needs only a
+   * re-tap, and the acts appear with the window state (S18). */
+  function injectPorts(): void {
+    const board = instruments.board;
+    if (board !== undefined) {
+      (board.presentation as BoardUI).setReferencePorts({
+        open: (spec: string, part: string | null) => openSpec(spec, part),
+        copy: (payload: string) => {
+          lastCopy = { payload, at: Date.now() };
+          try {
+            void navigator.clipboard.writeText(payload);
+          } catch {
+            // the lane's webview may refuse the clipboard API; the
+            // recorded payload is the act's truth either way
+          }
+          notifyStrip();
+        },
+        elsewhere: (spec: string, act: ElsewhereAct) => {
+          void openElsewhere(spec, act);
+        },
+      });
+    }
+    const tasks = instruments.tasks;
+    if (tasks !== undefined) {
+      (tasks.presentation as TasksUI).setTaskPorts({
+        open: (spec: string) => openSpec(spec),
+        elsewhere: (spec: string, act: ElsewhereAct) => {
+          void openElsewhere(spec, act);
+        },
+      });
+    }
   }
 
   // Window commands own the picker. Reading interactions and their
@@ -388,7 +452,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   const frameObservers = new Set<(state: BufferState<RenderPair>) => void>();
   const stripObservers = new Set<(strip: StripView) => void>();
-  let lastFrame: BufferState<RenderPair> = instrument.snapshot();
+  const lastFrames: Partial<Record<Surface, BufferState<RenderPair>>> = {};
 
   // The window's trail (scenario 14): explicit openings only; the
   // departure capture lands on the entry being left; Back/Forward
@@ -396,18 +460,38 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // bindings for Back/Forward are pinned when the S14 body lands
   // (prototype parity through the adapter); the surface is real now.
   const trail = createTrail({
-    capture: () => instrument.places.capture(),
-    restore: (place) => instrument.places.restore(place),
+    capture: () => activeInstrument().places.capture(),
+    restore: (place) => {
+      // the restored address names its own surface: the window
+      // activates that surface's retained buffer and restores there
+      const surface = surfaceOfAddress(place.address);
+      const target = instrumentFor(surface);
+      setActive(surface);
+      target.places.restore(place);
+    },
   });
 
-  const unsubscribeFrame = instrument.subscribe((state) => {
-    lastFrame = state;
-    for (const observer of [...frameObservers]) observer(state);
-    notifyStrip();
-  });
+  let unsubscribeTasksFrame: (() => void) | null = null;
+
+  function subscribeSurface(instrument: RunningInstrument, surface: Surface): () => void {
+    return instrument.subscribe((state) => {
+      lastFrames[surface] = state;
+      if (surface !== activeSurface) return;
+      for (const observer of [...frameObservers]) observer(state);
+      notifyStrip();
+    });
+  }
+  const unsubscribeBoardFrame = subscribeSurface(activeInstrument(), "board");
+
+  function displayedFrame(): BufferState<RenderPair> {
+    const state = lastFrames[activeSurface];
+    if (state !== undefined) return state;
+    const instrument = instruments[activeSurface];
+    return instrument !== undefined ? instrument.snapshot() : { kind: "destroyed" };
+  }
 
   function stripView(): StripView {
-    const state = lastFrame;
+    const state = displayedFrame();
     let location: string | null = null;
     let status = "empty";
     if (state.kind === "alive") {
@@ -459,11 +543,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
   };
 
   // -- opens: every surface funnels through one path ---------------------
+  // the open-refusal diagnostic's buffer context: a parse refusal
+  // names no buffer yet, so it rides the board buffer (the assembly
+  // surface)
+  const refusalContext = { bufferId: `${windowId}-board-1`, windowId };
   function openSpec(spec: string, part?: string | null): void {
     const address = parseOpenSpec(spec);
     if (address === null) {
       note = `not a location: ${JSON.stringify(spec)}`;
-      diagnostics.report(context, knownIssue({ code: "asset-denied", message: note }));
+      diagnostics.report(refusalContext, knownIssue({ code: "asset-denied", message: note }));
       notifyStrip();
       return;
     }
@@ -476,9 +564,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // pipeline publishes. A citation naming a part anchors the open
     // there (fold reveal rides the placement, scenario 8). The open
     // is an EXPLICIT opening: the trail records it.
+    // the departure capture rides the CURRENT surface (the entry
+    // being left), then the opened address names its own
     trail.opened(spec);
+    const surface = surfaceOfAddress(address);
+    const target = instrumentFor(surface);
+    setActive(surface);
     const place = {
-      bufferId: instrument.id,
+      bufferId: target.id,
       address,
       position:
         typeof part === "string" && part.length > 0
@@ -489,33 +582,18 @@ export function createPortWindow(windowId = "main"): PortWindow {
             }
           : { kind: "default" as const },
     };
-    instrument.places.restore(place);
+    target.places.restore(place);
     notifyStrip();
   }
 
-  // -- reference ports: the citation acts ride the window's one open
-  // funnel and the copy observation (scenario 9/13). The controller
-  // offers no reference act until these are injected; the follow
-  // composes its spec itself (the controller holds the resolved
-  // machine - formatLocation, never a colon join) and the open lands
-  // anchored exactly as a typed location would.
+  // -- controller ports: the citation acts and the task-row acts ride
+  // the window's one open funnel, the copy observation and the
+  // elsewhere surface (scenario 9/13/17). No controller offers an act
+  // before these are injected; the follow composes its spec itself
+  // (formatLocation, never a colon join) and the open lands anchored
+  // exactly as a typed location would.
   let lastCopy: { payload: string; at: number } | null = null;
-  (instrument.presentation as BoardUI).setReferencePorts({
-    open: (spec, part) => openSpec(spec, part),
-    copy: (payload) => {
-      lastCopy = { payload, at: Date.now() };
-      // the real attempt, failure swallowed (the prototype's copy():
-      // try clipboard, toast what copied); the readout carries the
-      // payload the ACTION produced - the observation surface
-      try {
-        void navigator.clipboard.writeText(payload);
-      } catch {
-        // the lane's webview may refuse the clipboard API; the
-        // recorded payload is the act's truth either way
-      }
-      notifyStrip();
-    },
-  });
+  injectPorts();
 
   // -- the key routing seam: window context, then the active buffer ---
   window.addEventListener("keydown", (event) => {
@@ -552,8 +630,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       meta: event.metaKey,
     };
     const disposition = field
-      ? instrument.handleKey(stroke)
-      : dispatchStroke(windowHost, instrument, stroke);
+      ? activeInstrument().handleKey(stroke)
+      : dispatchStroke(windowHost, activeInstrument(), stroke);
     if (disposition === "consume") event.preventDefault();
   });
 
@@ -611,11 +689,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
         }, 200);
       });
     await settle(() => {
-      const state = lastFrame;
+      const state = displayedFrame();
       if (state.kind !== "alive") return true;
       return state.content.kind === "available" || state.content.kind === "unavailable";
     });
-    const state = lastFrame;
+    const state = displayedFrame();
     if (state.kind === "alive" && state.content.kind === "available") {
       const frame = state.content.value.props["content"] as
         { board?: { content?: unknown[] } | null } | undefined;
@@ -633,12 +711,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
   function readout(): PortObservation {
     const metrics = viewport.metrics();
     return buildReadout({
+      surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
       ask: ask === null
         ? null
         : { act: ask.act, spec: ask.spec, chips: ask.chips },
-      state: lastFrame,
+      state: displayedFrame(),
       diagnostics: diagnostics.entries(),
       doors,
       trail: trail.view(),
@@ -665,7 +744,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     boot,
     subscribeFrame(observer) {
       frameObservers.add(observer);
-      observer(lastFrame);
+      observer(displayedFrame());
       return () => {
         frameObservers.delete(observer);
       };
@@ -702,8 +781,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     },
     destroy() {
       windowHost.dispose();
-      unsubscribeFrame();
-      instrument.destroy();
+      unsubscribeBoardFrame();
+      unsubscribeTasksFrame?.();
+      for (const instrument of Object.values(instruments)) instrument.destroy();
     },
   };
 }

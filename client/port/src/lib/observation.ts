@@ -32,13 +32,19 @@
 import type { BufferState } from "./contracts/buffer.ts";
 import type { RenderPair } from "./instruments/registry.ts";
 import type { BoardData, BoardUI, RenderOutcome } from "../instruments/board.ts";
+import type { TasksData, TasksUI } from "../instruments/tasks.ts";
 import type { StructuredIssue } from "./board/errors.ts";
 import type { Board, Block } from "./board/model.ts";
+import type { TaskRow } from "./tasks/page.ts";
 
 export const PORT_SURFACE = "__saccadePort" as const;
 
 export type PortObservation = {
   app: Readonly<{ name: "saccade-app-port"; slice: number }>;
+  /** The surface whose buffer the window shows: the other surface's
+   * retained buffer keeps its state and re-activates on its trail
+   * return. */
+  surface: "board" | "tasks";
   window: Readonly<{
     label: string | null;
     /** The live window carrying this window's link (the o act's
@@ -81,6 +87,22 @@ export type PortObservation = {
    * observation surface, like find; the clipboard itself is an
    * environment capability, never the source of truth. */
   copy: Readonly<{ payload: string; at: number }> | null;
+  /** The tasks surface's shown page (the pipeline): the rows with
+   * their tasks and links, the label selection, and the groups'
+   * titles. Null on every other surface. */
+  tasks: Readonly<{
+    status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
+    asked: string | null;
+    location: string | null;
+    rows: readonly {
+      part: string;
+      task: string;
+      location: string;
+      title: string;
+    }[];
+    selection: string | null;
+    groups: readonly { part: string; title: string }[];
+  }> | null;
 };
 
 export type ContentPart = Readonly<{
@@ -109,30 +131,48 @@ export type DoorsState = Readonly<{
   delivered: readonly DoorDelivery[];
 }>;
 
-/** The shown board frame, extracted from the mapped buffer state: the
+/** The shown frame, extracted from the mapped buffer state: the
  * registry's own props carry the instrument's published domain data,
- * so the readout reads only what the window already holds. */
+ * so the readout reads only what the window already holds. The
+ * frames discriminate structurally - a board frame names a board, a
+ * tasks frame names rows - so the Board instrument's module stays
+ * untouched by the tasks slice. */
 export function boardFrameOf(state: BufferState<RenderPair>): {
   frame: BoardData | null;
   status: PortObservation["board"]["status"];
 } {
-  if (state.kind === "destroyed") return { frame: null, status: "destroyed" };
+  const frame = frameOfPair(state);
+  // the frames discriminate structurally: a board frame names a board
+  return { frame: frame !== null && "board" in frame ? frame : null, status: statusOf(state) };
+}
+
+export function tasksFrameOf(state: BufferState<RenderPair>): {
+  frame: TasksData | null;
+  status: NonNullable<PortObservation["tasks"]>["status"];
+} {
+  const frame = frameOfPair(state);
+  // a tasks frame names rows (the page model)
+  return { frame: frame !== null && "page" in frame ? (frame as TasksData) : null, status: statusOf(state) };
+}
+
+function statusOf(state: BufferState<RenderPair>): "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed" {
+  if (state.kind === "destroyed") return "destroyed";
   switch (state.content.kind) {
-    case "empty":
-      return { frame: null, status: "empty" };
-    case "pending":
-      return { frame: frameOfPair(state.content.previous), status: "loading" };
-    case "available":
-      return { frame: frameOfPair(state.content.value), status: "loaded" };
-    case "unavailable":
-      return { frame: null, status: "unavailable" };
+    case "empty": return "empty";
+    case "pending": return "loading";
+    case "available": return "loaded";
+    case "unavailable": return "unavailable";
   }
 }
 
-function frameOfPair(pair: RenderPair | null): BoardData | null {
+function frameOfPair(state: BufferState<RenderPair>): BoardData | TasksData | null {
+  if (state.kind !== "alive") return null;
+  const content = state.content;
+  const pair = content.kind === "available" ? content.value
+    : content.kind === "pending" ? content.previous : null;
   if (pair === null) return null;
-  const content = pair.props["content"];
-  return content === undefined ? null : (content as BoardData);
+  const value = pair.props["content"];
+  return value === undefined ? null : (value as BoardData | TasksData);
 }
 
 /** The pinned revision a shown path carries: t-N@rK pins, bare t-N
@@ -173,8 +213,39 @@ function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
     : { open: false, query: "", count: 0, active: -1 };
 }
 
+export function tasksViewOf(
+  frame: TasksData | null,
+  state: BufferState<RenderPair>,
+): NonNullable<PortObservation["tasks"]> {
+  const rows: { part: string; task: string; location: string; title: string }[] = [];
+  const groups: { part: string; title: string }[] = [];
+  const page = frame?.page ?? null;
+  if (page !== null) {
+    for (const group of page.groups) {
+      groups.push({ part: group.part, title: group.title });
+      for (const row of group.rows) {
+        rows.push({ part: row.part, task: row.task, location: row.location, title: row.title });
+      }
+    }
+  }
+  const controller = (state.kind === "alive" ? state.content : null);
+  const pair = controller?.kind === "available" ? controller.value
+    : controller?.kind === "pending" ? controller.previous : null;
+  const face = pair?.props["controller"] as Pick<TasksUI, "getSelection"> | undefined;
+  const selection = typeof face?.getSelection === "function" ? face.getSelection() : null;
+  return {
+    status: statusOf(state),
+    asked: frame ? frame.asked : null,
+    location: frame ? frame.location : null,
+    rows,
+    selection,
+    groups,
+  };
+}
+
 export function buildReadout(
   input: Readonly<{
+    surface: "board" | "tasks";
     windowLabel: string | null;
     link: string | null;
     ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
@@ -188,28 +259,33 @@ export function buildReadout(
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
   const board = frame?.board ?? null;
+  const tasksFrame = input.surface === "tasks" ? tasksFrameOf(input.state).frame : null;
   return {
     app: { name: "saccade-app-port", slice: 1 },
+    surface: input.surface,
     window: { label: input.windowLabel, link: input.link, ask: input.ask },
     board: {
-      status,
-      asked: frame ? frame.asked : null,
-      location: frame ? frame.location : null,
+      status: input.surface === "board" ? status : "empty",
+      asked: frame && input.surface === "board" ? frame.asked : null,
+      location: frame && input.surface === "board" ? frame.location : null,
       task: board && board.task.length > 0 ? board.task : null,
-      pinnedRevision: pinnedRevisionOf(frame ? frame.location : null),
+      pinnedRevision: pinnedRevisionOf(frame && input.surface === "board" ? frame.location : null),
     },
-    errors: frame ? frame.errors : [],
-    render: frame ? frame.renderOutcomes : [],
+    errors: frame && input.surface === "board" ? frame.errors : [],
+    render: frame && input.surface === "board" ? frame.renderOutcomes : [],
     content:
-      board && frame !== null && frame.status === "loaded"
+      board && frame !== null && frame.status === "loaded" && input.surface === "board"
         ? { parts: contentPartsOf(board) }
         : null,
     diagnostics: input.diagnostics,
     doors: input.doors,
     trail: input.trail,
     viewport: input.viewport,
-    find: findViewOf(input.state),
+    find: input.surface === "board" ? findViewOf(input.state) : { open: false, query: "", count: 0, active: -1 },
     copy: input.copy,
+    tasks: input.surface === "tasks"
+      ? tasksViewOf(tasksFrame, input.state)
+      : null,
   };
 }
 

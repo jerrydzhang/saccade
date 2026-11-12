@@ -24,6 +24,8 @@ import type { InputContext } from "../lib/contracts/input.ts";
 import { boardReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
 import { createBoardMenu } from "../lib/menu/acts.ts";
+import type { MenuView } from "../lib/menu/session.ts";
+export type { MenuView };
 import { boardTargetsOf, partAncestors, type BoardTarget } from "../lib/board/targets.ts";
 export { boardTargetsOf } from "../lib/board/targets.ts";
 export type { BoardTarget, BoardTargetKind } from "../lib/board/targets.ts";
@@ -127,14 +129,6 @@ export interface BoardUI extends HydrationHost {
    * rendering never enters or invalidates the loading queue. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
 }
-
-/** The live menu view the component paints. */
-export type MenuView = Readonly<{
-  open: true;
-  label: string;
-  acts: readonly { key: string; label: string }[];
-  at: Readonly<{ x: number; y: number }> | null;
-}>;
 
 /** The live select-session view the component paints chips from. */
 /** Wrap a prepared domain frame as the buffer's published content:
