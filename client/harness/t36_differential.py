@@ -312,7 +312,7 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
     def readout() -> dict:
         return t36_port.readout(request)
 
-    def wait_for(predicate, what: str, timeout: float = 15.0) -> dict | None:
+    def wait_for(predicate, timeout: float = 15.0) -> dict | None:
         deadline = _time.monotonic() + timeout * pace
         while True:
             obs = readout()
@@ -321,14 +321,12 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
             if _time.monotonic() >= deadline:
                 return None
             _sleep(pace, 0.4)
-        del what
 
     tracker = _ok(request({"cmd": "tracker"}, timeout=30))
     base = str(tracker.get("base") or "").replace("http://", "")
     t36_port.open_via_port_picker(request, f"{base}/seedtracker/tasks", pace)
     grounded = wait_for(
         lambda r: r.get("surface") == "tasks" and (r.get("tasks") or {}).get("status") == "loaded",
-        "the tasks page",
     )
     _premise(grounded is not None, "the tasks page never loaded as a surface through the picker")
 
@@ -377,7 +375,6 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
     _sleep(pace, 1.0)
     activity = wait_for(
         lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
-        "the activity location",
     )
     if activity is None:
         now = readout()
@@ -394,7 +391,6 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
     _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "o"]}, timeout=30))
     back = wait_for(
         lambda r: r.get("surface") == "tasks" and (r.get("tasks") or {}).get("status") == "loaded",
-        "the tasks return",
     )
     if back is None:
         now = readout()
@@ -424,7 +420,6 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
     _sleep(pace, 2.0)
     fwd = wait_for(
         lambda r: r.get("surface") == "board" and f"/{departed}@" in str((r.get("board") or {}).get("location") or ""),
-        "the forward retrace",
     )
     if fwd is None:
         now = readout()
