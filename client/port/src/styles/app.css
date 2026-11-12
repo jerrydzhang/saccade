@@ -49,6 +49,12 @@ body {
   color: var(--port-color-accent);
 }
 
+/* the link state, information only (the floor's law: form open) */
+.port-strip-link {
+  font-family: var(--port-font-mono);
+  color: var(--port-color-muted);
+}
+
 .port-content {
   flex: 1;
   overflow-y: auto;

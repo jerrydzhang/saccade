@@ -376,6 +376,22 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
         return {"status": t36_results.STATUS_FAIL,
                 "detail": f"the row menu carries the wrong acts: {acts!r} (expected o, i, w, y - F6's ratified order)"}
 
+    # the link-state indicator (the floor's information law): the
+    # strip shows UNLINKED before the delivery, visibly
+    def strip_link() -> dict | None:
+        return _json_evaluate(
+            request,
+            'const el = document.querySelector(\'[data-port-strip="link"]\');'
+            " if (!el) return null; const b = el.getBoundingClientRect();"
+            " return {text: el.textContent.trim(),"
+            " visible: b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight};",
+        )
+    before_link = strip_link()
+    if not (isinstance(before_link, dict) and before_link.get("visible")
+            and str(before_link.get("text") or "") == "unlinked"):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the strip did not show an unlinked indicator: {before_link!r}"}
+
     # the primary (Enter runs act 0): o through the link. With one
     # window and no link the elsewhere surface opens a new linked
     # window at the task's board revision without asking; the link
@@ -417,6 +433,14 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
         return {"status": t36_results.STATUS_FAIL,
                 "detail": (f"the second Enter opened another window instead of reusing the"
                            f" link: {len(handles_before)} -> {len(handles_after)} handles")}
+
+    # the indicator names the linked window after the delivery
+    after_link = strip_link()
+    linked_name = str((delivered.get("window") or {}).get("link") or "")
+    if not (isinstance(after_link, dict) and after_link.get("visible")
+            and str(after_link.get("text") or "") == f"-> {linked_name}"):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the strip did not name the linked window {linked_name!r}: {after_link!r}"}
 
     # leave the lane in the one-window state later checks assume:
     # close the delivered window (best effort - the delivery and the

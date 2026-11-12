@@ -72,6 +72,10 @@ export interface StripView {
   status: string;
   jumpChip: string | null;
   note: string | null;
+  /** The link state as information (the floor's law: form open):
+   * the linked window's label, or null when this window is
+   * unlinked. The o act's target, made visible. */
+  link: string | null;
 }
 
 export interface PortWindow {
@@ -353,6 +357,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     } catch {
       // a dead store read: the link resolves null until the next
       // refresh; o asks rather than delivering into a guess
+    } finally {
+      notifyStrip();
     }
   }
 
@@ -597,7 +603,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     } else {
       status = "destroyed";
     }
-    return { location, status, jumpChip: doors.jumpChip, note };
+    return { location, status, jumpChip: doors.jumpChip, note, link: linkLabel };
   }
 
   function notifyStrip(): void {

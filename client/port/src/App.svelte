@@ -88,6 +88,9 @@ from the registry's reviewed erasure boundary. -->
     {#if strip?.jumpChip}
       <span class="port-strip-chip">{strip.jumpChip}</span>
     {/if}
+    <span class="port-strip-link" data-port-strip="link">
+      {strip?.link != null ? `-> ${strip.link}` : "unlinked"}
+    </span>
   </header>
   {#if inspection !== null}
     <div class="port-inspection" data-port-control="inspection">
