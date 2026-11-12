@@ -51,6 +51,23 @@ at the generation boundary. -->
   // third invocation path); plain clicks on act-carrying parts run
   // the first act directly (the fourth path).
   function onContextMenu(event: MouseEvent): void {
+    const citation = (event.target as HTMLElement | null)?.closest?.('[data-port-control="citation"]');
+    if (citation instanceof HTMLElement) {
+      // the citation is its own target (the prototype's ref shape):
+      // the menu carries the reference acts, labeled by the address
+      const part = citation.getAttribute("data-port-part-of");
+      const address = citation.getAttribute("data-port-open") ?? "";
+      if (part !== null) {
+        event.preventDefault();
+        const box = host?.getBoundingClientRect();
+        const at =
+          box === undefined
+            ? undefined
+            : { x: event.clientX - box.left, y: event.clientY - box.top };
+        controller.openMenuFor({ part, kind: "reference", label: address }, at);
+      }
+      return;
+    }
     const part = partFromEvent(event);
     if (part === null) return;
     const target = content.targets.find((entry) => entry.part === part);

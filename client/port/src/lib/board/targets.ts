@@ -15,6 +15,9 @@ export type BoardTarget = Readonly<{
   /** Prose for text narrowing: the block's markdown, groups by
    * title, figures by caption. */
   text: string;
+  /** The incorporation's model-authored citation source, for
+   * reference targets (t-36@r90); absent for every other kind. */
+  source?: Readonly<{ task: string; revision: number; select: readonly string[] }>;
 }>;
 
 /** The model-derived targets of a decoded board: every content part,
@@ -59,7 +62,12 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       if (block.kind === "text" || block.kind === "annotation") text = block.markdown;
       else if (block.kind === "group") text = block.title ?? "";
       else if (block.kind === "figure") text = block.caption;
-      out.push({ part, kind: block.kind as BoardTargetKind, text });
+      const base = { part, kind: block.kind as BoardTargetKind, text };
+      out.push(
+        block.kind === "incorporation"
+          ? { ...base, source: { task: block.source.task, revision: block.source.revision, select: block.source.select } }
+          : base,
+      );
       if (block.kind === "group" || block.kind === "incorporation") {
         walk(block.content, part);
       }

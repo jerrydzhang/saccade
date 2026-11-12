@@ -68,6 +68,11 @@ export type PortObservation = {
   viewport: Readonly<{ left: number; top: number; width: number; height: number }>;
   /** The find facility of the shown revision (scenario 16). */
   find: Readonly<{ open: boolean; query: string; count: number; active: number }>;
+  /** The last reference-copy act's payload (scenario 13): the text
+   * the ACTION produced (and attempted on the clipboard) - the
+   * observation surface, like find; the clipboard itself is an
+   * environment capability, never the source of truth. */
+  copy: Readonly<{ payload: string; at: number }> | null;
 };
 
 export type ContentPart = Readonly<{
@@ -168,6 +173,7 @@ export function buildReadout(
     doors: DoorsState;
     trail: PortObservation["trail"];
     viewport: PortObservation["viewport"];
+    copy: PortObservation["copy"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -193,6 +199,7 @@ export function buildReadout(
     trail: input.trail,
     viewport: input.viewport,
     find: findViewOf(input.state),
+    copy: input.copy,
   };
 }
 

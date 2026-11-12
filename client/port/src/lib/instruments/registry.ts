@@ -56,6 +56,12 @@ export interface RunningInstrument {
   readonly id: string;
   readonly kind: string;
   readonly places: ReturnPlaces;
+  /** The instrument's UI surface (the component's controller), type-
+   * erased at the registration boundary; the owning window casts to
+   * its own instrument's UI type when it needs a window-service
+   * injection (the reference ports) - the one sanctioned App-to-UI
+   * channel, never a second connect path. */
+  readonly presentation: unknown;
   activate(): boolean;
   deactivate(): void;
   handleKey(input: KeyInput): KeyDisposition;
@@ -87,6 +93,7 @@ export function registerInstrument<
         });
       return {
         id: built.host.id,
+        presentation: built.presentation,
         kind: definition.kind,
         places: built.host.places,
         activate: () => built.host.activate(),

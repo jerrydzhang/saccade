@@ -111,6 +111,14 @@ export interface BoardUI extends HydrationHost {
   isFolded(part: string): boolean;
   /** Open the act menu for a target (selection or right-click). */
   openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
+  /** A plain click on a citation runs its FIRST act directly - the
+   * same action object every invocation path runs (scenario 9). The
+   * part names the citation's incorporation block. */
+  referencePrimaryClick(part: string): void;
+  /** The window services the reference acts ride (the one open
+   * funnel and the copy observation); injected by the window, and no
+   * reference act is offered before then. */
+  setReferencePorts(ports: { open(spec: string, part: string | null): void; copy(payload: string): void }): void;
   /** Update outcomes for the actual shown frame's generation;
    * rendering never enters or invalidates the loading queue. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
@@ -266,6 +274,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     openMenuFor(target, at) {
       boardMenu.openFor(target, at);
+    },
+    referencePrimaryClick(part) {
+      // the same action object every path runs: the citation's target
+      // built from the MODEL (label = the address, as the prototype's
+      // menu head reads el.dataset.loc)
+      const target = lastFrame.targets.find((entry) => entry.part === part);
+      if (target === undefined || target.source === undefined) return;
+      const label = `${target.source.task}@r${target.source.revision}`;
+      boardMenu.session.primaryClick({ kind: "reference", label, part });
+      notifyMenu();
+    },
+    setReferencePorts(ports) {
+      referencePorts = ports;
     },
     reportRenderOutcomes(reported, outcomes) {
       if (released || reported !== displayedGeneration()) return;
@@ -565,9 +586,24 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
 
   // -- the menu (scenario 9): selection opens the target's acts ------
   const menuObservers = new Set<(view: MenuView | null) => void>();
+  let referencePorts: import("../lib/menu/acts.ts").ReferencePorts | null = null;
   const boardMenu = createBoardMenu({
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),
+    referenceOf: (part) => {
+      const target = lastFrame.targets.find((entry) => entry.part === part);
+      if (target === undefined || target.source === undefined) return null;
+      return { task: target.source.task, revision: target.source.revision, select: target.source.select };
+    },
+    referencePorts: () => referencePorts,
+    referenceMachine: () => lastFrame.resolved?.machine ?? null,
+    partCitation: (part) => {
+      // the SHOWN revision (a bare open displays its resolved pin)
+      // plus the part's full canonical path - never the parent
+      const match = /@r(\d+)$/.exec(lastFrame.location);
+      if (match === null || lastFrame.board === null || lastFrame.board.task.length === 0) return null;
+      return `${lastFrame.board.task}@r${match[1]}:${part}`;
+    },
     capture: (context) => buffer.interactions.capture(context),
   });
   function menuView(): MenuView | null {

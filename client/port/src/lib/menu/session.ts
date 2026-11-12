@@ -43,6 +43,12 @@ export type MenuTarget = Readonly<{
   /** The heading line above the acts (the prototype's menu head,
    * select() :58 `el.dataset.label || el.dataset.loc || el.dataset.kind`). */
   label: string;
+  /** The target's canonical part path - identity rides the VALUE
+   * OBJECT, never a side map keyed by kind:label (two targets of one
+   * kind with equal first-line labels collide there; t-36@r90's
+   * part-carriage constraint). The reference target of a citation
+   * carries its incorporation part's path. */
+  part: string | null;
 }>;
 
 export type MenuAct = Readonly<{

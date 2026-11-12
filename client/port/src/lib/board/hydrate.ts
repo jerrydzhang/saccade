@@ -26,8 +26,11 @@ import { TrackerSource } from "../tracker.ts";
 import { el } from "../render.ts";
 import type { FigureBlock } from "./model.ts";
 
-/** What hydration needs: the actually displayed frame's identity and
- * figure/image byte loader. A requested-but-unshown replacement does
+/** What hydration needs: the actually displayed frame's identity,
+ * figure/image byte loading, and the citation activation seam - a
+ * plain click on a citation runs its first act through the
+ * controller's shared menu path (scenario 9: the same action object
+ * every invocation runs). A requested-but-unshown replacement does
  * not invalidate retained content; an actual replacement does. */
 export interface HydrationHost {
   displayedGeneration(): number | null;
@@ -35,6 +38,9 @@ export interface HydrationHost {
     location: Location,
     block: FigureBlock,
   ): Promise<Uint8Array | string>;
+  /** A plain (unshifted, primary-button) click on the citation whose
+   * incorporation part is `part`. */
+  referencePrimaryClick(part: string): void;
 }
 
 export async function hydrate(
@@ -94,7 +100,7 @@ async function hydrateCitations(
     const task = span.dataset.citeTask ?? "";
     const revision = span.dataset.citeRevision ?? "";
     const path = `${task}@r${revision}`;
-    const select = span.dataset.citeSelect ?? null;
+    const part = span.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     const link = el(
       "a",
       {
@@ -102,29 +108,41 @@ async function hydrateCitations(
         href: "#",
         "data-port-control": "citation",
         "data-port-open": path,
+        ...(part !== null ? { "data-port-part-of": part } : {}),
       },
       path,
     );
+    // Real browsers emit no click for the right button. This stack's
+    // WebDriver synthesizes one right after the right-button release
+    // (recorded live: contextmenu, then click:button=0 ~120ms later)
+    // - the same gesture-synthesis wedge that eats the next pointer
+    // press's pointerdown after a right-click. A click within the
+    // right-gesture window is that artifact, never a user plain
+    // click; the window is generous against the synthesis order and
+    // tiny against any human press.
+    let contextmenuAt = 0;
+    link.addEventListener("contextmenu", () => {
+      contextmenuAt = performance.now();
+    });
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      // the shell routes every citation activation (t-14's two acts):
-      // a plain click is the primary act, a shifted click opens
-      // elsewhere through the link
-      window.dispatchEvent(
-        new CustomEvent("suite-open-citation", {
-          detail: { machine: location.machine, path, select, shifted: event.shiftKey },
-        }),
-      );
+      if (performance.now() - contextmenuAt < 250) return;
+      // a plain click runs the citation's FIRST act (follow here)
+      // through the controller's shared menu path - the same action
+      // object the menu key, Enter and the menu item run (scenario 9).
+      // Shifted clicks open elsewhere: the elsewhere slice owns that
+      // surface; the deferral is reported, never silently flattened.
+      if (event.shiftKey || part === null) {
+        console.log("[port] shifted citation open deferred (elsewhere slice)");
+        return;
+      }
+      _host.referencePrimaryClick(part);
     });
     link.addEventListener("auxclick", (event) => {
       if (event.button !== 1) return;
       event.preventDefault();
       // a middle click opens elsewhere, exactly as a shifted click
-      window.dispatchEvent(
-        new CustomEvent("suite-open-citation", {
-          detail: { machine: location.machine, path, select, shifted: true },
-        }),
-      );
+      console.log("[port] middle-click citation open deferred (elsewhere slice)");
     });
     span.replaceChildren(link);
   }

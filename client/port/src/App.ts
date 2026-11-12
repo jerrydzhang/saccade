@@ -30,6 +30,7 @@ import {
   type SliceDiagnostics,
 } from "./components/Buffer.ts";
 import { boardInstrument, parseOpenSpec } from "./instruments/board.ts";
+import type { BoardUI } from "./instruments/board.ts";
 import {
   PORT_SURFACE,
   buildReadout,
@@ -38,8 +39,6 @@ import {
   type PortObservation,
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
-import { formatLocation } from "./lib/location.ts";
-import { selectToPart } from "./lib/board/targets.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { windowContext } from "./lib/input/contexts.ts";
@@ -216,27 +215,28 @@ export function createPortWindow(windowId = "main"): PortWindow {
     notifyStrip();
   }
 
-  // citation activation: the hydration-created links hand off to the
-  // window through this event; a citation naming a select path opens
-  // anchored there (the grammar path mapped to the canonical part);
-  // shifted opens elsewhere defer to the suite slice - reported,
-  // never silently flattened
-  window.addEventListener("suite-open-citation", (event) => {
-    const detail = (event as CustomEvent<{ machine: string; path: string; select?: string | null; shifted: boolean }>)
-      .detail;
-    if (!detail || typeof detail.path !== "string") return;
-    if (detail.shifted) {
-      console.log("[port] shifted citation open deferred (suite slice)");
-      return;
-    }
-    const part = typeof detail.select === "string" ? selectToPart(detail.select) : null;
-    // The open takes the parseable location form, never a hand-rolled
-    // machine:path join: a tracker machine ("tracker:seedtracker") with
-    // a colon join parses as nothing ("not a location" - the S08 live
-    // finding). formatLocation builds the form the picker and the
-    // header field take back; the tracker's host resolves through the
-    // registry the first hosted open registered.
-    openSpec(formatLocation({ machine: detail.machine, path: detail.path }), part === "" ? null : part);
+  // -- reference ports: the citation acts ride the window's one open
+  // funnel and the copy observation (scenario 9/13). The controller
+  // offers no reference act until these are injected; the follow
+  // composes its spec itself (the controller holds the resolved
+  // machine - formatLocation, never a colon join) and the open lands
+  // anchored exactly as a typed location would.
+  let lastCopy: { payload: string; at: number } | null = null;
+  (instrument.presentation as BoardUI).setReferencePorts({
+    open: (spec, part) => openSpec(spec, part),
+    copy: (payload) => {
+      lastCopy = { payload, at: Date.now() };
+      // the real attempt, failure swallowed (the prototype's copy():
+      // try clipboard, toast what copied); the readout carries the
+      // payload the ACTION produced - the observation surface
+      try {
+        void navigator.clipboard.writeText(payload);
+      } catch {
+        // the lane's webview may refuse the clipboard API; the
+        // recorded payload is the act's truth either way
+      }
+      notifyStrip();
+    },
   });
 
   // -- the key routing seam: window context, then the active buffer ---
@@ -344,6 +344,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         width: metrics.width,
         height: metrics.height,
       },
+      copy: lastCopy,
     });
   }
 
