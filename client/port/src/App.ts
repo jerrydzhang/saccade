@@ -41,7 +41,7 @@ import {
 import { tauriInvoke } from "./lib/sources.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
-import { windowContext } from "./lib/input/contexts.ts";
+import { isPinnedWindowChord, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
@@ -102,6 +102,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       openPicker: () => picker.open(),
       closeOverlays: () => picker.close(),
       pickerIsOpen: () => picker.snapshot().open,
+      trailBack: () => trail.back(),
+      trailForward: () => trail.forward(),
     }),
   );
 
@@ -251,7 +253,21 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // Modifier chords stay native until the IME/native-editing
     // boundary set is pinned (draft-open, grouped decision): the port
     // never eats an OS or browser chord while the boundary is unset.
-    if (event.ctrlKey || event.altKey || event.metaKey) return;
+    // The ONE carve-out is the oracle-pinned window chords (Ctrl-o,
+    // Ctrl-i - the app's own back/forward bindings): the window
+    // context owns exactly those two, so they reach the matcher;
+    // every other modifier chord still passes native.
+    if (
+      (event.ctrlKey || event.altKey || event.metaKey) &&
+      !isPinnedWindowChord({
+        key: event.key,
+        ctrl: event.ctrlKey,
+        shift: event.shiftKey,
+        alt: event.altKey,
+        meta: event.metaKey,
+      })
+    )
+      return;
     const stroke = {
       key: event.key,
       ctrl: event.ctrlKey,

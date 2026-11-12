@@ -5,6 +5,7 @@
 
 import {
   commandContext,
+  ctrl,
   key,
   sequence,
   shift,
@@ -20,6 +21,35 @@ export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
   pickerIsOpen(): boolean;
+  trailBack(): boolean;
+  trailForward(): boolean;
+}
+
+// The two oracle-pinned window chords (the app's own back/forward
+// bindings since the old app: Ctrl-o, Ctrl-i). The seam consults
+// these before its modifier-chord refusal; every other ctrl/alt/meta
+// chord still passes native (the IME/native-editing boundary set
+// stays draft-open, grouped decision).
+export const PINNED_WINDOW_CHORDS: readonly { key: string; ctrl: boolean }[] = [
+  { key: "o", ctrl: true },
+  { key: "i", ctrl: true },
+];
+
+export function isPinnedWindowChord(stroke: {
+  key: string;
+  ctrl: boolean;
+  shift: boolean;
+  alt: boolean;
+  meta: boolean;
+}): boolean {
+  return PINNED_WINDOW_CHORDS.some(
+    (chord) =>
+      stroke.ctrl === chord.ctrl &&
+      !stroke.shift &&
+      !stroke.alt &&
+      !stroke.meta &&
+      stroke.key.toLowerCase() === chord.key,
+  );
 }
 
 export function windowContext(actions: WindowActions): InputContext {
@@ -31,6 +61,26 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.openPicker(),
       },
       keys: [sequence(key(" "), key(" "))],
+    },
+    {
+      action: {
+        id: "window.trail-back",
+        label: "go back through the trail",
+        run: () => {
+          actions.trailBack();
+        },
+      },
+      keys: [sequence(ctrl("o"))],
+    },
+    {
+      action: {
+        id: "window.trail-forward",
+        label: "go forward through the trail",
+        run: () => {
+          actions.trailForward();
+        },
+      },
+      keys: [sequence(ctrl("i"))],
     },
     ...(actions.pickerIsOpen() ? [{
       action: {

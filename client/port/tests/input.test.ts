@@ -8,7 +8,7 @@ import test from "node:test";
 import { commandContext, key, sequence } from "../src/lib/input/input-context.ts";
 import { createMatcher, SEQUENCE_TIMEOUT_MS, validateNoCollisions } from "../src/lib/input/key-matcher.ts";
 import { createHostMatcher, dispatchStroke, type HostScheduler } from "../src/lib/input/host.ts";
-import { boardReadingContext, windowContext } from "../src/lib/input/contexts.ts";
+import { boardReadingContext, isPinnedWindowChord, windowContext } from "../src/lib/input/contexts.ts";
 import { createPickerController } from "../src/lib/input/picker.ts";
 import type { KeyDisposition, KeyInput } from "../src/lib/input/input-context.ts";
 
@@ -62,8 +62,45 @@ test("collisions between different actions are errors at load", () => {
   validateNoCollisions(alternatives);
 });
 
+test("the pinned window chords run back/forward through the host matcher", () => {
+  const ran: string[] = [];
+  const scheduler = manualScheduler();
+  const host = createHostMatcher(
+    windowContext({
+      openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
+      trailBack: (): boolean => { ran.push("back"); return true; },
+      trailForward: (): boolean => { ran.push("forward"); return true; },
+    }),
+    { scheduler },
+  );
+  const chord = (k: string): KeyInput => ({ key: k, ctrl: true, shift: false, alt: false, meta: false });
+  const back = host.stroke(chord("o"));
+  const forward = host.stroke(chord("i"));
+  assert.strictEqual(back.kind, "invoke");
+  assert.strictEqual(back.action.id, "window.trail-back");
+  assert.strictEqual(forward.kind, "invoke");
+  assert.strictEqual(forward.action.id, "window.trail-forward");
+  host.apply(back);
+  host.apply(forward);
+  assert.deepStrictEqual(ran, ["back", "forward"]);
+});
+
+test("the seam carve-out names exactly the two pinned chords", () => {
+  // only bare ctrl+o / ctrl+i pass the refusal; shift-combos, alt/meta
+  // variants and other keys never do
+  const pinned = (k: string, ctrl: boolean, shift: boolean, alt: boolean, meta: boolean) =>
+    isPinnedWindowChord({ key: k, ctrl, shift, alt, meta });
+  assert.ok(pinned("o", true, false, false, false));
+  assert.ok(pinned("i", true, false, false, false));
+  assert.ok(!pinned("p", true, false, false, false));
+  assert.ok(!pinned("o", true, true, false, false));
+  assert.ok(!pinned("o", true, false, true, false));
+  assert.ok(!pinned("o", true, false, false, true));
+  assert.ok(!pinned("o", false, false, false, false));
+});
+
 test("the real port contexts validate at construction", () => {
-  windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false });
+  windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false });
   boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, enterSelect: () => {}, enterFind: () => {} });
 });
 
@@ -127,6 +164,8 @@ test("the window chain: space-space opens the picker at the window level; other 
       openPicker: () => { pickerOpen = true; windowEvents.push("picker"); },
       closeOverlays: () => { pickerOpen = false; windowEvents.push("close"); },
       pickerIsOpen: () => pickerOpen,
+      trailBack: (): boolean => { windowEvents.push("back"); return true; },
+      trailForward: (): boolean => { windowEvents.push("forward"); return true; },
     }),
     { scheduler },
   );
