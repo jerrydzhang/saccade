@@ -277,7 +277,11 @@ def perform_input(client: WebDriver, request: dict) -> dict:
             raise WebDriverError("invalid argument", "type input needs text")
         element = client.find_element(selector)
         client.clear_element(element)
-        client.send_keys(element, text)
+        # an empty text IS the clear: WebKitWebDriver rejects an
+        # element send-keys with an empty text ("Missing text
+        # parameter"), observed live on the f447de1 differential run
+        if text:
+            client.send_keys(element, text)
         return {"kind": "type", "target": target, "text": text}
     if kind == "wheel":
         dx = float(request.get("dx", 0))

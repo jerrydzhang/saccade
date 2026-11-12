@@ -74,6 +74,10 @@ class FakeSession:
     def __call__(self, payload: dict, timeout: float = 40.0) -> dict:
         cmd = payload.get("cmd")
         script = str(payload.get("script") or "")
+        if cmd == "status":
+            # the lane's own board (host side): the tall fixture is
+            # written beside it, where /board's bind serves it
+            return {"ok": True, "board": "/tmp/t36-dev-board.yaml"}
         if cmd == "windows":
             return {"ok": True, "windows": [{"handle": f"h-{label}" , "label": label} for label in self.labels],
                     "suite": [{"label": label} for label in self.labels]}

@@ -196,6 +196,25 @@ def check_s09_invocations_agree(request: RequestFn, pace: float = 1.0) -> dict:
 # -- S10: sequences through the shipped matcher ---------------------------
 
 
+def _tall_fixture_path(request: "RequestFn") -> pathlib.Path:
+    """The tall-board fixture is written on the caller's host side,
+    beside the session's own board: the native lane binds the board's
+    PARENT DIRECTORY at /board (entry.py), so the fixture is servable
+    at host:/board/<name> exactly when it sits in that directory. A
+    session without a status board (pure lanes, scripted tests) falls
+    back to /tmp - the focused probe's own board lives there, so the
+    same path serves it."""
+    board = ""
+    try:
+        answer = request({"cmd": "status"}, 30)
+        if isinstance(answer, dict) and answer.get("ok"):
+            board = str(answer.get("board") or "")
+    except Exception:
+        board = ""
+    parent = pathlib.Path(board).resolve().parent if board else pathlib.Path("/tmp")
+    return parent / "t36-tall-board.yaml"
+
+
 def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
     """S10 sequences go through one matcher - the app as it SHIPS at
     4d59c35 (the keyMode state machine: gg scrolls top; unmatched
@@ -217,9 +236,13 @@ def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
     # viewport is 1024x1280 and the seed boards fit it, so the body
     # generates its own tall host board and opens it through the
     # app's own open surface - the same test-open channel the lane
-    # itself uses to put the first board on screen (the lane binds
-    # /tmp at /board)
-    tall = pathlib.Path("/tmp/t36-tall-board.yaml")
+    # itself uses to put the first board on screen. The fixture is
+    # written BESIDE THE SESSION'S OWN BOARD: the lane binds the
+    # board's parent directory at /board, so a board in /tmp is
+    # servable only when the session's board itself lives in /tmp
+    # (the focused probe) - the differential lane's seeds directory
+    # is what /board actually carries there
+    tall = _tall_fixture_path(request)
     blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 151))
     tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
     _key(request, "escape")
@@ -643,9 +666,10 @@ def _s10_port(request: Callable, pace: float) -> dict:
 
     from t36_checks import _json_evaluate, _key, _premise, _sleep
 
-    # the tall board rides /board (the lane binds /tmp at /board); the
-    # port's own open door puts it on screen
-    tall = pathlib.Path("/tmp/t36-tall-board.yaml")
+    # the tall board rides /board (written beside the session's own
+    # board - see the shared body); the port's own open door puts it
+    # on screen
+    tall = _tall_fixture_path(request)
     blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 151))
     tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
     _key(request, "escape")
