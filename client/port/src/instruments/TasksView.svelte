@@ -9,6 +9,7 @@ return anchor's identity), data-port-open names the row's link. -->
 
 <script lang="ts">
   import type { MenuView, SelectSessionView } from "./tasks.ts";
+import LabelOverlay from "../components/LabelOverlay.svelte";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
@@ -86,6 +87,7 @@ the select session + the act menu (Enter runs the first act), so the
 a11y click advisories do not apply. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div class="port-tasks-stage">
 <div class="port-tasks-view" bind:this={host} role="document" onclick={onClick} oncontextmenu={onContextMenu}>
   {#if page !== null && content.status === "loaded"}
     {#each page.groups as group (group.part)}
@@ -119,16 +121,9 @@ a11y click advisories do not apply. -->
   {/if}
 </div>
 {#if select !== null}
-  <div class="port-select-labels" aria-hidden="true">
-    {#each select.labels as entry (entry.part)}
-      {@const box = chipBox(entry.part)}
-      {#if box !== null && entry.label !== ""}
-        <span class="port-select-label" data-port-label={entry.label} data-port-part={entry.part}
-          style="left: {box.left}px; top: {box.top}px">{entry.label}</span>
-      {/if}
-    {/each}
-  </div>
+  <LabelOverlay chips={select.labels} measure={chipBox} />
 {/if}
+</div>
 {#if menu !== null}
   <div class="port-menu" data-port-menu="">
     <div class="port-menu-label">{menu.label}</div>

@@ -68,17 +68,30 @@ body {
   padding: 0.25rem 0.5rem;
 }
 
-/* Placement only: the select chips overlay the labeled parts. */
-.port-select-labels {
-  position: relative;
+/* The shared label overlay (LabelOverlay.svelte): an absolutely
+ * positioned layer COVERING the positioning host (inset 0), so a
+ * chip's host-relative coordinates land beside its part. The old
+ * sibling-after-the-host layer (F3) drew every chip a full
+ * content-height low; this layer makes that shape impossible. */
+.port-label-overlay {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 
-.port-select-label {
+/* the tasks stage: the label overlay's positioning context, exactly
+ * the host's box (content styling arrives with F4's ledger rows) */
+.port-tasks-stage {
+  position: relative;
+}
+
+.port-label-chip {
   position: absolute;
   padding: 0 0.25rem;
   border: 1px solid var(--port-color-muted);
   background: var(--port-world-background);
+  color: var(--port-world-foreground);
   font-size: 0.75rem;
   line-height: 1.25;
 }
@@ -126,9 +139,13 @@ body {
   color: var(--port-color-muted);
 }
 
-.port-board-view {
+.port-board-stage {
+  position: relative;
   max-width: var(--port-measure);
   margin: 0 auto;
+}
+
+.port-board-view {
   padding: 1rem 1.25rem 4rem 1.25rem;
   font-family: var(--port-font-world);
   font-size: 1rem;

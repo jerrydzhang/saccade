@@ -7,6 +7,7 @@ at the generation boundary. -->
 
 <script lang="ts">
   import { hydrate } from "../lib/board/hydrate.ts";
+import LabelOverlay from "../components/LabelOverlay.svelte";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
   import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
@@ -147,19 +148,13 @@ at the generation boundary. -->
     </span>
   </div>
 {/if}
-<div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
+<div class="port-board-stage">
+  <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
   </div>
   {#if select !== null}
-    <div class="port-select-labels" aria-hidden="true">
-      {#each select.labels as entry (entry.part)}
-        {@const box = chipBox(entry.part)}
-        {#if box !== null && entry.label !== ""}
-          <span class="port-select-label" data-port-label={entry.label} data-port-part={entry.part}
-            style="left: {box.left}px; top: {box.top}px">{entry.label}</span>
-        {/if}
-      {/each}
-    </div>
+    <LabelOverlay chips={select.labels} measure={chipBox} />
   {/if}
+</div>
   {#if menu !== null}
     <div class="port-menu" data-port-menu="">
       <div class="port-menu-label">{menu.label}</div>
