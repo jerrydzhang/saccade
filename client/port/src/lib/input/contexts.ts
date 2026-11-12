@@ -107,6 +107,66 @@ export interface ReadingActions {
   enterFind(): void;
 }
 
+// The Tasks instrument's reading context: the same viewport reading
+// commands as the board's, with the pipeline's own reading shape - j/k
+// is pure scrolling by task row (the scenario 17 resolution: NO row
+// cursor), and find is a facility of a shown revision, so / is not
+// offered on a task list.
+export interface TasksReadingActions {
+  scrollDown(): void;
+  scrollUp(): void;
+  scrollToTop(): void;
+  scrollToBottom(): void;
+  enterSelect(): void;
+}
+
+export function tasksReadingContext(actions: TasksReadingActions): InputContext {
+  const context = commandContext(() => [
+    {
+      action: {
+        id: "tasks.scroll-down",
+        label: "scroll down",
+        run: () => actions.scrollDown(),
+      },
+      keys: [sequence(key("j"))],
+    },
+    {
+      action: {
+        id: "tasks.scroll-up",
+        label: "scroll up",
+        run: () => actions.scrollUp(),
+      },
+      keys: [sequence(key("k"))],
+    },
+    {
+      action: {
+        id: "tasks.scroll-top",
+        label: "scroll to the top",
+        run: () => actions.scrollToTop(),
+      },
+      keys: [sequence(key("g"), key("g"))],
+    },
+    {
+      action: {
+        id: "tasks.scroll-bottom",
+        label: "scroll to the bottom",
+        run: () => actions.scrollToBottom(),
+      },
+      keys: [sequence(shift("G"))],
+    },
+    {
+      action: {
+        id: "tasks.select",
+        label: "select a task by label",
+        run: () => actions.enterSelect(),
+      },
+      keys: [sequence(key("s"))],
+    },
+  ]);
+  validateNoCollisions(context);
+  return context;
+}
+
 export function boardReadingContext(actions: ReadingActions): InputContext {
   const context = commandContext(() => [
     {

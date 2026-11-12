@@ -38,6 +38,16 @@
 
 import type { Action } from "../input/input-context.ts";
 
+/** The live menu view a component paints: the heading line and the
+ * acts with their keys. The point a pointer-open carried rides for
+ * positioning hosts; logic never reads it. */
+export type MenuView = Readonly<{
+  open: true;
+  label: string;
+  acts: readonly { key: string; label: string }[];
+  at: Readonly<{ x: number; y: number }> | null;
+}>;
+
 export type MenuTarget = Readonly<{
   kind: string;
   /** The heading line above the acts (the prototype's menu head,

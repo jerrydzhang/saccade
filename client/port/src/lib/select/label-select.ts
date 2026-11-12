@@ -17,7 +17,8 @@ export type TargetKind =
   | "unknown"
   | "citation"
   | "group"
-  | "control";
+  | "control"
+  | "task";
 
 /** Whether a target carries prose: text targets narrow by their text
  * and carry lowercase labels; everything else carries uppercase ones. */
