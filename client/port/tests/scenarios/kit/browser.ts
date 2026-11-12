@@ -96,6 +96,9 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     },
+    async windowBound() {
+      return true;
+    },
     async windows() {
       return ["main"];
     },

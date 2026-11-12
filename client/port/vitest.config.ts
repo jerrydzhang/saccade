@@ -55,6 +55,12 @@ function webkitEnv(): Record<string, string> {
 export default mergeConfig(
   viteConfig,
   defineConfig({
+    // the loopback literal, never the name: the session lane's sandbox
+    // has no /etc/hosts, so "localhost" does not resolve there
+    server: { host: "127.0.0.1" },
+    // the lane's suite mode binds the client tree read-only and names a
+    // cache under its run root (client/harness/suite_payload.py)
+    ...(process.env.SUITE_CACHE_DIR ? { cacheDir: process.env.SUITE_CACHE_DIR } : {}),
     test: {
       projects: [
         {

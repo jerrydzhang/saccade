@@ -4,7 +4,7 @@
 import { expect, test } from "#scenario";
 import { openLocation, spec } from "./kit/helpers.ts";
 
-test("the picker opens a typed location", { tags: ["native"] }, async ({ app, tracker }) => {
+test("the picker opens a typed location", async ({ app, tracker }) => {
   const obs = await openLocation(app, spec(tracker, tracker.tasks.cited));
   expect(obs.surface).toBe("board");
   expect(obs.board).toMatchObject({

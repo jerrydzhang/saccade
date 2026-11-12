@@ -65,8 +65,11 @@ export async function find(app: AppDriver, query: string): Promise<PortObservati
 }
 
 /** An act from a citation's act menu: the real right-click opens the
- * menu, the act's key runs it (o, i, w, f, y). */
+ * menu, the act's key runs it (o, i, w, f, y). The elsewhere acts wait
+ * for this window's binding: an o pressed while the window state is
+ * still binding is dropped (src/App.ts openElsewhere). */
 export async function citationAct(app: AppDriver, key: string): Promise<void> {
+  if ("oiw".includes(key)) await expect.poll(() => app.windowBound(), { timeout: 15_000 }).toBe(true);
   await app.click("citation", { button: "right" });
   await expect.poll(() => app.menuOpen()).toBe(true);
   await app.press(key);

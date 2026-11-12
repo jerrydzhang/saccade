@@ -7,7 +7,7 @@ import { startTracker } from "./tracker.ts";
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   if (project.name === "native") {
-    const { pinned } = await import("./native.ts");
+    const { pinned } = await import("./native-env.ts");
     pinned();
   }
   const origins = (process.env.SAC_PORT_SUITE_ORIGINS ?? "").split(" ").filter((origin) => origin.length > 0);
