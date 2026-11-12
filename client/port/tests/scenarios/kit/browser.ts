@@ -40,12 +40,7 @@ function keySyntax(key: string): string {
   return key;
 }
 
-// `bound` answers windowBound: with no shell there is no binding to
-// wait for; a bridged app reads its shell mock's own record
-async function launch(
-  src: string,
-  bound: (label: string) => boolean = () => true,
-): Promise<{ app: AppDriver; close: () => void }> {
+async function launch(src: string): Promise<{ app: AppDriver; close: () => void }> {
   const frame = document.createElement("iframe");
   frame.src = src;
   frame.setAttribute("data-port-suite", "app");
@@ -102,9 +97,6 @@ async function launch(
     async activeMatch() {
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
-    },
-    async windowBound(label = "main") {
-      return bound(label);
     },
     async windows() {
       return ["main"];
@@ -169,14 +161,7 @@ export const test = base.extend<{
       }
       const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [] };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
-      // the binding is done when the shell answered bind_window_state
-      // for the window and its registry entry now carries that state
-      // (what window_binding returns from then on); the native
-      // stopgap reads the real shell's bind_window_state line
-      const bound = (label: string): boolean =>
-        world.calls.some((call) => call.cmd === "bind_window_state")
-        && typeof world.windows.find((entry) => entry.label === label)?.stateId === "string";
-      const { app, close } = await launch("/tests/scenarios/kit/shell-app.html", bound);
+      const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);
       const shell: Shell = {
         calls: world.calls,

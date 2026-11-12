@@ -9,7 +9,7 @@
 // through the env names its payload already reads. Outside that
 // sandbox it refuses; it never reaches for the person's display.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -189,9 +189,6 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
     async activeMatch() {
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
-    },
-    async windowBound(label = "main") {
-      return readFileSync(log, "utf8").includes(`[bridge] bind_window_state ${label} -> `);
     },
     async windows() {
       const labels = [...(await handles()).keys()];

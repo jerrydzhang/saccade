@@ -73,11 +73,6 @@ export interface AppDriver {
    * reads a data-port-find-active attribute on the match's part
    * (find-next.scenario.ts, the known defect). */
   activeMatch(): Promise<string | null>;
-  /** Whether a window has bound its window-store state (its o/i/w acts
-   * act only once it has). STOPGAP: the readout carries no binding
-   * fact, so the native driver reads the shell's own bind_window_state
-   * log line; the browser has no shell and answers true. */
-  windowBound(label?: string): Promise<boolean>;
   /** The labels of the live windows ("main" first). The browser has
    * exactly one. */
   windows(): Promise<string[]>;

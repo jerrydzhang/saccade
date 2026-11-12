@@ -64,11 +64,12 @@ export async function find(app: AppDriver, query: string): Promise<PortObservati
   return (await app.readout()).find;
 }
 
-/** Wait until this window has bound its window state: an elsewhere
- * act (o, i, w, a task row's Enter) pressed before that is dropped
- * (src/App.ts openElsewhere; the readout carries no binding fact). */
+/** Wait until this window has bound its window state (the readout's
+ * window.bound). The app's elsewhere acts wait for the binding
+ * themselves, within a bounded grace; a scenario does not lean on
+ * that grace, it waits on the fact before acting. */
 export async function whenBound(app: AppDriver): Promise<void> {
-  await expect.poll(() => app.windowBound(), { timeout: 15_000 }).toBe(true);
+  await expect.poll(async () => (await app.readout()).window.bound, { timeout: 15_000 }).toBe(true);
 }
 
 /** An act from a citation's act menu: the real right-click opens the
