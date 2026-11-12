@@ -20,13 +20,21 @@ export type SeededTracker = {
   tasks: { cited: string; citing: string; citingChild: string; landing: string };
 };
 
-/** Writes into the throwaway tracker, mid-scenario. */
-export interface TrackerWrites {
+/** One stored window state as the tracker's window store answers it
+ * (client/port/src/lib/windows.ts WindowState, the fields read here). */
+export type WindowStateView = { id: string; location: string | null; attachedHere: boolean; link: string | null };
+
+/** The throwaway tracker's door, mid-scenario (kit/tracker-wire.ts). */
+export interface TrackerDoor {
   createTask(name: string): Promise<string>;
   commit(task: string, board: string, message: string): Promise<{ revision: number }>;
+  /** A window state, seen from `device`. */
+  windowState(id: string, device: string): Promise<WindowStateView>;
+  /** Fixture: a window state born and attached on `device`. */
+  attachedWindow(id: string, device: string): Promise<void>;
 }
 
-export type Tracker = SeededTracker & TrackerWrites;
+export type Tracker = SeededTracker & TrackerDoor;
 
 declare module "vitest" {
   interface ProvidedContext {
@@ -52,6 +60,11 @@ export interface AppDriver {
   clickPart(part: string, options?: { button?: "left" | "right"; at?: "center" | "header" }): Promise<void>;
   /** Whether a port control is rendered now. */
   shows(control: string): Promise<boolean>;
+  /** The window strip's fields as rendered (location, status, link). */
+  strip(): Promise<{ location: string; status: string; link: string }>;
+  /** The select labels painted now (after s): each chip's text and
+   * the part it marks. */
+  labels(): Promise<{ label: string; part: string }[]>;
   /** Whether an act menu is open now. */
   menuOpen(): Promise<boolean>;
   /** The content part visibly marked as find's active match, or null.
@@ -59,6 +72,11 @@ export interface AppDriver {
    * reads a data-port-find-active attribute on the match's part
    * (find-next.scenario.ts, the known defect). */
   activeMatch(): Promise<string | null>;
+  /** Whether a window has bound its window-store state (its o/i/w acts
+   * act only once it has). STOPGAP: the readout carries no binding
+   * fact, so the native driver reads the shell's own bind_window_state
+   * log line; the browser has no shell and answers true. */
+  windowBound(label?: string): Promise<boolean>;
   /** The labels of the live windows ("main" first). The browser has
    * exactly one. */
   windows(): Promise<string[]>;

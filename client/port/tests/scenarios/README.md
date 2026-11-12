@@ -7,8 +7,8 @@ authoritative gate until scenarios cut over; nothing here replaces it yet.
 | project | what | command | runtime |
 | --- | --- | --- | --- |
 | unit | `tests/*.test.ts`, pure and component tests, in node | `just port-test` | about 1s |
-| browser | `tests/scenarios/*.scenario.ts` in headless WebKit | `just port-test-browser` | about 10s |
-| native | the scenarios tagged `native` or `multi-window`, in the built app | `just port-test-native` | blocked (below) |
+| browser | `tests/scenarios/*.scenario.ts` and `*.browser.ts` in headless WebKit | `just port-test-browser` | about 10s |
+| native | the scenarios tagged `native` or `multi-window`, in the built app, in the session sandbox | `just port-test-native` (gated, below) | about 8s in the sandbox |
 
 `just test` runs the unit and browser projects after the cargo suite, and the
 `port-unit` prek hook runs the unit project on every commit. One file or test
@@ -57,6 +57,9 @@ The rules:
   the file and line. When the fix lands the test "fails"; drop `fails` then.
 - If the readout lacks what a scenario needs, do not patch the app from
   here: record the missing field and skip or mark the test.
+- A browser-only scenario that needs the mocked shell is `<name>.browser.ts`
+  and imports `test` from `./kit/browser.ts` for its `bridged` fixture (see
+  `elsewhere.browser.ts`); the native project never collects those files.
 
 ## The kit
 
@@ -73,6 +76,17 @@ Every module is a test-infrastructure module; each line says why it exists.
   listeners do not detach.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.
+- `kit/shell-mock.ts` (with `shell-app.html`, `shell-entry.ts`,
+  `shell-install.ts`): the browser's mocked native shell. Tauri's official
+  `@tauri-apps/api/mocks` (mockIPC, mockWindows) answering each shell command
+  the port invokes, written from the Rust signature it cites. It models one
+  webview plus the shell's window registry as data and never routes between
+  pages; the entry page installs it inside the app's iframe before the port's
+  `main.ts` boots, since the mocks patch their own realm. Needed so the app's
+  half of multi-window (the link, the strip, the o/i/w decision, the shell
+  calls) runs in the browser.
+- `kit/tracker-wire.ts`: the fetch-only door into the running tracker
+  (commits, window-state reads), usable from both realms.
 - `kit/tracker.ts`, `kit/tracker-setup.ts`: the throwaway tracker, a real
   `sac serve` on a fresh temp db and repo on a free loopback port, seeded by
   `client/harness/t36_seeds.py` itself (one source for the seed boards until
@@ -91,16 +105,32 @@ carries; the tracker allows exactly the vitest server's origin.
 
 ## Native
 
-The native project is written but not yet runnable. The port app runs only
-inside the session lane's sandbox (`client/harness/entry.py session`, gated
-by `SAC_APP_RUNTIME_AUTHORIZED`), and that sandbox unshares the network, so
-a WebDriver client outside it cannot reach `tauri-driver` inside. The lane's
-payload today is its own socket server (`webdriver_session.py`). Running this
-project needs one ratified addition to the lane: a payload mode that runs the
-canary, starts the private Weston, and then runs
-`node_modules/.bin/vitest run -c port/vitest.config.ts --project native --tags-filter 'native || multi-window'`
-in `client/`, with `client/` bound, and `sac` and `git` on PATH for the
-tracker. The driver reads the lane's own env names (`TAURI_DRIVER_BIN`,
-`WEBKIT_DRIVER_BIN`, `APP_BIN`, `WAYLAND_DISPLAY`, `SAC_APP_SESSION_TOKEN`)
-and refuses before anything starts when they are absent. `tools/herdr-ui`
-hosts the Herdr app, not this one, so it is not the door here.
+The native project runs the scenarios tagged `native` or `multi-window` in
+the built port app, inside the session lane's enforced sandbox, through its
+suite mode (`client/harness/entry.py session suite`, payload
+`client/harness/suite_payload.py`): the containment canary, then the lane's
+own private Weston, then `vitest --project native` in the read-only bound
+`client/` tree. Each test's fixture (`kit/native.ts`) starts its own
+`tauri-driver` with fresh XDG dirs under the run root, so every test gets a
+fresh app: one window, no launch restore. WebdriverIO is the client, in
+classic WebDriver mode (WebKitWebDriver has no BiDi).
+
+```sh
+SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<the caller-side tracker db> just port-test-native
+```
+
+`SAC_APP_BIN` defaults to the nix-built port app (`.#saccade-app-port`; its
+sources include `port/tests`, so a scenario edit rebuilds it, about 2
+minutes); pass a built one to skip that. The run root is printed and kept:
+`logs/suite.log` (the vitest output), `logs/weston.log`, and per test
+`app-*/tauri-driver.log` (the app's own console and shell lines).
+
+Inside the sandbox there is no `/etc/hosts` (the config binds vite to
+`127.0.0.1`) and the client tree is read-only (the payload uses vitest's
+runner config loader and points vite's cache at the run root).
+
+Native holds real-window scenarios only: S18 (window birth, delivery landing
+in the other webview, the link). To add later: no focus steal on window birth
+(needs the compositor's focus fact), launch restore across a relaunch on the
+same data dir (S20: a fixture that relaunches on one XDG root), and an `i`
+delivery into an already-live receiver that has scrolled away.

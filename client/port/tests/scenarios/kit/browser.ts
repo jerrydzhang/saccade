@@ -5,15 +5,13 @@
 // here: the port starts empty and reaches the tracker through the
 // host a typed location carries.
 import { expect, test as base, inject } from "vitest";
-import { commands, locators, page, userEvent, type Locator } from "vitest/browser";
+import { locators, page, userEvent, type Locator } from "vitest/browser";
 
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
+import { SHELL_WORLD_KEY, type ShellCall, type ShellWindow, type ShellWorld } from "./shell-mock.ts";
+import { trackerDoor } from "./tracker-wire.ts";
 
 declare module "vitest/browser" {
-  interface BrowserCommands {
-    trackerCommit(task: string, board: string, message: string): Promise<{ revision: number }>;
-    trackerCreateTask(name: string): Promise<string>;
-  }
   interface LocatorSelectors {
     getByPart(part: string): Locator;
   }
@@ -40,9 +38,9 @@ function keySyntax(key: string): string {
   return key;
 }
 
-async function launch(): Promise<{ app: AppDriver; close: () => void }> {
+async function launch(src: string): Promise<{ app: AppDriver; close: () => void }> {
   const frame = document.createElement("iframe");
-  frame.src = "/index.html";
+  frame.src = src;
   frame.setAttribute("data-port-suite", "app");
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0";
   document.body.append(frame);
@@ -83,9 +81,23 @@ async function launch(): Promise<{ app: AppDriver; close: () => void }> {
     async menuOpen() {
       return portWindow().document.querySelector("[data-port-menu]") !== null;
     },
+    async labels() {
+      return [...portWindow().document.querySelectorAll("[data-port-label]")].map((element) => ({
+        label: element.getAttribute("data-port-label") ?? "",
+        part: element.getAttribute("data-port-part") ?? "",
+      }));
+    },
+    async strip() {
+      const field = (name: string): string =>
+        portWindow().document.querySelector(`[data-port-strip=${JSON.stringify(name)}]`)?.textContent?.trim() ?? "";
+      return { location: field("location"), status: field("status"), link: field("link") };
+    },
     async activeMatch() {
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+    },
+    async windowBound() {
+      return true;
     },
     async windows() {
       return ["main"];
@@ -97,20 +109,73 @@ async function launch(): Promise<{ app: AppDriver; close: () => void }> {
   return { app, close: () => frame.remove() };
 }
 
-export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
+/** The mocked native shell a bridged app runs against (kit/shell-mock.ts). */
+export type Shell = {
+  /** Every shell command the app invoked, in order. */
+  calls: ShellCall[];
+  /** The calls of one command, their arguments in order. */
+  argsOf(cmd: string): Record<string, unknown>[];
+  /** The shell's live windows, this one first. */
+  windows(): ShellWindow[];
+  /** A window closes: the shell stops listing it. */
+  close(label: string): void;
+  /** This app's device id on the window store. */
+  device: string;
+};
+
+export type BridgedOptions = {
+  /** Other live windows besides "main": each is born and attached on
+   * this device's window store, the way its own boot would do it. */
+  others?: string[];
+};
+
+export const test = base.extend<{
+  app: AppDriver;
+  tracker: Tracker;
+  bridged: (options?: BridgedOptions) => Promise<{ app: AppDriver; shell: Shell }>;
+}>({
   // eslint-disable-next-line no-empty-pattern
   app: async ({}, use) => {
-    const { app, close } = await launch();
+    const { app, close } = await launch("/index.html");
     await use(app);
     close();
   },
   // eslint-disable-next-line no-empty-pattern
   tracker: async ({}, use) => {
-    await use({
-      ...inject("tracker"),
-      createTask: (name) => commands.trackerCreateTask(name),
-      commit: (task, board, message) => commands.trackerCommit(task, board, message),
+    const seeded = inject("tracker");
+    await use({ ...seeded, ...trackerDoor(seeded.base) });
+  },
+  // the app with a mocked shell: one webview labelled main, a fresh
+  // device id, and the other windows the scenario names
+  bridged: async ({ tracker }, use) => {
+    const closers: (() => void)[] = [];
+    await use(async (options = {}) => {
+      const device = `suite-device-${crypto.randomUUID()}`;
+      // the app's device id (client/port/src/lib/windows.ts DEVICE_KEY),
+      // fresh per test so no window state crosses tests
+      localStorage.setItem("saccade.device.id", device);
+      const windows: ShellWindow[] = [{ label: "main" }];
+      for (const label of options.others ?? []) {
+        const stateId = `suite-state-${crypto.randomUUID()}`;
+        await tracker.attachedWindow(stateId, device);
+        windows.push({ label, stateId });
+      }
+      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [] };
+      (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
+      const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
+      closers.push(close);
+      const shell: Shell = {
+        calls: world.calls,
+        argsOf: (cmd) => world.calls.filter((call) => call.cmd === cmd).map((call) => call.args),
+        windows: () => world.windows.map((entry) => ({ ...entry })),
+        close: (label) => {
+          world.windows = world.windows.filter((entry) => entry.label !== label);
+        },
+        device,
+      };
+      return { app, shell };
     });
+    for (const close of closers) close();
   },
 });
 

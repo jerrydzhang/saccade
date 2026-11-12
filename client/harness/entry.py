@@ -55,7 +55,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     # the read-only herdr-core client is a pure crate: its contract
@@ -78,6 +78,9 @@ SESSION_CHECKS_TIMEOUT_SECONDS = 300
 # the tracker sequence's whole bound: server start, seed, the UI walk,
 # the bounded-refusal wait, teardown
 SESSION_TRACKER_TIMEOUT_SECONDS = 300
+# the suite mode's whole bound: weston, then the port suite's native
+# project (one fresh app chain per test), teardown
+SESSION_SUITE_TIMEOUT_SECONDS = 960
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
@@ -91,6 +94,10 @@ DIST_SANDBOX = "/app/dist"
 NATIVE_LANE_SANDBOX_PATH = "/lane/native_lane.py"
 SESSION_PAYLOAD_SANDBOX_PATH = "/lane/webdriver_session.py"
 SESSION_CLIENT_SANDBOX_PATH = "/lane/webdriver_client.py"
+# the suite mode: its payload beside the session modules, and the client
+# tree (node_modules, the port, the scenarios, the seed module) read-only
+SUITE_PAYLOAD_SANDBOX_PATH = "/lane/suite_payload.py"
+SUITE_CLIENT_SANDBOX_PATH = "/suite/client"
 REMOTE_LANE_SANDBOX_PATH = "/lane/remote_lane.py"
 VIA_PROGRAM_SANDBOX_PATH = "/pin/via_b.py"
 REMOTE_TIMEOUT_SECONDS = 180
@@ -1500,6 +1507,70 @@ def session_tracker(board_arg: str, tracker_db_candidate: str) -> int:
             print(f"[webdriver] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
+    """Gated. One bounded sandbox run of the port suite's native project
+    (client/port/tests/scenarios/README.md, native): the session lane's
+    resolution, env and binds unchanged, plus the suite payload, the
+    client tree read-only and the pinned node. The payload runs the
+    canary, starts the private Weston, then vitest; each test owns its
+    tauri-driver chain. The supervisor stop is the backstop."""
+    isolation_gate("webdriver")
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    resolved = session_resolved(board_arg, tracker_db_candidate, require_serve_bin=True)
+    if resolved is None:
+        return 1
+    found_node = shutil.which("node")
+    if found_node is None:
+        print("containment refusal: node is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    node = str(pathlib.Path(found_node).resolve())
+    if not node.startswith("/nix/store/"):
+        print(f"containment refusal: node must be a pinned store binary: {node}", file=sys.stderr)
+        return 1
+    if not (VIEWER / "node_modules" / "vitest").is_dir():
+        print("containment refusal: client/node_modules lacks vitest; run npm ci in client", file=sys.stderr)
+        return 1
+
+    import uuid
+
+    run_root = isolation.make_run_root("session-suite")
+    token = uuid.uuid4().hex
+    env = session_env(resolved, run_root, token, SESSION_DEFAULT_LIFETIME_SECONDS)
+    env["SESSION_MODE"] = "suite"
+    env["SUITE_NODE_BIN"] = node
+    env["SUITE_CLIENT_DIR"] = SUITE_CLIENT_SANDBOX_PATH
+    binds = session_binds(resolved) + [
+        (str((HERE / "suite_payload.py").resolve()), SUITE_PAYLOAD_SANDBOX_PATH),
+        (str(VIEWER.resolve()), SUITE_CLIENT_SANDBOX_PATH),
+    ]
+    cmd = isolation.build_command(resolved["bwrap"], run_root, [resolved["python"], SUITE_PAYLOAD_SANDBOX_PATH], binds)
+    print("[suite] gate command:", " ".join(cmd), flush=True)
+    print(f"[suite] run root: {run_root}", flush=True)
+    supervisor = isolation.PidfdSupervisor(cmd, env)
+    started = time.monotonic()
+    try:
+        supervisor.start()
+        try:
+            code = supervisor.wait(timeout=SESSION_SUITE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print("[suite] the suite run exceeded its bound; stopping via pidfd", file=sys.stderr)
+            supervisor.stop()
+            code = None
+        output = supervisor.read_output()
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        print(f"[suite] done in {time.monotonic() - started:.1f}s; payload exit={code}", flush=True)
+        return 0 if code == 0 else 1
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+    finally:
+        code = supervisor.stop()
+        if code != 0 and code is not None:
+            print(f"[suite] supervisor exit after cleanup: {code}", file=sys.stderr)
+
+
 def session_down() -> int:
     """Gated. Graceful first: the down request makes the payload tear
     its chain down in owned order and exit, the sandbox empties, the
@@ -2110,6 +2181,8 @@ def session_main(rest: list[str], board_arg: str) -> int:
         return session_checks(board_arg, tracker_db_arg, options["query"], lifetime)
     if verb == "tracker":
         return session_tracker(board_arg, tracker_db_arg)
+    if verb == "suite":
+        return session_suite(board_arg, tracker_db_arg)
     if verb == "inspect":
         return session_command({"cmd": "inspect"})
     if verb == "shot":

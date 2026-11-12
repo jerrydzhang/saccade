@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig } from "vitest/config";
 import { playwright } from "@vitest/browser-playwright";
 import viteConfig from "./vite.config.ts";
-import { freePort, setupTrackerWrites } from "./tests/scenarios/kit/tracker.ts";
+import { freePort } from "./tests/scenarios/kit/tracker.ts";
 
 const here = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
 
@@ -55,6 +55,12 @@ function webkitEnv(): Record<string, string> {
 export default mergeConfig(
   viteConfig,
   defineConfig({
+    // the loopback literal, never the name: the session lane's sandbox
+    // has no /etc/hosts, so "localhost" does not resolve there
+    server: { host: "127.0.0.1" },
+    // the lane's suite mode binds the client tree read-only and names a
+    // cache under its run root (client/harness/suite_payload.py)
+    ...(process.env.SUITE_CACHE_DIR ? { cacheDir: process.env.SUITE_CACHE_DIR } : {}),
     test: {
       projects: [
         {
@@ -75,7 +81,8 @@ export default mergeConfig(
           },
           test: {
             name: "browser",
-            include: ["tests/scenarios/*.scenario.ts"],
+            // *.browser.ts: browser-only scenarios (the mocked shell)
+            include: ["tests/scenarios/*.scenario.ts", "tests/scenarios/*.browser.ts"],
             tags: [tags[0]!, { ...tags[1]!, skip: true }],
             globalSetup: ["tests/scenarios/kit/tracker-setup.ts"],
             testTimeout: 30_000,
@@ -88,7 +95,6 @@ export default mergeConfig(
               viewport: { width: 1100, height: 800 },
               // the port's controls carry data-port-control ids
               locators: { testIdAttribute: "data-port-control" },
-              commands: { trackerCommit, trackerCreateTask },
             },
           },
         },
@@ -111,20 +117,3 @@ export default mergeConfig(
     },
   }),
 );
-
-// the browser's write door into the throwaway tracker: browser-mode
-// code cannot reach node, so a mid-scenario commit rides a vitest
-// browser command (it runs in the vitest process, where the tracker
-// setup lives)
-async function trackerCommit(
-  _context: unknown,
-  task: string,
-  board: string,
-  message: string,
-): Promise<{ revision: number }> {
-  return setupTrackerWrites().commit(task, board, message);
-}
-
-async function trackerCreateTask(_context: unknown, name: string): Promise<string> {
-  return setupTrackerWrites().createTask(name);
-}

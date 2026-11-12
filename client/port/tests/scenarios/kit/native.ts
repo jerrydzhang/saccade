@@ -9,7 +9,7 @@
 // through the env names its payload already reads. Outside that
 // sandbox it refuses; it never reaches for the person's display.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, openSync } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,25 +17,9 @@ import { expect, test as base, inject } from "vitest";
 import { Key, remote } from "webdriverio";
 
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
-import { freePort, trackerWrites } from "./tracker.ts";
-
-// the session lane's own env names (client/harness/entry.py
-// session_env); WAYLAND_DISPLAY names the lane's private compositor
-const REQUIRED = ["TAURI_DRIVER_BIN", "WEBKIT_DRIVER_BIN", "APP_BIN", "WAYLAND_DISPLAY", "SAC_APP_SESSION_TOKEN"] as const;
-type Pinned = Record<(typeof REQUIRED)[number], string>;
-
-/** Refuse outside the session lane's sandbox, naming what is missing
- * (the setup calls it before any tracker starts). */
-export function pinned(): Pinned {
-  const missing = REQUIRED.filter((name) => !process.env[name]);
-  if (missing.length > 0) {
-    throw new Error(
-      `the native project runs only inside the session lane's sandbox (missing ${missing.join(", ")});`
-        + " see tests/scenarios/README.md, native",
-    );
-  }
-  return Object.fromEntries(REQUIRED.map((name) => [name, process.env[name]!])) as Pinned;
-}
+import { freePort } from "./tracker.ts";
+import { pinned } from "./native-env.ts";
+import { trackerDoor } from "./tracker-wire.ts";
 
 const NAMED: Record<string, string> = {
   Escape: Key.Escape,
@@ -122,6 +106,8 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       capabilities: {
         browserName: "wry",
         "tauri:options": { application: env.APP_BIN, args: [] },
+        // WebKitWebDriver speaks classic WebDriver only: no BiDi socket
+        "wdio:enforceWebDriverClassic": true,
       } as WebdriverIO.Capabilities,
     });
   } catch (error) {
@@ -183,9 +169,26 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
     async menuOpen() {
       return browser.$("[data-port-menu]").isExisting();
     },
+    async labels() {
+      return browser.execute(() =>
+        [...document.querySelectorAll("[data-port-label]")].map((element) => ({
+          label: element.getAttribute("data-port-label") ?? "",
+          part: element.getAttribute("data-port-part") ?? "",
+        })));
+    },
+    async strip() {
+      const field = async (name: string): Promise<string> => {
+        const element = browser.$(`[data-port-strip=${JSON.stringify(name)}]`);
+        return (await element.isExisting()) ? (await element.getText()).trim() : "";
+      };
+      return { location: await field("location"), status: await field("status"), link: await field("link") };
+    },
     async activeMatch() {
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
+    },
+    async windowBound(label = "main") {
+      return readFileSync(log, "utf8").includes(`[bridge] bind_window_state ${label} -> `);
     },
     async windows() {
       const labels = [...(await handles()).keys()];
@@ -233,7 +236,7 @@ export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
   // eslint-disable-next-line no-empty-pattern
   tracker: async ({}, use) => {
     const seeded = inject("tracker");
-    await use({ ...seeded, ...trackerWrites(seeded.base) });
+    await use({ ...seeded, ...trackerDoor(seeded.base) });
   },
 });
 

@@ -24,13 +24,16 @@ port-test-browser *args:
     cargo build -q -p saccade --bin sac
     nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' port-test-browser {{args}}
 
-# native: the scenarios tagged native or multi-window, against the
-# built port app through tauri-driver and WebdriverIO. It runs only
-# inside the session lane's sandbox and refuses elsewhere; the lane
-# has no payload mode that runs it yet (client/port/tests/scenarios/
-# README.md, native)
-port-test-native *args:
-    cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project native --tags-filter 'native || multi-window' {{args}}
+# native: the scenarios tagged native or multi-window, in the built
+# port app, through the session lane's suite mode (entry.py session
+# suite: the enforced sandbox, the canary, a private Weston, then
+# vitest's native project). Gated like every lane that spawns: the
+# caller passes SAC_APP_RUNTIME_AUTHORIZED and SACCADE_DB (the
+# caller-side tracker db the canary proves invisible); SAC_APP_BIN
+# defaults to the nix-built port app.
+port-test-native:
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app-port)/bin/saccade-app-port}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite'
 
 typecheck:
     tracker/native/typecheck.sh

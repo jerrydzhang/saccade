@@ -12,15 +12,10 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { SeededTracker, TrackerWrites } from "./driver.ts";
+import type { SeededTracker } from "./driver.ts";
 
 const HARNESS = fileURLToPath(new URL("../../../../harness", import.meta.url));
 const REPO_NAME = "seedtracker";
-const CONTEXT = { actor: "port-suite", tier: "agent", scope: null };
-const CLIENT = "port-suite";
-// the env var the setup publishes the base on, so the vitest browser
-// commands (same process, separately loaded module) reach the tracker
-const BASE_VAR = "SAC_PORT_SUITE_TRACKER_BASE";
 
 export type RunningTracker = { tracker: SeededTracker; root: string; stop: () => Promise<void> };
 
@@ -87,7 +82,6 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   try {
     await waitUp(base, child, log);
     const tasks = seed(base);
-    process.env[BASE_VAR] = base;
     console.log(`[port-suite] seeded tracker ${base} (run root ${root})`);
     return { tracker: { base, host: `127.0.0.1:${port}`, repo: REPO_NAME, tasks }, root, stop };
   } catch (error) {
@@ -121,49 +115,4 @@ function seed(base: string): SeededTracker["tasks"] {
     citingChild: by("the other group child"),
     landing: by("landing board, text only"),
   };
-}
-
-/** The write door into a running throwaway tracker at `base`. */
-export function trackerWrites(base: string): TrackerWrites {
-  const post = async (route: string, payload: unknown): Promise<Record<string, unknown>> => {
-    const reply = await fetch(`${base}${route}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const body = (await reply.json()) as Record<string, unknown>;
-    if (!reply.ok) throw new Error(`${route} answered ${reply.status}: ${JSON.stringify(body).slice(0, 300)}`);
-    return body;
-  };
-  return {
-    // a fresh task; answers its t-N id
-    async createTask(name) {
-      const reply = await post("/api/v1/command", {
-        context: CONTEXT,
-        command: { create_task: { name } },
-        at: null,
-        client: CLIENT,
-      });
-      return String(reply.id);
-    },
-    // a board.yaml revision on a task; answers the revision
-    async commit(task, board, message) {
-      const reply = await post("/api/v1/boards/commit", {
-        context: CONTEXT,
-        task: Number(task.replace(/^t-/, "")),
-        files: { files: [{ path: "board.yaml", content: Buffer.from(board, "utf8").toString("base64") }] },
-        message,
-        client: CLIENT,
-      });
-      return { revision: Number(reply.revision) };
-    },
-  };
-}
-
-/** The writes for the tracker this process's globalSetup started (the
- * vitest browser commands run here). */
-export function setupTrackerWrites(): TrackerWrites {
-  const base = process.env[BASE_VAR];
-  if (!base) throw new Error("the throwaway tracker is not up (globalSetup did not run)");
-  return trackerWrites(base);
 }
