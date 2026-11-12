@@ -296,6 +296,45 @@ body {
   background: var(--port-color-selection);
 }
 
+/* The which-key popup: the pending prefix's continuations (and the
+ * help variant). Placement: anchored bottom-center like the
+ * prototype's leader; form open per the floor's law. */
+.port-whichkey {
+  position: absolute;
+  left: 50%;
+  bottom: 2.5rem;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.25rem;
+  border: 1px solid var(--port-color-line);
+  border-radius: var(--port-radius);
+  background: var(--port-world-background);
+  color: var(--port-world-foreground);
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+}
+
+.port-whichkey-title {
+  color: var(--port-color-muted);
+}
+
+.port-whichkey-row {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0.5rem;
+}
+
+.port-whichkey-key {
+  color: var(--port-color-accent);
+}
+
+.port-whichkey-label {
+  color: var(--port-color-muted);
+}
+
 .port-find-indicator {
   padding: 0.125rem 0.5rem;
   font-family: var(--port-font-mono);

@@ -11,6 +11,7 @@ from the registry's reviewed erasure boundary. -->
   import type { BufferState } from "./lib/contracts/buffer.ts";
   import type { PickerState } from "./lib/input/picker.ts";
   import Picker from "./components/Picker.svelte";
+  import WhichKey from "./components/WhichKey.svelte";
 
   let port: PortWindow | null = null;
   let scroller: HTMLElement | null = $state(null);
@@ -23,6 +24,8 @@ from the registry's reviewed erasure boundary. -->
     specOf: (id: string) => id,
     openHere: null as string | null,
   });
+  let whichKeyView = $state<unknown>(null);
+  let helpView = $state<unknown>(null);
   let ask = $state<import("./lib/elsewhere.ts").AskState | null>(null);
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
@@ -43,6 +46,10 @@ from the registry's reviewed erasure boundary. -->
     const offPickerContext = windowPort.subscribePickerContext((context) => {
       pickerContext = context;
     });
+    const offWhichKey = windowPort.subscribeWhichKey((pending, help) => {
+      whichKeyView = pending;
+      helpView = help ? windowPort.helpView() : null;
+    });
     const offAsk = windowPort.subscribeAsk((state) => {
       ask = state;
       if (state !== null) askValue = "";
@@ -56,6 +63,7 @@ from the registry's reviewed erasure boundary. -->
       offStrip();
       offPicker();
       offPickerContext();
+      offWhichKey();
       offAsk();
       offInspection();
       windowPort.destroy();
@@ -126,6 +134,12 @@ from the registry's reviewed erasure boundary. -->
         }}
       />
     </div>
+  {/if}
+  {#if whichKeyView !== null}
+    <WhichKey view={whichKeyView} title="keys" />
+  {/if}
+  {#if helpView !== null}
+    <WhichKey view={helpView} title="all keys" />
   {/if}
   {#if picker.open}
     <Picker

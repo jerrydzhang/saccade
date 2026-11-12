@@ -32,18 +32,44 @@ export interface HostMatcher {
   // A handoff drops pending state without firing.
   reset(): void;
   dispose(): void;
+  /** The matcher's which-key views (the r110 ruling), pass-through:
+   * the pending prefix's continuations and the empty-prefix help
+   * view, from this host's own context's declared commands. */
+  pendingView(): import("./key-matcher.ts").WhichKeyView | null;
+  allView(): import("./key-matcher.ts").WhichKeyView;
+  pendingSince(): number | null;
+  /** Notified whenever the pending state may have changed (a stroke,
+   * a drain, a reset) - the popup's reactive source. */
+  subscribePending(observer: () => void): () => void;
 }
 
 export function createHostMatcher(
   context: InputContext,
-  options: Readonly<{ scheduler?: HostScheduler }> = {},
+  options: Readonly<{
+    scheduler?: HostScheduler;
+    /** The which-key timeout suspension (the r110 tunable, nvim's
+     * default): while true, an open popup freezes the sequence
+     * expiry clock - the drain re-arms instead of firing. */
+    expirySuspended?: () => boolean;
+  }> = {},
 ): HostMatcher {
   const scheduler = options.scheduler ?? domScheduler;
   const matcher: ContextMatcherWithTimeout = createMatcher(context);
   let timer: number | null = null;
+  const pendingObservers = new Set<() => void>();
+  const notifyPending = (): void => {
+    for (const observer of [...pendingObservers]) observer();
+  };
 
   function drain(): void {
     timer = null;
+    if (options.expirySuspended !== undefined && options.expirySuspended()) {
+      // the popup holds the sequence: freeze the clock (the pending
+      // restarts its window) and re-arm
+      matcher.freezePending();
+      timer = scheduler.schedule(SEQUENCE_TIMEOUT_MS, drain);
+      return;
+    }
     for (const resolution of matcher.expire()) {
       // Invoke resolutions run; consume/native-editing resolutions
       // from the drain carry no further action (the keys were already
@@ -52,6 +78,7 @@ export function createHostMatcher(
         void resolution.action.run();
       }
     }
+    notifyPending();
   }
 
   function clearTimer(): void {
@@ -67,6 +94,9 @@ export function createHostMatcher(
       if (resolution.kind === "prefix") {
         clearTimer();
         timer = scheduler.schedule(SEQUENCE_TIMEOUT_MS, drain);
+        notifyPending();
+      } else {
+        notifyPending();
       }
       return resolution;
     },
@@ -83,6 +113,16 @@ export function createHostMatcher(
     reset(): void {
       clearTimer();
       matcher.reset();
+      notifyPending();
+    },
+    pendingView: () => matcher.pendingView(),
+    allView: () => matcher.allView(),
+    pendingSince: () => matcher.pendingSince(),
+    subscribePending(observer: () => void): () => void {
+      pendingObservers.add(observer);
+      return () => {
+        pendingObservers.delete(observer);
+      };
     },
     dispose(): void {
       clearTimer();

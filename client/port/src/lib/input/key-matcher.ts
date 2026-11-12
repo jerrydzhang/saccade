@@ -106,6 +106,53 @@ export interface ContextMatcherWithTimeout extends ContextMatcher {
   // The host schedules the check (the timer is presentation-side);
   // this method carries the semantics.
   expire(now?: number): KeyResolution[];
+  /** The which-key view (the r110 ruling, generalized): the pending
+   * prefix and the continuations the ACTIVE context's own declared
+   * commands offer for it - each row names the NEXT stroke and the
+   * action it would run. Null when nothing is pending. The popup's
+   * delay and its timeout suspension are the caller's tunables. */
+  pendingView(): WhichKeyView | null;
+  /** The same view over the EMPTY prefix: every declared sequence's
+   * first stroke - the help surface (a deliberate difference from
+   * the prototype's hand-curated list, recorded t-36 r125). */
+  allView(): WhichKeyView;
+  /** When the current pending began (the popup delay's clock), or
+   * null when nothing is pending. */
+  pendingSince(): number | null;
+  /** Restart the pending's expiry window (the popup's suspension
+   * tunable): the frozen clock resumes from now. */
+  freezePending(): void;
+}
+
+export type WhichKeyView = Readonly<{
+  prefix: readonly KeyInput[];
+  completions: readonly { key: string; label: string }[];
+}>;
+
+function keyLabel(pattern: StrokePattern): string {
+  const parts: string[] = [];
+  if (pattern.ctrl) parts.push("Ctrl");
+  if (pattern.alt) parts.push("Alt");
+  if (pattern.meta) parts.push("Meta");
+  if (pattern.shift && pattern.key.length === 1) parts.push("Shift");
+  parts.push(pattern.key.length === 1 ? pattern.key.toUpperCase() : pattern.key);
+  return parts.join("-");
+}
+
+function completionsFor(
+  declared: readonly Declared[],
+  strokes: readonly KeyInput[],
+): readonly { key: string; label: string }[] {
+  const rows = new Map<string, { key: string; label: string }>();
+  for (const candidate of declared) {
+    if (!prefixMatches(candidate, strokes)) continue;
+    if (candidate.sequence.length <= strokes.length) continue;
+    const next = candidate.sequence[strokes.length];
+    if (next === undefined) continue;
+    const key = keyLabel(next);
+    if (!rows.has(key)) rows.set(key, { key, label: candidate.action.label });
+  }
+  return [...rows.values()];
 }
 
 export function createMatcher(context: InputContext, options: MatcherOptions = {}): ContextMatcherWithTimeout {
@@ -157,6 +204,25 @@ export function createMatcher(context: InputContext, options: MatcherOptions = {
       }
       // Unrelated to the pending sequence: resolved on its own.
       return resolveFresh(stroke);
+    },
+
+    pendingView(): WhichKeyView | null {
+      if (pending.length === 0) return null;
+      return { prefix: [...pending], completions: completionsFor(declaredOf(context), pending) };
+    },
+
+    allView(): WhichKeyView {
+      return { prefix: [], completions: completionsFor(declaredOf(context), []) };
+    },
+
+    pendingSince(): number | null {
+      return pending.length > 0 ? pendingAt : null;
+    },
+
+    freezePending(): void {
+      // the which-key suspension tunable: an open popup restarts the
+      // expiry window (nvim's frozen clock)
+      if (pending.length > 0) pendingAt = now();
     },
 
     expire(nowMs?: number): KeyResolution[] {
