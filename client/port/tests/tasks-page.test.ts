@@ -4,6 +4,8 @@
 // page leaves the dataset).
 
 import assert from "node:assert/strict";
+
+import { ageOf } from "../src/lib/tasks/page.ts";
 import test from "node:test";
 import type { ViewPage } from "../src/lib/pages.ts";
 import {
@@ -120,4 +122,17 @@ test("a page without tables answers an empty model, never an error", () => {
   });
   assert.deepEqual(model.groups, []);
   assert.deepEqual(tasksTargetsOf(model), []);
+});
+
+// -- the age column (F4): the prototype's ago rules ------------------
+
+test("ageOf renders minutes, hours and days from the activity moment", () => {
+  const now = 1_700_000_000_000;
+  assert.equal(ageOf(null, now), "", "no moment carries no age");
+  assert.equal(ageOf(now - 5 * 60_000, now), "5m");
+  assert.equal(ageOf(now - 59 * 60_000, now), "59m");
+  assert.equal(ageOf(now - 2 * 3_600_000, now), "2h");
+  assert.equal(ageOf(now - 47 * 3_600_000, now), "47h");
+  assert.equal(ageOf(now - 3 * 86_400_000, now), "3d");
+  assert.equal(ageOf(now + 60_000, now), "0m", "the future clamps to now");
 });

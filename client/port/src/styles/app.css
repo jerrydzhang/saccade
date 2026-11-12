@@ -124,9 +124,38 @@ body {
 }
 
 /* the tasks stage: the label overlay's positioning context, exactly
- * the host's box (content styling arrives with F4's ledger rows) */
+ * the host's box */
 .port-tasks-stage {
   position: relative;
+}
+
+/* F4 as information: the five-column grid (tid, title, agents,
+ * latest commit, age). The sparklane's future column rides UNDER a
+ * row, never a sixth column - the grid leaves it alone. */
+.port-tasks-columns,
+.port-tasks-row {
+  display: grid;
+  grid-template-columns: 3em 1.4fr 7em 1fr 3em;
+  gap: 0.5rem;
+  padding: 0.125rem 0.5rem;
+}
+
+.port-tasks-columns {
+  color: var(--port-color-muted);
+}
+
+.port-tasks-row:hover {
+  background: var(--port-color-hover);
+}
+
+.port-tasks-none {
+  padding: 0.125rem 0.5rem;
+  color: var(--port-color-muted);
+}
+
+.port-tasks-age {
+  text-align: right;
+  color: var(--port-color-muted);
 }
 
 .port-label-chip {

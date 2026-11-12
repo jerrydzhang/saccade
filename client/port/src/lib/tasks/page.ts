@@ -75,6 +75,17 @@ function rowsOf(table: TablePart, tablePath: string): TaskRow[] {
   return out;
 }
 
+/** The row's age (the prototype's ago, inst16 :116): minutes under
+ * an hour, hours under two days, else days - from the row's latest
+ * activity moment; null when the row carries none. */
+export function ageOf(at: number | null, now: number): string {
+  if (at === null) return "";
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / (24 * 60))}d`;
+}
+
 /** The tasks page's model: every group's every table's rows, with
  * their canonical part paths. A page with no content answers an empty
  * model - never an error. */

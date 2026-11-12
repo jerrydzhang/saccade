@@ -11,6 +11,7 @@ return anchor's identity), data-port-open names the row's link. -->
   import type { MenuView, SelectSessionView } from "./tasks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
 import { menuPlacement } from "../lib/menu/geometry.ts";
+import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
@@ -69,7 +70,8 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     );
   }
 
-  let menuElement: HTMLElement | null = null;
+  const now = $state(Date.now());
+let menuElement: HTMLElement | null = null;
   let menuAt = $state({ x: 4, y: 4 });
 
   $effect(() => {
@@ -128,27 +130,31 @@ a11y click advisories do not apply. -->
         {#if group.title !== ""}
           <h2 class="port-tasks-title">{group.title}</h2>
         {/if}
-        {#each group.rows as row, rowIndex (row.part)}
-          {#if rowIndex === 0}
-            <div class="port-tasks-columns" aria-hidden="true">
-              <span>task</span><span>title</span><span>agents</span><span>latest commit</span><span>latest revision</span>
-            </div>
+        {#if group.rows.length === 0}
+          {#if group.title !== ""}
+            <div class="port-tasks-none">none</div>
           {/if}
-          <div
-            class="port-tasks-row"
-            data-port-part={row.part}
-            data-port-kind="task"
-            data-port-task={row.task}
-            data-port-open={row.location}
-            data-port-title={row.title}
-          >
-            <span class="port-tasks-id">{row.task}</span>
-            <span class="port-tasks-title">{row.title}</span>
-            <span class="port-tasks-agents">{row.agents}</span>
-            <span class="port-tasks-commit">{row.commit}</span>
-            <span class="port-tasks-revision">{row.revision}</span>
+        {:else}
+          <div class="port-tasks-columns" aria-hidden="true">
+            <span>task</span><span>title</span><span>agents</span><span>latest commit</span><span>age</span>
           </div>
-        {/each}
+          {#each group.rows as row (row.part)}
+            <div
+              class="port-tasks-row"
+              data-port-part={row.part}
+              data-port-kind="task"
+              data-port-task={row.task}
+              data-port-open={row.location}
+              data-port-title={row.title}
+            >
+              <span class="port-tasks-id">{row.task}</span>
+              <span class="port-tasks-title">{row.title}</span>
+              <span class="port-tasks-agents">{row.agents}</span>
+              <span class="port-tasks-commit">{row.commit}</span>
+              <span class="port-tasks-age">{ageOf(row.at, now)}</span>
+            </div>
+          {/each}
+        {/if}
       </section>
     {/each}
   {/if}
