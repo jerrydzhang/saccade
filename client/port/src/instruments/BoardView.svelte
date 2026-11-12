@@ -8,6 +8,7 @@ at the generation boundary. -->
 <script lang="ts">
   import { hydrate } from "../lib/board/hydrate.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
+import { menuPlacement } from "../lib/menu/geometry.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
   import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
@@ -92,6 +93,38 @@ import LabelOverlay from "../components/LabelOverlay.svelte";
     return part === null ? null : part;
   }
 
+  let menuElement: HTMLElement | null = null;
+  let menuAt = $state({ x: 4, y: 4 });
+
+  $effect(() => {
+    if (menu === null) return;
+    const element = menuElement;
+    const stageElement = host?.parentElement ?? null;
+    if (element === null || stageElement === null) return;
+    const stageBox = stageElement.getBoundingClientRect();
+    const menuBox = element.getBoundingClientRect();
+    const targetElement =
+      menu.part !== null
+        ? host.querySelector(`[data-port-part=${JSON.stringify(menu.part)}]`)
+        : null;
+    const targetBox =
+      targetElement instanceof HTMLElement ? targetElement.getBoundingClientRect() : null;
+    menuAt = menuPlacement({
+      at: menu.at !== null
+        ? { x: menu.at.x - stageBox.left, y: menu.at.y - stageBox.top }
+        : null,
+      target: targetBox !== null
+        ? {
+            left: targetBox.left - stageBox.left,
+            top: targetBox.top - stageBox.top,
+            bottom: targetBox.bottom - stageBox.top,
+          }
+        : null,
+      menu: { width: menuBox.width, height: menuBox.height },
+      viewport: { width: stageBox.width, height: window.innerHeight },
+    });
+  });
+
   function chipBox(part: string): { left: number; top: number } | null {
     const element = host;
     if (element === null) return null;
@@ -154,9 +187,13 @@ import LabelOverlay from "../components/LabelOverlay.svelte";
   {#if select !== null}
     <LabelOverlay chips={select.labels} measure={chipBox} />
   {/if}
-</div>
   {#if menu !== null}
-    <div class="port-menu" data-port-menu="">
+    <div
+      class="port-menu"
+      data-port-menu=""
+      bind:this={menuElement}
+      style="left: {menuAt.x}px; top: {menuAt.y}px"
+    >
       <div class="port-menu-label">{menu.label}</div>
       {#each menu.acts as act, index (act.key)}
         <button
@@ -169,3 +206,4 @@ import LabelOverlay from "../components/LabelOverlay.svelte";
       {/each}
     </div>
   {/if}
+</div>

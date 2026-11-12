@@ -624,7 +624,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       open: true,
       label: target.label,
       acts: acts.map((act) => ({ key: act.key, label: act.action.label })),
-      at: null,
+      at: boardMenu.session.at(),
+      part: target.part,
     };
   }
   function notifyMenu(): void {

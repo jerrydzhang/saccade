@@ -10,6 +10,7 @@ return anchor's identity), data-port-open names the row's link. -->
 <script lang="ts">
   import type { MenuView, SelectSessionView } from "./tasks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
+import { menuPlacement } from "../lib/menu/geometry.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
@@ -68,6 +69,38 @@ import LabelOverlay from "../components/LabelOverlay.svelte";
     );
   }
 
+  let menuElement: HTMLElement | null = null;
+  let menuAt = $state({ x: 4, y: 4 });
+
+  $effect(() => {
+    if (menu === null) return;
+    const element = menuElement;
+    const stageElement = host?.parentElement ?? null;
+    if (element === null || stageElement === null) return;
+    const stageBox = stageElement.getBoundingClientRect();
+    const menuBox = element.getBoundingClientRect();
+    const targetElement =
+      menu.part !== null
+        ? host.querySelector(`[data-port-part=${JSON.stringify(menu.part)}]`)
+        : null;
+    const targetBox =
+      targetElement instanceof HTMLElement ? targetElement.getBoundingClientRect() : null;
+    menuAt = menuPlacement({
+      at: menu.at !== null
+        ? { x: menu.at.x - stageBox.left, y: menu.at.y - stageBox.top }
+        : null,
+      target: targetBox !== null
+        ? {
+            left: targetBox.left - stageBox.left,
+            top: targetBox.top - stageBox.top,
+            bottom: targetBox.bottom - stageBox.top,
+          }
+        : null,
+      menu: { width: menuBox.width, height: menuBox.height },
+      viewport: { width: stageBox.width, height: window.innerHeight },
+    });
+  });
+
   function chipBox(part: string): { left: number; top: number } | null {
     const element = host;
     if (element === null) return null;
@@ -123,9 +156,13 @@ a11y click advisories do not apply. -->
 {#if select !== null}
   <LabelOverlay chips={select.labels} measure={chipBox} />
 {/if}
-</div>
 {#if menu !== null}
-  <div class="port-menu" data-port-menu="">
+  <div
+      class="port-menu"
+      data-port-menu=""
+      bind:this={menuElement}
+      style="left: {menuAt.x}px; top: {menuAt.y}px"
+    >
     <div class="port-menu-label">{menu.label}</div>
     {#each menu.acts as act, index (act.key)}
       <button
@@ -138,3 +175,4 @@ a11y click advisories do not apply. -->
     {/each}
   </div>
 {/if}
+</div>

@@ -46,6 +46,9 @@ export type MenuView = Readonly<{
   label: string;
   acts: readonly { key: string; label: string }[];
   at: Readonly<{ x: number; y: number }> | null;
+  /** The target's part path, for beside-the-target placement when
+   * no pointer point rides the open. */
+  part: string | null;
 }>;
 
 export type MenuTarget = Readonly<{
@@ -94,6 +97,9 @@ export type MenuSession = Readonly<{
   /** Right-click opens the same act list at the pointer (:531); the
    * point is carried for the positioning host, never used for logic. */
   openAtPointer(target: MenuTarget, at: { x: number; y: number }): void;
+  /** The point the open menu was anchored at (a right-click's
+   * coordinates), or null when it opened from a selection. */
+  at(): { x: number; y: number } | null;
   /** A key with the menu open (:504): Escape dismisses without
    * acting; Enter fires the first act; a declared act key fires it;
    * an unrelated key is consumed, acts nothing, and leaves the menu
@@ -130,11 +136,14 @@ export function createMenuSession(actsFor: MenuActs): MenuSession {
     if (closeCallback !== null) closeCallback();
   }
 
+  let point: { x: number; y: number } | null = null;
+
   function openWith(target: MenuTarget, at: { x: number; y: number } | null): void {
     // select() closes any open menu before opening (:55).
     if (open) close("reopen");
     current = target;
     acts = actsFor(target);
+    point = at;
     open = true;
     events.push({ kind: "open", target, at });
   }
@@ -172,6 +181,7 @@ export function createMenuSession(actsFor: MenuActs): MenuSession {
     journal: () => events,
     openFromSelection: (target: MenuTarget) => openWith(target, null),
     openAtPointer: (target: MenuTarget, at: { x: number; y: number }) => openWith(target, at),
+    at: () => (open ? point : null),
     key: (k: string) => (open ? keyOnOpen(k) : { kind: "ignored" }),
     choose: (index: number) => (open ? act(index) : { kind: "ignored" }),
     primaryClick: (target: MenuTarget) => {
