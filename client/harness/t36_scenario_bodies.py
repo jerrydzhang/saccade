@@ -106,20 +106,130 @@ def _open_tracker_board(request: RequestFn, pace: float, message_match: str) -> 
 # -- S09: one action, every invocation agrees -----------------------------
 
 
+def _s09_port(request: RequestFn, pace: float) -> dict:
+    """The port's four invocations of the citation's reference act."""
+    import time
+
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    citing = next((t for t, e in tasks.items() if "incorporation into a group child" in str(e.get("message") or "")), None)
+    _premise(cited is not None and citing is not None,
+             f"the S09 seeds are missing on the tracker: {json.dumps(tasks)[:200]}")
+
+    def readout():
+        return t36_port.readout(request)
+
+    def wait_cited() -> str:
+        deadline = time.monotonic() + 15.0 * pace
+        while True:
+            board = readout().get("board") or {}
+            if board.get("status") == "loaded" and str(board.get("location") or "").endswith(f"{cited}@r1"):
+                return str(board.get("location"))
+            if time.monotonic() >= deadline:
+                raise CheckStopped(f"an invocation never followed here: last location {board.get('location')!r}")
+            _sleep(pace, 0.4)
+
+    def menu_open() -> bool:
+        return bool(_evaluate(request, 'return !!document.querySelector("[data-port-menu]");'))
+
+    def citation_rect() -> dict:
+        value = _json_evaluate(
+            request,
+            'const el = document.querySelector(\'[data-port-control="citation"]\');'
+            " if (!el) return null; const r = el.getBoundingClientRect();"
+            " return {x: r.x + r.width / 2, y: r.y + r.height / 2};",
+        )
+        _premise(isinstance(value, dict), "the citing board renders no citation link")
+        return value
+
+    def act_button_rect() -> dict:
+        value = _json_evaluate(
+            request,
+            'const b = document.querySelector(\'[data-port-menu-act="f"]\');'
+            " if (!b) return null; const r = b.getBoundingClientRect();"
+            " return {x: r.x + r.width / 2, y: r.y + r.height / 2};",
+        )
+        _premise(isinstance(value, dict), "the reference menu renders no follow act button")
+        return value
+
+    def ground() -> None:
+        t36_port.open_via_port_picker(request, f"{base}/seedtracker/{citing}", pace)
+        deadline = time.monotonic() + 15.0 * pace
+        while True:
+            board = readout().get("board") or {}
+            if board.get("status") == "loaded" and f"/{citing}" in str(board.get("location") or ""):
+                return
+            if time.monotonic() >= deadline:
+                raise CheckStopped(f"the citing board never loaded: {board.get('location')!r}")
+            _sleep(pace, 0.4)
+
+    locations: list[str] = []
+    evidence: list[str] = []
+
+    def invoke(name: str, act) -> None:
+        ground()
+        rect = citation_rect()
+        act(rect)
+        _sleep(pace, 1.2)
+        location = wait_cited()
+        locations.append(f"{name}: {location!r}")
+        if menu_open():
+            evidence.append(f"{name} left the menu open while executing")
+
+    invoke("plain click", lambda rect: _ok(request({"cmd": "input", "kind": "coords", "x": rect["x"], "y": rect["y"]}, timeout=40)))
+
+    def rightclick_then(key: str):
+        def run(rect: dict) -> None:
+            _ok(request({"cmd": "input", "kind": "rightclick", "x": rect["x"], "y": rect["y"]}, timeout=40))
+            _sleep(pace, 0.6)
+            _premise(menu_open(), "the right-click opened no reference menu")
+            _key(request, key)
+        return run
+
+    invoke("right-click Enter", rightclick_then("enter"))
+    invoke("menu key f", rightclick_then("f"))
+
+    def rightclick_item(rect: dict) -> None:
+        _ok(request({"cmd": "input", "kind": "rightclick", "x": rect["x"], "y": rect["y"]}, timeout=40))
+        _sleep(pace, 0.6)
+        button = act_button_rect()
+        _ok(request({"cmd": "input", "kind": "coords", "x": button["x"], "y": button["y"]}, timeout=40))
+
+    invoke("act item click", rightclick_item)
+
+    if evidence:
+        return {"status": t36_results.STATUS_FAIL, "detail": "invocations disagree: " + "; ".join(evidence)}
+    return {
+        "status": t36_results.STATUS_PASS,
+        "detail": (
+            "all four invocations followed here to the cited pinned revision with the"
+            " menu closed before executing: " + " | ".join(locations)
+            + "; the port's menu-key invocation opens through the right-click"
+              " (citations ride the citation surface, not the label layer - recorded)"
+        ),
+    }
+
+
 def check_s09_invocations_agree(request: RequestFn, pace: float = 1.0) -> dict:
     """S09 one action, every invocation agrees - literal differential
     (no ratified difference), grounded on the citing board's citation.
 
-    Script, from the same starting board each time: (1) plain click on
-    the citation; (2) select by label, press the menu's first act key
-    (f, Follow here); (3) right-click the citation, Enter fires the
-    first act; (4) right-click, click the act button by its viewport
-    position. Expect: every invocation follows here (the window shows
-    the cited revision) and the menu closes before executing.
-
-    Grounded live at 4d59c35: all four invocations followed here to
-    the cited revision with the menu closed - the TAP carried the four
-    locations verbatim."""
+    Port flavor (t36@r90): the citation's reference acts - 'f' follow
+    here first, so a plain click follows; the four invocations are
+    the plain click, right-click + Enter, right-click + the rendered
+    act item, and right-click + the declared act key. The A2-style
+    port note: the prototype's fourth path opens through label
+    selection; the port's citations ride the citation surface, so
+    its menu-key invocation opens through the right-click. The
+    oracle is unchanged: every invocation follows here to the cited
+    pinned revision, anchored at the named child, menu closed before
+    executing.
+    """
+    if t36_port.is_port(request):
+        return _s09_port(request, pace)
     evidence: list[str] = []
     locations: list[str] = []
     task = _open_tracker_board(request, pace, "the citing account, incorporation")
@@ -329,6 +439,110 @@ def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
 # -- S13: nested targets and citation -------------------------------------
 
 
+def _s13_port(request: RequestFn, pace: float) -> dict:
+    """The port's nested-target citation copy: the citation's copy
+    names the SHOWN revision and the child's full canonical path -
+    never the parent - and the group's own citation names its own
+    full path."""
+    import time
+
+    import t36_port
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    citing = next((t for t, e in tasks.items() if "other group child" in str(e.get("message") or "")), None)
+    _premise(cited is not None and citing is not None,
+             f"the S13 seeds are missing on the tracker: {json.dumps(tasks)[:200]}")
+
+    def readout():
+        return t36_port.readout(request)
+
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/{citing}", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        board = readout().get("board") or {}
+        if board.get("status") == "loaded" and f"/{citing}" in str(board.get("location") or ""):
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"the citing board never loaded: {board.get('location')!r}")
+        _sleep(pace, 0.4)
+
+    # the citation's copy: right-click the citation, press y, read the
+    # payload the ACTION produced (readout.copy - the observation
+    # surface; the OS clipboard itself is an environment capability)
+    link = _json_evaluate(
+        request,
+        'const el = document.querySelector(\'[data-port-control="citation"]\');'
+        " if (!el) return null; const r = el.getBoundingClientRect();"
+        " return {x: r.x + r.width / 2, y: r.y + r.height / 2,"
+        ' open: el.getAttribute("data-port-open")};',
+    )
+    _premise(isinstance(link, dict), "the citing board renders no citation link")
+    _ok(request({"cmd": "input", "kind": "rightclick", "x": link["x"], "y": link["y"]}, timeout=40))
+    _sleep(pace, 0.6)
+    _premise(bool(_evaluate(request, 'return !!document.querySelector("[data-port-menu]");')),
+             "the right-click opened no reference menu")
+    _key(request, "y")
+    _sleep(pace, 0.6)
+    copy_state = readout().get("copy")
+    _premise(isinstance(copy_state, dict), "the copy act left no readout copy state")
+    payload = str((copy_state or {}).get("payload") or "")
+
+    # the oracle facts from the model, never the DOM: the cited task
+    # at its shown revision and the child's full canonical path (the
+    # group child, never the parent)
+    expected_child = f"{cited}@r1:/content/0/content/0"
+    _premise(payload == expected_child,
+             f"the citation copy payload {payload!r} is not the shown revision + the child's"
+             f" full path {expected_child!r} (never the parent)")
+
+    # the group's own citation names ITS own full path (the prototype's
+    # group kind: z Fold, y Copy citation). The group lives on the
+    # CITED board: open it directly (the copy act cites the SHOWN
+    # revision, whichever way the board was reached)
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/{cited}", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        board = readout().get("board") or {}
+        if board.get("status") == "loaded" and str(board.get("location") or "").endswith(f"{cited}@r1"):
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"the cited board never loaded: {board.get('location')!r}")
+        _sleep(pace, 0.4)
+    obs = readout()
+    parts = ((obs.get("content") or {}).get("parts") or [])
+    group_part = next((str(p["part"]) for p in parts if p.get("kind") == "group"), None)
+    _premise(group_part is not None, "the citing board renders no group target")
+    group_rect = t36_port.part_rect(request, group_part)
+    _premise(group_rect is not None, "the group target has no rendered rect")
+    # the group's header strip (the container's center lands on children)
+    y = group_rect["y"] + min(6.0, group_rect["height"] / 4)
+    _ok(request({"cmd": "input", "kind": "rightclick", "x": group_rect["x"] + group_rect["width"] / 2, "y": y}, timeout=40))
+    _sleep(pace, 0.6)
+    _premise(bool(_evaluate(request, 'return !!document.querySelector(\'[data-port-menu-act="y"]\');')),
+             "the group menu carries no copy-citation act")
+    _key(request, "y")
+    _sleep(pace, 0.6)
+    group_copy = readout().get("copy")
+    group_payload = str((group_copy or {}).get("payload") or "")
+    expected_group = f"{cited}@r1:{group_part}"
+    _premise(group_payload == expected_group,
+             f"the group's own citation {group_payload!r} is not its own full path"
+             f" {expected_group!r}")
+
+    return {
+        "status": t36_results.STATUS_PASS,
+        "detail": (
+            f"the citation copied {payload!r} (the shown revision + the child's full"
+            f" canonical path, never the parent) and the group copied {group_payload!r}"
+            " (its own full path); the payloads ride the readout's copy observation -"
+            " the OS clipboard itself stays an environment capability"
+        ),
+    }
+
+
 def check_s13_nested_citation_copy(request: RequestFn, pace: float = 1.0) -> dict:
     """S13 nested targets and citation, app side on group-made boards.
 
@@ -344,11 +558,19 @@ def check_s13_nested_citation_copy(request: RequestFn, pace: float = 1.0) -> dic
     yields the distinct full paths - the readability gap is recorded
     here, and the ground truth rides the same mapping the app runs.
 
+    Port flavor (t36@r90): the citation's reference copy names the
+    shown revision + the child's full CANONICAL path (never the
+    parent), and the group's own copy act names its own full path;
+    the payload rides the readout's copy observation (the action's
+    product), the OS clipboard staying an environment capability.
+
     Baseline finding recorded when present: the group's painted label
     may not select (typing the painted uppercase letter narrowed to
     text targets instead) - the group's acts then ride the real
     right-click instead, and the label mismatch is carried in the
     result detail."""
+    if t36_port.is_port(request):
+        return _s13_port(request, pace)
     task = _open_tracker_board(request, pace, "the cited account")
     _key(request, "escape")
     _sleep(pace, 0.3)

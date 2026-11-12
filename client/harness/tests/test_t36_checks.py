@@ -581,19 +581,20 @@ class PortAdapterTest(unittest.TestCase):
 
     def test_ensure_served_premise(self) -> None:
         with self.assertRaises(t36_checks.CheckStopped) as caught:
-            t36_port.ensure_served("S09")
+            t36_port.ensure_served("S02")
         self.assertIn("the port surface does not serve", str(caught.exception))
-        self.assertIn("copy", str(caught.exception))  # the still-missing list
-        # the served set widened with chunk E; the recorded non-runnables
-        # pass through (their bodies carry the recorded reason)
-        for served in ("F01", "S08", "S10", "S12", "S14", "S16", "S20"):
+        self.assertIn("back/forward", str(caught.exception))  # the still-missing list
+        # the served set widened with the reference acts (S09/S13); the
+        # recorded non-runnables pass through (their bodies carry the
+        # recorded reason)
+        for served in ("F01", "S08", "S09", "S10", "S12", "S13", "S14", "S16", "S20"):
             t36_port.ensure_served(served)
         for not_driven in ("S01", "S03", "S05", "S07", "S11", "S19"):
             t36_port.ensure_served(not_driven)
 
     def test_run_check_port_gate_stops_unserved_before_the_body(self) -> None:
         fake = self.PortFake()
-        result = t36_checks.run_check(fake, t36_checks.CHECKS["S09"], pace=0)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S02"], pace=0)
         self.assertEqual(result["status"], "stop")
         self.assertIn("the port surface does not serve", result["detail"])
 
