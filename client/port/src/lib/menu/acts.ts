@@ -13,11 +13,11 @@
 // (:partPath) when the citation names a part. The OPEN o/i/w acts
 // are the elsewhere slice, not this one.
 
-import { commandContext, key, sequence } from "../input/input-context.ts";
 import type { Action, InputContext, KeyInput, KeyResolution } from "../input/input-context.ts";
 import { selectToPart } from "../board/targets.ts";
 import { formatLocation } from "../location.ts";
-import { createMenuSession, type MenuAct, type MenuSession, type MenuTarget } from "./session.ts";
+import { createActMenu } from "./create.ts";
+import type { MenuAct, MenuSession, MenuTarget } from "./session.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
 
 /** A model-authored citation source (the incorporation block's). */
@@ -76,96 +76,10 @@ export interface BoardMenu {
 }
 
 export function createBoardMenu(deps: BoardMenuDeps): BoardMenu {
-  const session = createMenuSession((target) => actsFor(target, deps));
-
-  let lease: { release(): void } | null = null;
-  let active: InputContext | null = null;
-  let notify: (() => void) | null = null;
-
-  function close(): void {
-    if (lease !== null) {
-      lease.release();
-      lease = null;
-    }
-    active = null;
-  }
-
-  session.onClose(() => {
-    close();
-    notify?.();
-  });
-
-  const context = (): InputContext | null => active;
-
-  function buildContext(): InputContext {
-    const menuKey = (k: string): KeyResolution => {
-      void session.key(k);
-      notify?.();
-      return { kind: "consume" } as const;
-    };
-    const ctx: InputContext = {
-      ...commandContext(() => [
-        {
-          action: {
-            id: "menu.primary",
-            label: "run the first act",
-            run: () => void menuKey("Enter"),
-          },
-          keys: [sequence(key("Enter"))],
-        },
-        {
-          action: {
-            id: "menu.dismiss",
-            label: "dismiss",
-            run: () => void menuKey("Escape"),
-          },
-          keys: [sequence(key("Escape"))],
-        },
-        ...currentActs().map(
-          (act, index): { action: Action; keys: readonly ReturnType<typeof sequence>[] } => ({
-            action: {
-              id: `menu.act.${index}`,
-              label: act.action.label,
-              run: () => void menuKey(act.key),
-            },
-            keys: [sequence(key(act.key))],
-          }),
-        ),
-      ]),
-      onUnmatched: (stroke: KeyInput): KeyResolution | undefined => {
-        if (active === null) return undefined;
-        if (stroke.key.length !== 1) return { kind: "consume" };
-        return menuKey(stroke.key);
-      },
-    };
-    return ctx;
-  }
-
-  function currentActs(): readonly MenuAct[] {
-    const target = session.target();
-    if (target === null) return [];
-    return actsFor(target, deps);
-  }
-
-  return {
-    session,
-    context,
-    setOnNotify(callback) {
-      notify = callback;
-    },
-    openFor(target, at) {
-      const menuTarget: MenuTarget = { kind: target.kind, label: target.label, part: target.part };
-      const acts = actsFor(menuTarget, deps);
-      if (acts.length === 0) return;
-      if (active === null) {
-        active = buildContext();
-        lease = deps.capture(active);
-      }
-      if (at !== undefined) session.openAtPointer(menuTarget, at);
-      else session.openFromSelection(menuTarget);
-      notify?.();
-    },
-  };
+  return createActMenu(
+    (target) => actsFor(target, deps),
+    { capture: (context) => deps.capture(context) },
+  );
 }
 
 /** The per-kind act declarations. Groups fold/unfold (chunk C); a

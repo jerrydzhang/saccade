@@ -34,6 +34,8 @@ export type TaskPorts = Readonly<{
   elsewhere?(spec: string, act: ElsewhereAct): void;
 }>;
 
+import { createActMenu } from "../menu/create.ts";
+
 export interface TasksMenuDeps {
   /** The tracker machine the shown list resolved at: the acts compose
    * their specs against it (formatLocation, never a colon join). */
@@ -105,90 +107,8 @@ export function taskRowActs(
 }
 
 export function createTasksMenu(deps: TasksMenuDeps): TasksMenu {
-  const session = createMenuSession((target) => taskRowActs(target, deps));
-
-  let lease: { release(): void } | null = null;
-  let active: InputContext | null = null;
-  let notify: (() => void) | null = null;
-
-  function close(): void {
-    if (lease !== null) {
-      lease.release();
-      lease = null;
-    }
-    active = null;
-  }
-
-  session.onClose(() => {
-    close();
-    notify?.();
-  });
-
-  function currentActs(): readonly MenuAct[] {
-    const target = session.target();
-    if (target === null) return [];
-    return taskRowActs(target, deps);
-  }
-
-  function buildContext(): InputContext {
-    const menuKey = (k: string): KeyResolution => {
-      void session.key(k);
-      notify?.();
-      return { kind: "consume" } as const;
-    };
-    const ctx: InputContext = {
-      ...commandContext(() => [
-        {
-          action: {
-            id: "menu.primary",
-            label: "run the first act",
-            run: () => void menuKey("Enter"),
-          },
-          keys: [sequence(key("Enter"))],
-        },
-        {
-          action: {
-            id: "menu.dismiss",
-            label: "dismiss",
-            run: () => void menuKey("Escape"),
-          },
-          keys: [sequence(key("Escape"))],
-        },
-        ...currentActs().map((act) => ({
-          action: {
-            id: `menu.act.${act.key}`,
-            label: act.action.label,
-            run: () => void menuKey(act.key),
-          },
-          keys: [sequence(key(act.key))],
-        })),
-      ]),
-      onUnmatched: (stroke: KeyInput): KeyResolution | undefined => {
-        if (active === null) return undefined;
-        if (stroke.key.length !== 1) return { kind: "consume" };
-        return menuKey(stroke.key);
-      },
-    };
-    return ctx;
-  }
-
-  return {
-    session,
-    context: () => active,
-    setOnNotify(callback) {
-      notify = callback;
-    },
-    openFor(target, at) {
-      const menuTarget: MenuTarget = { kind: target.kind, label: target.label, part: target.part };
-      const acts = taskRowActs(menuTarget, deps);
-      if (acts.length === 0) return;
-      if (active === null) {
-        active = buildContext();
-        lease = deps.capture(active);
-      }
-      if (at !== undefined) session.openAtPointer(menuTarget, at);
-      else session.openFromSelection(menuTarget);
-      notify?.();
-    },
-  };
+  return createActMenu(
+    (target) => taskRowActs(target, deps),
+    { capture: (context) => deps.capture(context) },
+  );
 }
