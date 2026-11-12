@@ -166,23 +166,30 @@ def part_rect(request, part: str) -> dict:
 def type_text(request, target: str, text: str, pace: float, timeout: float = 15.0) -> None:
     """Target-addressed real typing: a real click on the known field
     (focus), the field asserted fresh (the picker and find fields open
-    empty - residue stops, never typed over), then the WHOLE text
-    through the type verb's send_keys with the delivered value
-    asserted - every response _ok'd and the whole operation bounded
+    empty - residue stops, never typed over), then per-character keys
+    with EXPLICIT SHIFT CHORDS for shifted symbols - every response
+    _ok'd, the delivered value asserted, the whole operation bounded
     from BEFORE the click. The target is a port control id
     (port:<name>).
 
-    The delivery channel is send_keys into a fresh field, the only
-    combination the live lane has delivered verbatim (the 6e30b80
-    authoritative run). Both alternatives are proven broken on this
-    stack, each with a recorded stop: a clear_element before send_keys
-    poisons the delivery (':' lands as ';'), and the per-character key
-    verb synthesizes codepoints without their shift ('@' lands as
-    '2'). The value assertions on both sides of typing are the guard:
-    any divergence stops naming the field."""
+    The delivery evidence (three authoritative runs plus isolated
+    matrices): element send_keys loses its modifiers after a pointer
+    action on this WebKitWebDriver stack (':' as ';'- the f447de1
+    run2/3 record: the first send_keys before any rightclick delivered
+    verbatim, the one after the fold's rightclick diverged), and bare
+    shifted codepoints through the key verb lose their shift the same
+    way ('@' as '2'). EXPLICIT CHORDS - shift down, base key, shift
+    up - survive pointer actions (the f447de1 run2 record: the ':'
+    chord delivered verbatim after the fold's rightclick). The value
+    assertions on both sides of typing are the guard: any divergence
+    stops naming the field."""
     import time
 
     from t36_checks import _evaluate, _ok, _sleep
+
+    # the shifted symbols ride explicit chords (US layout base keys);
+    # extend only with a live record of the unshifted delivery
+    CHORDS = {":": ["shift", ";"], "@": ["shift", "2"]}
 
     deadline = time.monotonic() + timeout
     if not target.startswith("port:"):
@@ -239,10 +246,17 @@ def type_text(request, target: str, text: str, pace: float, timeout: float = 15.
             " clear path needs its own grounded design - no silent typing over residue"
         )
 
-    # the whole text through one send_keys (the delivery evidence in
-    # the docstring); bounded, response checked, the value asserted
-    _ok(request({"cmd": "input", "kind": "type", "target": target, "text": text}, timeout=min(30.0, remaining())))
-    _sleep(pace, 0.2)
+    # the whole text, per character: shifted symbols as explicit
+    # chords, plain characters as key presses; bounded, every
+    # response checked, the value asserted after
+    for ch in text:
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"typing {text!r} into {target!r} overran its bound")
+        if ch in CHORDS:
+            _ok(request({"cmd": "input", "kind": "hotkey", "keys": CHORDS[ch]}, timeout=min(30.0, remaining())))
+        else:
+            _ok(request({"cmd": "input", "kind": "key", "keys": [ch]}, timeout=min(30.0, remaining())))
+        _sleep(pace, 0.05)
     if not focused_now():
         raise CheckStopped(f"the field {target!r} lost focus during typing")
     delivered = field_value()

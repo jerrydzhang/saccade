@@ -546,6 +546,8 @@ class PortAdapterTest(unittest.TestCase):
                 keys = payload.get("keys") or []
                 if "shift" in keys and ";" in keys:
                     self.typed = (self.typed or "") + ":"  # shift+; is the chord for ':'
+                elif "shift" in keys and "2" in keys:
+                    self.typed = (self.typed or "") + "@"  # shift+2 is the chord for '@'
             if payload.get("cmd") == "input" and payload.get("kind") == "key":
                 keys = payload.get("keys") or []
                 if keys and len(keys[0]) == 1 and keys[0] not in ("escape", " "):
@@ -654,6 +656,8 @@ class PortWidenedBodiesTest(unittest.TestCase):
                     self.viewport_top = 900.0
                 if payload.get("kind") == "hotkey" and "shift" in keys and ";" in keys:
                     self.typed_spec = (self.typed_spec or "") + ":"
+                elif payload.get("kind") == "hotkey" and "shift" in keys and "2" in keys:
+                    self.typed_spec = (self.typed_spec or "") + "@"
                 elif payload.get("kind") == "type":
                     self.typed_spec = payload.get("text") or ""
                 elif payload.get("kind") == "key" and keys and len(keys[0]) == 1 and keys[0] not in ("escape", " ", "G", "g"):
@@ -795,6 +799,8 @@ class S15SignatureGateTest(unittest.TestCase):
                 keys = payload.get("keys") or []
                 if "shift" in keys and ";" in keys:
                     self.typed = (self.typed or "") + ":"  # shift+; is the chord for ':'
+                elif "shift" in keys and "2" in keys:
+                    self.typed = (self.typed or "") + "@"  # shift+2 is the chord for '@'
             if payload.get("cmd") == "input" and payload.get("kind") == "key":
                 keys = payload.get("keys") or []
                 if keys == [" ", " "]:
