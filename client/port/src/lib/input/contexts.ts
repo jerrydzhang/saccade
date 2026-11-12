@@ -23,6 +23,15 @@ export interface WindowActions {
   pickerIsOpen(): boolean;
   trailBack(): boolean;
   trailForward(): boolean;
+  /** space-l: the link act - labels over windows, a key sets the
+   * link (the prototype's D1 modal shape). */
+  linkByLabels(): void;
+  /** space-u: clear this window's link. */
+  unlink(): void;
+  /** ?: the help surface - the which-key popup over the ACTIVE
+   * context's whole command table (a recorded deliberate
+   * difference from the prototype's hand-curated list). */
+  showHelp(): void;
 }
 
 // The two oracle-pinned window chords (the app's own back/forward
@@ -61,6 +70,32 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.openPicker(),
       },
       keys: [sequence(key(" "), key(" "))],
+    },
+    {
+      action: {
+        id: "window.link",
+        label: "link to a window (labels)",
+        run: () => actions.linkByLabels(),
+      },
+      keys: [sequence(key(" "), key("l"))],
+    },
+    {
+      action: {
+        id: "window.unlink",
+        label: "unlink this window",
+        run: () => actions.unlink(),
+      },
+      keys: [sequence(key(" "), key("u"))],
+    },
+    {
+      action: {
+        id: "window.help",
+        label: "show the keys",
+        run: () => actions.showHelp(),
+      },
+      // a real ? arrives as Shift+slash -> key "?" with shift set
+      // (G's and N's lesson): the binding names the arriving stroke
+      keys: [sequence(shift("?"))],
     },
     {
       action: {

@@ -71,6 +71,10 @@ import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
 
+/** The which-key popup delay in ms (the r110 tunable, nvim's
+ * neighborhood - the human tunes). */
+export const WHICH_KEY_DELAY_MS = 400;
+
 export interface StripView {
   location: string | null;
   status: string;
@@ -97,6 +101,11 @@ export interface PortWindow {
    * tracker's task list arrives asynchronously). */
   pickerContext(): PickContext;
   subscribePickerContext(observer: (context: PickContext) => void): () => void;
+  /** The which-key surface (r110): the live popup view (null when
+   * hidden) and the help variant; the observation carries both. */
+  whichKeyView(): { pending: boolean; view: unknown } | null;
+  helpView(): unknown;
+  subscribeWhichKey(observer: (pending: unknown, help: boolean) => void): () => void;
   closePicker(): void;
   submitPicker(spec: string): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
@@ -265,6 +274,42 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let ask: AskState | null = null;
   let elsewhereNote: string | null = null;
   const askObservers = new Set<(state: AskState | null) => void>();
+
+  // -- the which-key surface (r110): the pending prefix's popup and
+  // the help variant ---------------------------------------------
+  let whichKey: import("./lib/input/key-matcher.ts").WhichKeyView | null = null;
+  let whichKeyPending = false;
+  let helpOpen = false;
+  const whichKeyObservers = new Set<(pending: unknown, help: boolean) => void>();
+
+  function notifyWhichKey(): void {
+    for (const observer of [...whichKeyObservers]) observer(whichKey, helpOpen);
+  }
+
+
+
+  async function beginLinkAsk(): Promise<void> {
+    // space-l: the prototype's D1 modal - labels over windows, a key
+    // sets the link; the ask machinery's link act is the same shape
+    if (windowStore === null || windowStateId === null) {
+      await ensureWindowState();
+      if (windowStore === null || windowStateId === null) return;
+    }
+    const windows = await suiteWindows();
+    const others = windows.filter((entry) => entry.label !== nativeWindowLabel());
+    if (others.length === 0) {
+      note = "no other window to link";
+      notifyStrip();
+      return;
+    }
+    await openAsk("link", "this window");
+  }
+
+  async function clearTheLink(): Promise<void> {
+    if (windowStore === null || windowStateId === null) return;
+    await windowStore.clearLink(windowStateId).catch(() => {});
+    await refreshLink();
+  }
 
   function notifyAsk(): void {
     for (const observer of askObservers) observer(ask);
@@ -493,6 +538,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
   async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
     if (windowStore === null || windowStateId === null) {
       await ensureWindowState();
+      // A JUST-OPENED window's state can still be binding when the
+      // human's o arrives (the suite worker's base defect 1: the act
+      // silently dropped, 'nothing happened'). WAIT for the binding,
+      // bounded - the act runs when the store lands; only a genuinely
+      // unbound window refuses, with the note.
+      const deadline = Date.now() + 4000;
+      while ((windowStore === null || windowStateId === null) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        await ensureWindowState();
+      }
       if (windowStore === null || windowStateId === null) {
         note = elsewhereNote ?? "the window store is not serving this window";
         notifyStrip();
@@ -510,7 +565,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
       await openInNewWindow(spec, decision.becomeLink);
       return;
     }
+    await openAsk(act, spec);
+  }
+
+  async function openAsk(act: ElsewhereAct, spec: string): Promise<void> {
     // the ask: chips on every window, the answer typed here
+    const invoke = tauriInvoke();
+    const windows = await suiteWindows();
     await invoke("broadcast_jump_labels", {
       labels: assignChips(windows.map((entry) => entry.label)).map((entry) => ({
         window: entry.window,
@@ -584,7 +645,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
           notifyStrip();
         },
         elsewhere: (spec: string, act: ElsewhereAct) => {
-          void openElsewhere(spec, act);
+          openElsewhere(spec, act).catch((error: unknown) => {
+            diagnostics.report(
+              refusalContext,
+              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+            );
+            note = `the open act failed: ${String(error).slice(0, 120)}`;
+            notifyStrip();
+          });
         },
       });
     }
@@ -593,7 +661,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
       (tasks.presentation as TasksUI).setTaskPorts({
         open: (spec: string) => openSpec(spec),
         elsewhere: (spec: string, act: ElsewhereAct) => {
-          void openElsewhere(spec, act);
+          openElsewhere(spec, act).catch((error: unknown) => {
+            diagnostics.report(
+              refusalContext,
+              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+            );
+            note = `the open act failed: ${String(error).slice(0, 120)}`;
+            notifyStrip();
+          });
         },
         copy: (text: string) => {
           lastCopy = { payload: text, at: Date.now() };
@@ -616,12 +691,60 @@ export function createPortWindow(windowId = "main"): PortWindow {
         void refreshPickerContext();
         picker.open();
       },
-      closeOverlays: () => picker.close(),
+      closeOverlays: () => {
+        picker.close();
+        whichKey = null;
+        helpOpen = false;
+        notifyWhichKey();
+      },
+      linkByLabels: () => {
+        void beginLinkAsk();
+      },
+      unlink: () => {
+        void clearTheLink();
+      },
+      showHelp: () => {
+        helpOpen = true;
+        notifyWhichKey();
+        notifyStrip();
+      },
       pickerIsOpen: () => picker.snapshot().open,
       trailBack: () => trail.back(),
       trailForward: () => trail.forward(),
     }),
+    { expirySuspended: () => whichKey !== null },
   );
+
+  // the popup's own clock: the delay after the prefix began; the
+  // expiry suspension reads whichKey !== null
+  let whichKeyDelayTimer: number | null = null;
+  windowHost.subscribePending(() => {
+    const view = windowHost.pendingView();
+    whichKeyPending = view !== null;
+    if (view === null) {
+      whichKey = null;
+      if (whichKeyDelayTimer !== null) {
+        clearTimeout(whichKeyDelayTimer);
+        whichKeyDelayTimer = null;
+      }
+    } else if (whichKey === null && whichKeyDelayTimer === null) {
+      const since = windowHost.pendingSince();
+      if (since !== null) {
+        const elapsed = Date.now() - since;
+        const wait = Math.max(0, WHICH_KEY_DELAY_MS - elapsed);
+        whichKeyDelayTimer = setTimeout(() => {
+          whichKeyDelayTimer = null;
+          const live = windowHost.pendingView();
+          if (live !== null) whichKey = live;
+          notifyWhichKey();
+        }, wait) as unknown as number;
+      }
+    } else {
+      whichKey = view;
+    }
+    notifyWhichKey();
+  });
+
 
   // -- observation state ------------------------------------------------
   let doors: { jumpChip: string | null; delivered: DoorDelivery[] } = {
@@ -926,6 +1049,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
+      bound: windowStore !== null && windowStateId !== null,
       ask: ask === null
         ? null
         : { act: ask.act, spec: ask.spec, chips: ask.chips },
@@ -984,6 +1108,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
     },
     closePicker: () => picker.close(),
     pickerContext: () => pickerContextValue,
+    whichKeyView: () => (whichKey !== null ? { pending: whichKeyPending, view: whichKey } : null),
+    helpView: () => (helpOpen ? windowHost.allView() : null),
+    subscribeWhichKey(observer) {
+      whichKeyObservers.add(observer);
+      observer(whichKey, helpOpen);
+      return () => {
+        whichKeyObservers.delete(observer);
+      };
+    },
     subscribePickerContext(observer) {
       pickerContextObservers.add(observer);
       observer(pickerContextValue);

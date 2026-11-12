@@ -70,6 +70,7 @@ test("the pinned window chords run back/forward through the host matcher", () =>
       openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
       trailBack: (): boolean => { ran.push("back"); return true; },
       trailForward: (): boolean => { ran.push("forward"); return true; },
+      linkByLabels: () => {}, unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
   );
@@ -100,7 +101,7 @@ test("the seam carve-out names exactly the two pinned chords", () => {
 });
 
 test("the real port contexts validate at construction", () => {
-  windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false });
+  windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false, linkByLabels: () => {}, unlink: () => {}, showHelp: () => {} });
   boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, scrollDown: () => {}, scrollUp: () => {}, enterSelect: () => {}, enterFind: () => {}, nextMatch: () => {}, prevMatch: () => {}, clearSearch: () => {} });
 });
 
@@ -175,6 +176,7 @@ test("the window chain: space-space opens the picker at the window level; other 
       pickerIsOpen: () => pickerOpen,
       trailBack: (): boolean => { windowEvents.push("back"); return true; },
       trailForward: (): boolean => { windowEvents.push("forward"); return true; },
+      linkByLabels: () => {}, unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
   );
