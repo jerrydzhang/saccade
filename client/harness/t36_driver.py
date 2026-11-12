@@ -257,8 +257,15 @@ def baseline_cache_store(key: str, results: list[dict], plan_manifest: dict, exi
 
 def t36_inventory_ids() -> list[str]:
     """The t36 lane's check inventory: every scenario group plus the
-    feed held-break probe, in stable order."""
-    return list(t36_results.SCENARIO_IDS) + ["F01"]
+    feed held-break probe, in stable order - with S17 LAST: its body
+    closes the window it delivered to (so later checks would inherit
+    a stray), and the WebDriver close can wedge this stack's session
+    machinery after it (the S17->S18 race, caught twice at the r116
+    chunk gate). Running it last lets the strays die with the
+    session; the order is the lane's own stability decision, the
+    same list for both flavors."""
+    ids = [i for i in t36_results.SCENARIO_IDS if i != "S17"] + ["S17", "F01"]
+    return ids
 
 
 def lane_results_from_log(log_text: str, lane: str = "session", declared_checks: tuple[str, ...] | list[str] = ()) -> list[dict]:

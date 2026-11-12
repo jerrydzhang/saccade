@@ -475,6 +475,16 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
         if linked:
             close = _ok(request({"cmd": "close-window", "label": linked}, timeout=30))
             closed_note = f", the delivered window closed={close.get('closed')}"
+            # the close is ASYNC at the shell: the dying webview can
+            # linger in the window list, and a later check's o would
+            # deliver into it (the S17->S18 race, caught twice at the
+            # chunk gate). Poll until the list settles, bounded.
+            deadline = _time.monotonic() + 8.0
+            while _time.monotonic() < deadline:
+                handles = _ok(request({"cmd": "windows"}, timeout=30)).get("handles")
+                if isinstance(handles, list) and len(handles) <= 1:
+                    break
+                _sleep(pace, 0.4)
     except Exception as error:  # noqa: BLE001 - best effort by contract
         closed_note = f", the delivered window close errored: {error!r}"[:120]
 
