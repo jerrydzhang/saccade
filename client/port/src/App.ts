@@ -140,26 +140,68 @@ export function createPortWindow(windowId = "main"): PortWindow {
         // skip_serializing_if): absent means unbound, not null
         state_id?: string | null;
       };
-      windowStore = new WindowStore({ base });
+      windowStore = new WindowStore({ base: () => serverBase().toString() });
+      const bind = async (id: string): Promise<void> => {
+        await invoke("bind_window_state", {
+          stateId: id,
+          server: base.toString(),
+          device: windowStore!.device,
+        });
+      };
       if (typeof binding.state_id === "string" && binding.state_id.length > 0) {
         windowStateId = binding.state_id;
-        await windowStore.attach(windowStateId);
+        await windowStore.attach(windowStateId).catch(() => {
+          // the store may be unreachable (a relaunch's persisted host is
+          // dead until a location re-tells it): the shell's seed still
+          // binds this window; the store facts catch up on the next
+          // successful reach
+        });
+        await bind(windowStateId);
+      } else if (binding.label === "main") {
+        // the launch restore: the SHELL's memory names the states open
+        // at the last quit; the first is claimed here, each of the rest
+        // opens as its own window (the seed binds it). The windows come
+        // back unconditionally - the memory is the persistence - even
+        // when the store is not yet reachable (their locations restore
+        // through their own boots when it is)
+        const last = (await invoke("last_session")) as string[];
+        let claimed = false;
+        for (const id of last) {
+          if (!claimed) {
+            windowStateId = id;
+            claimed = true;
+          } else {
+            await invoke("open_suite_window", { stateId: id }).catch(() => {});
+          }
+        }
+        if (!claimed) {
+          const fresh =
+            typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          await windowStore.create(fresh, {});
+          windowStateId = fresh;
+        }
+        const claimedId = windowStateId;
+        if (claimedId !== null) {
+          await windowStore.attach(claimedId).catch(() => {});
+          await bind(claimedId);
+        }
       } else {
+        // a suite window the shell did not seed: its own fresh state
         const fresh =
           typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         await windowStore.create(fresh, {});
-        await windowStore.attach(fresh);
-        await invoke("bind_window_state", {
-          stateId: fresh,
-          server: base.toString(),
-          device: windowStore.device,
-        });
         windowStateId = fresh;
+        await windowStore.attach(fresh).catch(() => {});
+        await bind(fresh);
       }
-      const state = await windowStore.getState(windowStateId);
-      restored = state.location;
+      const boundId = windowStateId;
+      const state =
+        boundId === null ? null : await windowStore.getState(boundId).catch(() => null);
+      restored = state === null ? null : state.location;
       await refreshLink();
       injectReferenceElsewhere();
       notifyStrip();
@@ -533,6 +575,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       if (restored !== null && restored.length > 0) {
         console.log(`[viewer] startup: restoring the bound state's location: ${restored}`);
         openSpec(restored);
+        // a restored location never falls through to the test-open
+        // channel; the window SET restored through the launch restore
         return true;
       }
       const spec = (await invoke("test_open")) as string | null;

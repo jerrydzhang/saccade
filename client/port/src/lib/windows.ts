@@ -65,11 +65,13 @@ function stateOf(doc: unknown): WindowState {
 
 export class WindowStore {
   readonly device: string;
-  readonly #base: URL | string;
+  readonly #base: URL | string | (() => URL | string);
   readonly #fetcher: (url: string, init: RequestInit) => Promise<Response>;
 
   constructor(options: {
-    base: URL | string;
+    /** A fixed base, or a resolver answered per call - a re-registered
+     * tracker host serves the next store call without a rebuild. */
+    base: URL | string | (() => URL | string);
     fetcher?: (url: string, init: RequestInit) => Promise<Response>;
     device?: string;
   }) {
@@ -84,7 +86,8 @@ export class WindowStore {
     route: string,
     init: RequestInit & { body?: string },
   ): Promise<{ status: number; doc: unknown }> {
-    const response = await this.#fetcher(windowsUrl(this.#base, route), {
+    const base = typeof this.#base === "function" ? this.#base() : this.#base;
+    const response = await this.#fetcher(windowsUrl(base, route), {
       ...init,
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
