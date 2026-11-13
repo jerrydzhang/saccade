@@ -110,12 +110,22 @@ export interface HostBuffer<T extends object> {
   activate(): boolean;
   deactivate(): void;
   handleKey(input: KeyInput): KeyDisposition;
+  /** The buffer's input facts, read-only (the key trace and the
+   * readout's input field): whether it is active, which context
+   * answers keys, and the strokes of an unfinished sequence. */
+  inputState(): BufferInputState;
   destroy(): void;
   // Same-frame data + target definitions must remain associated. A repeated
   // query is not another registration or content change. Old frame facades
   // cannot publish stale geometry or activate retargeted operations.
   presentationsFor(frame: ContentFrame<T>): TargetPresentations;
 }
+export type BufferInputState = Readonly<{
+  active: boolean;
+  context: "reading" | "captured" | "none";
+  kind: InputContext["kind"] | null;
+  pending: readonly KeyInput[];
+}>;
 export type BufferBuild<T extends object, UI extends object, A extends AnchorData> = Readonly<{
   context: BufferContext;
   viewport: Viewport;
@@ -323,6 +333,7 @@ export class SliceBufferHost<
   // handoff (scenario 10: a partial sequence never survives one).
   private installReading(context: InputContext | null): void {
     if (this.inputHost !== null) this.inputHost.dispose();
+    this.installedKind = context === null ? null : context.kind;
     this.inputHost =
       context === null
         ? null
@@ -333,6 +344,9 @@ export class SliceBufferHost<
               ? { expirySuspended: this.build.expirySuspended }
               : {}),
           });
+    this.inputHost?.subscribePending(() => {
+      for (const observer of [...this.inputPendingObservers]) observer();
+    });
     for (const observer of [...this.inputPendingObservers]) observer();
   }
 
@@ -350,14 +364,23 @@ export class SliceBufferHost<
   }
 
   subscribeInputPending(observer: () => void): () => void {
+    // observers hear context changes (installReading) and, through
+    // the installed matcher's own notification, every pending change;
+    // each fresh matcher is tapped at install, so a subscription
+    // outlives a handoff
     this.inputPendingObservers.add(observer);
-    // the host's OWN pending notifications (prefix strokes, drains)
-    // flow through too - the observers hear both context changes and
-    // pending changes
-    const off = this.inputHost?.subscribePending(observer);
     return () => {
       this.inputPendingObservers.delete(observer);
-      off?.();
+    };
+  }
+  private installedKind: InputContext["kind"] | null = null;
+
+  inputState(): BufferInputState {
+    return {
+      active: this.state.kind === "alive" && this.state.active,
+      context: this.inputHost === null ? "none" : this.currentLease !== null ? "captured" : "reading",
+      kind: this.installedKind,
+      pending: this.inputHost?.pendingView()?.prefix ?? [],
     };
   }
   private leases: Set<InputLeaseImpl> = new Set();

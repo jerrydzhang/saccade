@@ -140,8 +140,11 @@ export function dispatchStroke(
   window: HostMatcher,
   buffer: Readonly<{ handleKey(input: KeyInput): KeyDisposition }>,
   input: KeyInput,
+  /** Read-only: told who answered and how (the key trace). */
+  observe?: (owner: "window" | "buffer", answer: string) => void,
 ): KeyDisposition {
   const resolution = window.stroke(input);
+  observe?.("window", resolution.kind === "invoke" ? `invoke:${resolution.action.id}` : resolution.kind);
   if (resolution.kind === "invoke") return window.apply(resolution);
   if (resolution.kind === "prefix") return window.apply(resolution);
   // The window context did not claim the stroke (or is a commands

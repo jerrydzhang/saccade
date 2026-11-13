@@ -72,6 +72,7 @@ import { inspectionContext } from "./lib/input/contexts.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
+import { createKeyTrace } from "./lib/input/key-trace.ts";
 
 /** The which-key popup delay in ms (the r110 tunable, nvim's
  * neighborhood - the human tunes). */
@@ -991,8 +992,44 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   // -- the key routing seam: inspection (modal), then the window
   // context, then the active buffer ---
+  // the key trace (SACCADE_KEY_TRACE, lib/input/key-trace.ts): off
+  // unless the shell says so; it reads, never routes
+  const keyTrace = createKeyTrace({
+    scroller: () => attachedViewport,
+    facts: () => {
+      const state = activeInstrument().inputState();
+      return {
+        surface: activeSurface,
+        "buf.active": state.active,
+        "buf.ctx": `${state.context}/${state.kind ?? "none"}`,
+        "buf.pending": state.pending.map((stroke) => stroke.key).join(","),
+        "win.pending": (windowHost.pendingView()?.prefix ?? []).map((stroke) => stroke.key).join(","),
+        picker: picker.snapshot().open,
+        ask: ask !== null,
+        inspection: inspection !== null,
+        whichKey: whichKey !== null,
+        help: helpOpen,
+      };
+    },
+  });
+
   const windowKeyDown = (event: KeyboardEvent): void => {
-    if (event.defaultPrevented) return;
+    const trace = keyTrace.begin(event);
+    try {
+      routeKeyDown(event, trace);
+    } finally {
+      trace?.end();
+    }
+  };
+
+  const routeKeyDown = (
+    event: KeyboardEvent,
+    trace: ReturnType<typeof keyTrace.begin>,
+  ): void => {
+    if (event.defaultPrevented) {
+      trace?.set("route", "already-prevented");
+      return;
+    }
     // the inspection surface owns every stroke while it is open: its
     // own keys act, everything else is consumed inert - the board
     // beneath never sees a key (scenario 4)
@@ -1007,6 +1044,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const resolution = inspectionHost.stroke(stroke);
       inspectionHost.apply(resolution);
       event.preventDefault();
+      trace?.set("route", "inspection");
+      trace?.set("answer", resolution.kind);
       return;
     }
     // the help surface is a modal too: every stroke closes it (the
@@ -1024,7 +1063,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
       (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
     // Declared captured fields use their active buffer's text-entry
     // context. Other fields (including the window picker) stay native.
-    if (field && !target?.closest("[data-port-captured-input]")) return;
+    if (field && !target?.closest("[data-port-captured-input]")) {
+      trace?.set("route", "native-field");
+      return;
+    }
     // Modifier chords stay native until the IME/native-editing
     // boundary set is pinned (draft-open, grouped decision): the port
     // never eats an OS or browser chord while the boundary is unset.
@@ -1041,8 +1083,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
         alt: event.altKey,
         meta: event.metaKey,
       })
-    )
+    ) {
+      trace?.set("route", "native-chord");
       return;
+    }
     const stroke = {
       key: event.key,
       ctrl: event.ctrlKey,
@@ -1050,9 +1094,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
       alt: event.altKey,
       meta: event.metaKey,
     };
+    trace?.set("route", field ? "captured-field" : "window-then-buffer");
     const disposition = field
       ? activeInstrument().handleKey(stroke)
-      : dispatchStroke(windowHost, activeInstrument(), stroke);
+      : dispatchStroke(
+          windowHost,
+          activeInstrument(),
+          stroke,
+          trace === null ? undefined : (owner, answer) => trace.set(owner, answer),
+        );
+    trace?.set("disposition", disposition);
     if (disposition === "consume") event.preventDefault();
   };
   window.addEventListener("keydown", windowKeyDown);

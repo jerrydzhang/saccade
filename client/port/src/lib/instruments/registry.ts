@@ -13,6 +13,7 @@
 import type { Component } from "svelte";
 import type {
   BufferFactory,
+  BufferInputState,
   ContentFrame,
   BuiltBuffer,
 } from "../../components/Buffer.ts";
@@ -77,6 +78,7 @@ export interface RunningInstrument {
   inputPending(): WhichKeyView | null;
   inputAll(): WhichKeyView;
   subscribeInputPending(observer: () => void): () => void;
+  inputState(): BufferInputState;
   destroy(): void;
   snapshot(): BufferState<RenderPair>;
   subscribe(observer: (state: BufferState<RenderPair>) => void): Unsubscribe;
@@ -114,6 +116,7 @@ export function registerInstrument<
         activate: () => built.host.activate(),
         deactivate: () => built.host.deactivate(),
         handleKey: (input) => built.host.handleKey(input),
+        inputState: () => built.host.inputState(),
         destroy: () => built.host.destroy(),
         snapshot: () => mapBufferState(built.host.snapshot(), project),
         subscribe: (observer) => built.host.subscribe(

@@ -45,6 +45,7 @@ pub fn run() {
             commands::edit_declaration,
             commands::viewer_identity,
             commands::test_open,
+            commands::key_trace,
             commands::tracker_machine,
             commands::machine_id,
             commands::publish_identity,
