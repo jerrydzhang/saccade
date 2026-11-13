@@ -24,7 +24,7 @@ use serde_json::json;
 
 use crate::api::{AppState, LandingWake};
 use crate::serve::window_store::{
-    self, LinkFail, OpenFail, StatePatch, StateRow, StateValue, StoreFail, WindowStore,
+    self, LinkFail, OpenFail, StateFields, StatePatch, StateRow, StateValue, StoreFail, WindowStore,
 };
 
 /// The hold a `?after=` request gets without `?timeout=`, and the
@@ -216,6 +216,8 @@ struct StateDoc {
     #[serde(skip_serializing_if = "Option::is_none")]
     zoom: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     drafts: Option<Vec<WindowDraft>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_device: Option<String>,
@@ -246,6 +248,7 @@ fn state_doc(row: StateRow, device: &str, store: &WindowStore) -> Result<StateDo
         location: row.location,
         part: row.part,
         zoom: row.zoom,
+        width: row.width,
         drafts: parse_drafts(row.drafts.as_deref())?,
         last_device: row.last_device,
         changed: row.changed,
@@ -329,9 +332,9 @@ pub async fn windows_root(State(app): State<AppState>) -> Response {
         "seq": seq,
         "verbs": [
             "GET /api/v1/windows/states?device=<id>[&after=<seq>&timeout=<s>]",
-            "POST /api/v1/windows/states {id, device[, location, part, zoom, drafts]}",
+            "POST /api/v1/windows/states {id, device[, location, part, zoom, width, drafts]}",
             "GET /api/v1/windows/states/<id>?device=<id>[&after=<seq>&timeout=<s>]",
-            "PATCH /api/v1/windows/states/<id> {device[, location, part, zoom, drafts]}",
+            "PATCH /api/v1/windows/states/<id> {device[, location, part, zoom, width, drafts]}",
             "DELETE /api/v1/windows/states/<id>",
             "POST /api/v1/windows/devices/<device>/attach {state}",
             "POST /api/v1/windows/devices/<device>/detach {state}",
@@ -482,6 +485,8 @@ pub struct CreateBody {
     #[serde(default)]
     zoom: Option<f64>,
     #[serde(default)]
+    width: Option<f64>,
+    #[serde(default)]
     drafts: Option<Vec<WindowDraft>>,
 }
 
@@ -495,10 +500,13 @@ pub async fn window_state_create(State(app): State<AppState>, body: Json<CreateB
         let seq = guard.create(
             &body.id,
             &body.device,
-            body.location.as_deref(),
-            body.part.as_deref(),
-            body.zoom,
-            drafts.as_deref(),
+            &StateFields {
+                location: body.location.as_deref(),
+                part: body.part.as_deref(),
+                zoom: body.zoom,
+                width: body.width,
+                drafts: drafts.as_deref(),
+            },
         )?;
         let row = guard
             .state(&body.id)
@@ -536,6 +544,8 @@ pub struct PatchBody {
     #[serde(default, deserialize_with = "double_option")]
     zoom: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
+    width: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "double_option")]
     drafts: Option<Option<Vec<WindowDraft>>>,
 }
 
@@ -562,6 +572,10 @@ pub async fn window_state_patch(
             None => StateValue::Clear,
         }),
         zoom: body.zoom.map(|v| match v {
+            Some(number) => StateValue::Number(number),
+            None => StateValue::Clear,
+        }),
+        width: body.width.map(|v| match v {
             Some(number) => StateValue::Number(number),
             None => StateValue::Clear,
         }),

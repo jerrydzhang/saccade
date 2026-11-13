@@ -46,6 +46,7 @@ import type { Board, FigureBlock } from "../lib/board/model.ts";
 import { decodeBoard } from "../lib/board/decode.ts";
 import { crateVerdict } from "../lib/board/validate.ts";
 import { createFollow } from "../lib/board/follow.ts";
+import type { ReadingLayoutChange } from "../lib/board/reading-layout.ts";
 import { createFindInteraction, type FindView } from "../lib/find/interaction.ts";
 import { findUnitsOf } from "../lib/find/units.ts";
 export type { FindView } from "../lib/find/interaction.ts";
@@ -148,6 +149,10 @@ export interface BoardUI extends HydrationHost {
      * inspection surface for the part. */
     figureEnlarge?(part: string): void;
   }): void;
+  /** The window's reading layout (lib/board/reading-layout.ts): the
+   * zoom and column-width keys hand their change to the window, which
+   * holds the layout with the rest of its state. */
+  setReadingLayoutPort(port: (change: ReadingLayoutChange) => void): void;
   /** Update outcomes for the actual shown frame's generation;
    * rendering never enters or invalidates the loading queue. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
@@ -309,6 +314,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           : part;
       boardMenu.session.primaryClick({ kind, label: citation ?? part, part });
       notifyMenu();
+    },
+    setReadingLayoutPort(port) {
+      readingLayoutPort = port;
     },
     setReferencePorts(ports) {
       referencePorts = ports;
@@ -615,6 +623,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     clearSearch: () => {
       if (find.hasSearch()) find.clearSearch();
     },
+    readingLayout: (change) => readingLayoutPort?.(change),
   });
 
   const selectSession = createSelectSession({
@@ -639,6 +648,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // -- the menu (scenario 9): selection opens the target's acts ------
   const menuObservers = new Set<(view: MenuView | null) => void>();
   let referencePorts: import("../lib/menu/acts.ts").ReferencePorts | null = null;
+  let readingLayoutPort: ((change: ReadingLayoutChange) => void) | null = null;
   const boardMenu = createBoardMenu({
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),

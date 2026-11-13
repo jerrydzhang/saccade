@@ -129,6 +129,9 @@ export type PortObservation = {
       sequenceTimeoutMs: number;
     }>;
   }>;
+  /** The window's board reading layout (lib/board/reading-layout.ts):
+   * the text zoom and the column-width scale. */
+  reading: Readonly<{ zoom: number; width: number }>;
   /** The tasks surface's shown page (the pipeline): the rows with
    * their tasks and links, the label selection, and the groups'
    * titles. Null on every other surface. */
@@ -306,6 +309,7 @@ export function buildReadout(
     follow: PortObservation["follow"];
     presentation?: PortObservation["presentation"];
     input: PortObservation["input"];
+    reading: PortObservation["reading"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -338,6 +342,7 @@ export function buildReadout(
     follow: input.follow,
     presentation: input.presentation ?? null,
     input: input.input,
+    reading: input.reading,
     tasks: input.surface === "tasks"
       ? tasksViewOf(tasksFrame, input.state)
       : null,

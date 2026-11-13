@@ -262,16 +262,21 @@ body {
   color: var(--port-color-muted);
 }
 
+/* The reading layout (lib/board/reading-layout.ts): the window sets
+ * --port-reading-zoom (the text) and --port-reading-width (the column
+ * alone). The column scales with both, so zoom keeps a line's length
+ * in characters; the window caps it. The board's own text sizes below
+ * are em, so they follow the zoom. */
 .port-board-stage {
   position: relative;
-  max-width: var(--port-measure);
+  max-width: calc(var(--port-measure) * var(--port-reading-zoom) * var(--port-reading-width));
   margin: 0 auto;
 }
 
 .port-board-view {
   padding: 1rem 1.25rem 4rem 1.25rem;
   font-family: var(--port-font-world);
-  font-size: 1rem;
+  font-size: calc(1rem * var(--port-reading-zoom));
   line-height: var(--port-world-leading);
   background: var(--port-world-background);
   color: var(--port-world-foreground);
@@ -292,16 +297,16 @@ body {
 .diagram-caption,
 .figure-placeholder {
   color: var(--port-color-muted);
-  font-size: 0.8125rem;
+  font-size: 0.8125em;
 }
 
 /* a text figure: its text, scrollable in place (placement only) */
 .block-figure .figure-text {
-  max-height: 24rem;
+  max-height: 24em;
   overflow: auto;
   margin: 0;
   font-family: var(--port-font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.8125em;
   white-space: pre;
 }
 
@@ -328,7 +333,7 @@ body {
 .md-code,
 .raw-html {
   font-family: var(--port-font-mono);
-  font-size: 0.875rem;
+  font-size: 0.875em;
   white-space: pre-wrap;
 }
 

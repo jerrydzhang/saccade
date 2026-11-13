@@ -13,10 +13,11 @@ use std::path::Path;
 use rusqlite::Connection;
 
 /// The schema version this window store writes and understands.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// One stored window state: what the window shows, where in the
-/// content it reads, its zoom, its annotation drafts - drafts riding
+/// content it reads, its zoom and column width (the board's reading
+/// layout, schema v2), its annotation drafts - drafts riding
 /// the state per t-24@r20 - and the device and window store sequence of its
 /// last change, so a device can recognise its own echo.
 #[derive(Clone, Debug)]
@@ -25,6 +26,8 @@ pub struct StateRow {
     pub location: Option<String>,
     pub part: Option<String>,
     pub zoom: Option<f64>,
+    /// The board column's width scale beside the zoom (schema v2).
+    pub width: Option<f64>,
     /// The validated drafts JSON, stored and returned verbatim.
     pub drafts: Option<String>,
     pub last_device: Option<String>,
@@ -90,6 +93,7 @@ impl WindowStore {
             Some(found) if found > SCHEMA_VERSION => {
                 return Err(OpenFail::TooNew { found });
             }
+            Some(1) => Self::migrate_v1_to_v2(&conn)?,
             Some(_) => {}
         }
         Ok(WindowStore { conn })
@@ -109,6 +113,7 @@ impl WindowStore {
                location TEXT,
                part TEXT,
                zoom REAL,
+               width REAL,
                drafts TEXT,
                last_device TEXT,
                changed INTEGER NOT NULL
@@ -125,11 +130,27 @@ impl WindowStore {
                PRIMARY KEY (device, from_state)
              );
              INSERT OR REPLACE INTO windows_meta (key, value)
-               VALUES ('schema_version', '1');
+               VALUES ('schema_version', '2');
              COMMIT;",
         )
         .map_err(|e| OpenFail::Storage(e.to_string()))?;
         Ok(())
+    }
+
+    /// v1 -> v2: the column-width scale joins the zoom. One
+    /// transaction: the column and the version stamp land together or
+    /// not at all; existing rows read width as absent.
+    fn migrate_v1_to_v2(conn: &Connection) -> Result<(), OpenFail> {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE window_states ADD COLUMN width REAL;
+             UPDATE windows_meta SET value = '2' WHERE key = 'schema_version';
+             COMMIT;",
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK;");
+            OpenFail::Storage(format!("window store v1 -> v2: {e}"))
+        })
     }
 
     /// The window store's monotonic change sequence: every write bumps it, and
@@ -154,7 +175,7 @@ impl WindowStore {
     pub fn states(&self) -> Result<Vec<StateRow>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, location, part, zoom, drafts, last_device, changed FROM window_states ORDER BY id")
+            .prepare("SELECT id, location, part, zoom, width, drafts, last_device, changed FROM window_states ORDER BY id")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], row_state)
@@ -167,7 +188,7 @@ impl WindowStore {
     pub fn state(&self, id: &str) -> Result<Option<StateRow>, String> {
         self.conn
             .query_row(
-                "SELECT id, location, part, zoom, drafts, last_device, changed
+                "SELECT id, location, part, zoom, width, drafts, last_device, changed
                  FROM window_states WHERE id = ?1",
                 [id],
                 row_state,
@@ -182,24 +203,23 @@ impl WindowStore {
     /// Birth of a state: client-generated opaque id, the creating
     /// device named. An existing id refuses - the caller re-reads
     /// rather than clobbers.
-    pub fn create(
-        &self,
-        id: &str,
-        device: &str,
-        location: Option<&str>,
-        part: Option<&str>,
-        zoom: Option<f64>,
-        drafts: Option<&str>,
-    ) -> Result<u64, StoreFail> {
+    pub fn create(&self, id: &str, device: &str, fields: &StateFields) -> Result<u64, StoreFail> {
+        let StateFields {
+            location,
+            part,
+            zoom,
+            width,
+            drafts,
+        } = *fields;
         if self.state(id).map_err(StoreFail::Storage)?.is_some() {
             return Err(StoreFail::Exists(id.to_string()));
         }
         let seq = self.bump().map_err(StoreFail::Storage)?;
         self.conn
             .execute(
-                "INSERT INTO window_states (id, location, part, zoom, drafts, last_device, changed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![id, location, part, zoom, drafts, device, seq as i64],
+                "INSERT INTO window_states (id, location, part, zoom, width, drafts, last_device, changed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![id, location, part, zoom, width, drafts, device, seq as i64],
             )
             .map_err(|e| StoreFail::Storage(e.to_string()))?;
         Ok(seq)
@@ -223,6 +243,7 @@ impl WindowStore {
             ("location", &patch.location),
             ("part", &patch.part),
             ("zoom", &patch.zoom),
+            ("width", &patch.width),
             ("drafts", &patch.drafts),
             ("last_device", &Some(StateValue::Text(device))),
         ] {
@@ -380,6 +401,16 @@ pub enum LinkFail {
     Storage(String),
 }
 
+/// A state's own fields at its birth; absent ones are stored as null.
+#[derive(Clone, Copy, Default)]
+pub struct StateFields<'a> {
+    pub location: Option<&'a str>,
+    pub part: Option<&'a str>,
+    pub zoom: Option<f64>,
+    pub width: Option<f64>,
+    pub drafts: Option<&'a str>,
+}
+
 /// One settled field change: set to text, set to a number, or clear.
 /// A field absent from the patch never moves.
 pub enum StateValue<'a> {
@@ -395,6 +426,7 @@ pub struct StatePatch<'a> {
     pub location: Option<StateValue<'a>>,
     pub part: Option<StateValue<'a>>,
     pub zoom: Option<StateValue<'a>>,
+    pub width: Option<StateValue<'a>>,
     pub drafts: Option<StateValue<'a>>,
 }
 
@@ -404,9 +436,10 @@ fn row_state(row: &rusqlite::Row) -> Result<StateRow, rusqlite::Error> {
         location: row.get(1)?,
         part: row.get(2)?,
         zoom: row.get(3)?,
-        drafts: row.get(4)?,
-        last_device: row.get(5)?,
-        changed: row.get::<_, i64>(6).map(|n: i64| n.max(0) as u64)?,
+        width: row.get(4)?,
+        drafts: row.get(5)?,
+        last_device: row.get(6)?,
+        changed: row.get::<_, i64>(7).map(|n: i64| n.max(0) as u64)?,
     })
 }
 
@@ -452,7 +485,7 @@ mod test {
     }
 
     #[test]
-    fn a_fresh_file_inits_schema_v1_and_opens_again() {
+    fn a_fresh_file_inits_schema_v2_and_opens_again() {
         let path = scratch("fresh");
         {
             let store = WindowStore::open(&path).unwrap();
@@ -461,6 +494,70 @@ mod test {
         }
         let again = WindowStore::open(&path).unwrap();
         assert_eq!(again.seq().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_v1_file_migrates_to_v2_keeping_its_rows() {
+        // a window store written before the width column: the v1 schema
+        // exactly as v1's init_schema wrote it, with one state in it
+        let path = scratch("v1");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE windows_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE windows_seq (n INTEGER NOT NULL);
+                 INSERT INTO windows_seq (n) VALUES (3);
+                 CREATE TABLE window_states (
+                   id TEXT PRIMARY KEY, location TEXT, part TEXT, zoom REAL,
+                   drafts TEXT, last_device TEXT, changed INTEGER NOT NULL
+                 );
+                 CREATE TABLE window_attachments (
+                   device TEXT NOT NULL,
+                   state TEXT NOT NULL REFERENCES window_states(id) ON DELETE CASCADE,
+                   PRIMARY KEY (device, state)
+                 );
+                 CREATE TABLE window_links (
+                   device TEXT NOT NULL,
+                   from_state TEXT NOT NULL REFERENCES window_states(id) ON DELETE CASCADE,
+                   to_state TEXT NOT NULL REFERENCES window_states(id) ON DELETE CASCADE,
+                   PRIMARY KEY (device, from_state)
+                 );
+                 INSERT INTO windows_meta (key, value) VALUES ('schema_version', '1');
+                 INSERT INTO window_states (id, location, part, zoom, drafts, last_device, changed)
+                   VALUES ('old', 'tracker/t-3', NULL, 1.3, NULL, 'dev-a', 3);",
+            )
+            .unwrap();
+        }
+        let store = WindowStore::open(&path).unwrap();
+        let version: String = store
+            .conn
+            .query_row(
+                "SELECT value FROM windows_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "2");
+        assert_eq!(store.seq().unwrap(), 3, "the sequence survives");
+        let row = store.state("old").unwrap().unwrap();
+        assert_eq!(row.location.as_deref(), Some("tracker/t-3"));
+        assert_eq!(row.zoom, Some(1.3));
+        assert_eq!(row.width, None, "a migrated row has no width yet");
+        store
+            .update(
+                "old",
+                "dev-a",
+                &StatePatch {
+                    width: Some(StateValue::Number(1.4)),
+                    ..StatePatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(store.state("old").unwrap().unwrap().width, Some(1.4));
+        drop(store);
+        // reopening a migrated file is a plain v2 open
+        let again = WindowStore::open(&path).unwrap();
+        assert_eq!(again.state("old").unwrap().unwrap().width, Some(1.4));
     }
 
     #[test]
@@ -487,9 +584,16 @@ mod test {
     fn create_update_and_the_echo_facts() {
         let store = WindowStore::open(&scratch("update")).unwrap();
         store
-            .create("s1", "dev-a", Some("tracker/t-5"), None, None, None)
+            .create(
+                "s1",
+                "dev-a",
+                &StateFields {
+                    location: Some("tracker/t-5"),
+                    ..StateFields::default()
+                },
+            )
             .unwrap();
-        match store.create("s1", "dev-a", None, None, None, None) {
+        match store.create("s1", "dev-a", &StateFields::default()) {
             Err(StoreFail::Exists(id)) => assert_eq!(id, "s1"),
             other => panic!("expected Exists, got {other:?}"),
         }
@@ -503,6 +607,7 @@ mod test {
                 &StatePatch {
                     location: Some(StateValue::Text("tracker/t-7")),
                     zoom: Some(StateValue::Number(1.2)),
+                    width: Some(StateValue::Number(0.8)),
                     ..StatePatch::default()
                 },
             )
@@ -511,6 +616,7 @@ mod test {
         let row = store.state("s1").unwrap().unwrap();
         assert_eq!(row.location.as_deref(), Some("tracker/t-7"));
         assert_eq!(row.zoom, Some(1.2));
+        assert_eq!(row.width, Some(0.8));
         assert_eq!(row.last_device.as_deref(), Some("dev-b"));
         // absent fields stay
         store.update("s1", "dev-a", &StatePatch::default()).unwrap();
@@ -535,10 +641,12 @@ mod test {
     #[test]
     fn attach_detach_and_the_target_side_link_lapse() {
         let store = WindowStore::open(&scratch("links")).unwrap();
-        store.create("from", "dev", None, None, None, None).unwrap();
-        store.create("to", "dev", None, None, None, None).unwrap();
         store
-            .create("other", "dev", None, None, None, None)
+            .create("from", "dev", &StateFields::default())
+            .unwrap();
+        store.create("to", "dev", &StateFields::default()).unwrap();
+        store
+            .create("other", "dev", &StateFields::default())
             .unwrap();
         for id in ["from", "to", "other"] {
             store.attach("dev", id).unwrap();
@@ -580,7 +688,7 @@ mod test {
     #[test]
     fn detach_of_an_unattached_state_is_a_change_but_idempotent_in_effect() {
         let store = WindowStore::open(&scratch("detach")).unwrap();
-        store.create("s", "dev", None, None, None, None).unwrap();
+        store.create("s", "dev", &StateFields::default()).unwrap();
         store.attach("dev", "s").unwrap();
         let attached = store.attached("dev").unwrap();
         assert_eq!(attached, vec!["s".to_string()]);
@@ -594,10 +702,10 @@ mod test {
     fn discard_removes_the_state_its_attachments_and_every_link_touching_it() {
         let store = WindowStore::open(&scratch("discard")).unwrap();
         store
-            .create("gone", "dev-a", None, None, None, None)
+            .create("gone", "dev-a", &StateFields::default())
             .unwrap();
         store
-            .create("keeper", "dev-a", None, None, None, None)
+            .create("keeper", "dev-a", &StateFields::default())
             .unwrap();
         store.attach("dev-a", "gone").unwrap();
         store.attach("dev-a", "keeper").unwrap();
@@ -605,7 +713,7 @@ mod test {
         store.set_link("dev-a", "keeper", "gone").unwrap();
         store.attach("dev-a", "gone").unwrap();
         store
-            .create("source", "dev-a", None, None, None, None)
+            .create("source", "dev-a", &StateFields::default())
             .unwrap();
         store.attach("dev-a", "source").unwrap();
         store.set_link("dev-a", "gone", "keeper").unwrap();

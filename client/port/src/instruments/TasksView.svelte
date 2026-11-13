@@ -11,6 +11,7 @@ return anchor's identity), data-port-open names the row's link. -->
   import type { MenuView, SelectSessionView } from "./tasks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
 import { placeMenuInStage } from "../lib/menu/geometry.ts";
+import { bindMenuDismissal } from "../lib/menu/dismiss.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
@@ -70,9 +71,19 @@ import { ageOf } from "../lib/tasks/page.ts";
     );
   }
 
-  const now = $state(Date.now());
+  // the ages are read against the moment the shown page arrived: a
+  // follow refresh moves them with the rows
+  const now = $derived((void content.page, Date.now()));
 let menuElement: HTMLElement | null = $state(null);
   let menuAt = $state({ x: 4, y: 4 });
+
+  // An open menu closes on a pointer-down or a wheel outside it
+  // (lib/menu/dismiss.ts); bound only while the menu is painted.
+  $effect(() => {
+    const element = menuElement;
+    if (element === null) return;
+    return bindMenuDismissal(element, controller.menuSession());
+  });
 
   $effect(() => {
     if (menu === null) return;

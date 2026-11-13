@@ -16,6 +16,9 @@ export type WindowState = {
   location: string | null;
   part: string | null;
   zoom: number | null;
+  /** The board column's width scale (lib/board/reading-layout.ts);
+   * absent from a tracker that predates it. */
+  width?: number | null;
   drafts: WindowDraft[] | null;
   lastDevice: string | null;
   changed: number;
@@ -27,6 +30,7 @@ export type WindowFields = {
   location?: string | null;
   part?: string | null;
   zoom?: number | null;
+  width?: number | null;
   drafts?: WindowDraft[] | null;
 };
 

@@ -30,6 +30,10 @@
   --port-space-strip: 0.375rem 0.75rem;
   --port-space-block: 1rem 0;
   --port-measure: 44rem;
+  /* the reading layout's scales: the window sets them per window on
+   * its content scroller (lib/board/reading-layout.ts); 1 is normal */
+  --port-reading-zoom: 1;
+  --port-reading-width: 1;
   --port-world-leading: 1.5;
   --port-radius: 0;
 }
