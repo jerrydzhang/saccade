@@ -69,9 +69,10 @@ green meanwhile; `just port-test-pending` runs exactly those (unit, then
 browser) and they fail until the feature lands. Never `test.fails`: a pending
 test passes when its feature works, and then its tag comes off. A pending
 test that needs a readout field the port lacks reads a PROPOSED field, named
-in `kit/driver.ts` (today `InputView`, the readout's `input`) for the feature
-to adopt or rename. A unit test for an unbuilt module imports it by a runtime
-path, so the suite still collects (see `tests/which-key.test.ts`).
+in `kit/driver.ts` for the feature to adopt or rename (batch 3's `InputView`
+was one; the readout's `input` adopted it). A unit test for an unbuilt module
+imports it by a runtime path, so the suite still collects (as
+`tests/which-key.test.ts` did until `which-key.ts` landed).
 
 ## The kit
 

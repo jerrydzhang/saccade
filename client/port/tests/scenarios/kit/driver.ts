@@ -72,9 +72,7 @@ export interface AppDriver {
   /** Whether an act menu is open now. */
   menuOpen(): Promise<boolean>;
   /** The content part visibly marked as find's active match, or null.
-   * PROPOSED observable: the port renders no such marker yet; this
-   * reads a data-port-find-active attribute on the match's part
-   * (find-next.scenario.ts, the known defect). */
+   * Reads the data-port-find-active mark (D2, lib/find/marks.ts). */
   activeMatch(): Promise<string | null>;
   /** Find's painted marks in document order (D2): each mark's text as
    * shown, the content part it sits in, and whether it is the active
@@ -88,11 +86,11 @@ export interface AppDriver {
   focusWindow(label: string): Promise<void>;
 }
 
-/** PROPOSED readout field (batch 3, not in the port yet): the input
+/** The readout's input field (batch 3, served by D6): the input
  * matcher's live state, the observable the which-key, help and timeout
  * scenarios read. Strokes and keys use the port's own help labels
  * (src/lib/input/input-context.ts formatStroke/formatSequence: "spc",
- * "g g", "Ctrl-f", "Shift-G"). Absent until the feature lands. */
+ * "g g", "Ctrl-f", "Shift-G"). */
 export type InputView = {
   /** The pending strokes of an unfinished sequence, or [] */
   pending: string[];
@@ -104,7 +102,7 @@ export type InputView = {
   tunables: { whichKeyDelayMs: number; whichKeySuspendsTimeout: boolean; sequenceTimeoutMs: number };
 };
 
-/** The proposed input field of a readout, or undefined before it lands. */
+/** The input field of a readout (undefined on a build without it). */
 export function inputOf(obs: PortObservation): InputView | undefined {
   return (obs as PortObservation & { input?: InputView }).input;
 }

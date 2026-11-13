@@ -37,24 +37,29 @@ export interface WindowActions {
   showHelp(): void;
 }
 
-// The two oracle-pinned window chords (the app's own back/forward
-// bindings since the old app: Ctrl-o, Ctrl-i). The seam consults
-// these before its modifier-chord refusal; every other ctrl/alt/meta
-// chord still passes native (the IME/native-editing boundary set
-// stays draft-open, grouped decision).
-export const PINNED_WINDOW_CHORDS: readonly { key: string; ctrl: boolean }[] = [
+// The pinned chords: exactly the Ctrl chords the prototype claims
+// (inst16.html:494-495) - Ctrl-o / Ctrl-i (the trail, the app's own
+// back/forward since the old app) and Ctrl-f / b / d / u (paging, D5).
+// The seam consults these before its modifier-chord refusal; every
+// other ctrl/alt/meta chord still passes native (the IME/native-
+// editing boundary set stays draft-open, grouped decision).
+export const PINNED_CHORDS: readonly { key: string; ctrl: boolean }[] = [
   { key: "o", ctrl: true },
   { key: "i", ctrl: true },
+  { key: "f", ctrl: true },
+  { key: "b", ctrl: true },
+  { key: "d", ctrl: true },
+  { key: "u", ctrl: true },
 ];
 
-export function isPinnedWindowChord(stroke: {
+export function isPinnedChord(stroke: {
   key: string;
   ctrl: boolean;
   shift: boolean;
   alt: boolean;
   meta: boolean;
 }): boolean {
-  return PINNED_WINDOW_CHORDS.some(
+  return PINNED_CHORDS.some(
     (chord) =>
       stroke.ctrl === chord.ctrl &&
       !stroke.shift &&

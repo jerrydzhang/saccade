@@ -1,10 +1,10 @@
-// PENDING (batch 3, red before the code): the paging steps, verified
-// against the prototype (inst16.html:495 Ctrl f/b 0.9 and d/u 0.5 of the
-// body's clientHeight, :504 j/k 60px, :505 d/u 0.5), the same bindings
-// on boards and lists, ignored inside inputs (inst16.html:489). The port
-// today pages "full" at 1.0 of the height (src/components/Buffer.ts
-// scrollPage) and steps lines at 40px; Ctrl chords other than o/i pass
-// native (src/App.ts). Read through the readout's viewport.
+// D5, the paging steps, verified against the prototype (inst16.html:495
+// Ctrl f/b 0.9 and d/u 0.5 of the body's clientHeight, :504 j/k 60px,
+// :505 d/u 0.5), the same bindings on boards and lists, ignored inside
+// inputs (inst16.html:489). Written red before the code: the port paged
+// at 1.0 and stepped 40px, and every Ctrl chord but o/i passed native
+// (src/App.ts; now contexts.ts PINNED_CHORDS). Read through the
+// readout's viewport.
 import { expect, test } from "#scenario";
 import { find, longBoard, openLocation, spec, submitLocation } from "./kit/helpers.ts";
 import type { AppDriver } from "./kit/driver.ts";
@@ -33,25 +33,34 @@ async function stepsMatch(app: AppDriver): Promise<void> {
   for (const [key, step] of STEPS) {
     const before = await top(app);
     await app.press(key);
-    await expect.poll(() => top(app), { message: `${key} moves ${step(height)}px` }).toBeCloseTo(before + step(height), 0);
+    // within 1px: scrollTop lands on whole (device) pixels while a
+    // fractional step (0.5 or 0.9 of an odd height) does not, so the
+    // exact target is unreachable by a pixel's fraction; the app
+    // never rounds
+    await expect
+      .poll(async () => Math.abs((await top(app)) - (before + step(height))), { message: `${key} moves ${step(height)}px` })
+      .toBeLessThanOrEqual(1);
   }
 }
 
-test("boards page by the prototype's steps", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("boards page by the prototype's steps", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, await longBoard(tracker)));
   await app.press("Escape");
   await stepsMatch(app);
 });
 
-test("lists page by the same steps", { tags: ["pending"] }, async ({ app, tracker }) => {
-  for (let index = 0; index < 60; index++) await tracker.createTask(`paging row ${index + 1}`);
+test("lists page by the same steps", async ({ app, tracker }) => {
+  // 150 rows: the steps start mid-page (two Ctrl-f and three j, about
+  // 2h) and still need a Ctrl-f of room; 60 rows scrolled only ~1.4h
+  // on a 775px viewport, so the setup ended at the bottom
+  for (let index = 0; index < 150; index++) await tracker.createTask(`paging row ${index + 1}`);
   await submitLocation(app, spec(tracker, "tasks"));
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null).toBe("loaded");
   await app.press("Escape");
   await stepsMatch(app);
 });
 
-test("paging keys inside an input are text, not paging (holds today: a guard, not pending)", async ({ app, tracker }) => {
+test("paging keys inside an input are text, not paging (a guard: it held before the paging landed)", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, await longBoard(tracker)));
   await find(app, "par");
   const before = await top(app);

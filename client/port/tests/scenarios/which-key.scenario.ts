@@ -1,14 +1,14 @@
-// PENDING (batch 3, red before the code): which-key, a matcher property
+// D6, which-key, a matcher property
 // (human ruling r110). Any stroke that leaves a sequence pending shows
 // that prefix's continuations, read from the ACTIVE context's tables:
 // space and g alike. The popup delay and the timeout-suspend are named
 // tunables, read from the readout, never pinned here. Observable: the
-// PROPOSED readout field `input` (kit/driver.ts InputView) and the
-// popup's control id `which-key`.
+// readout's `input` field (kit/driver.ts InputView) and the popup's
+// control id `which-key`. Written red before the code (batch 3).
 import { expect, test } from "#scenario";
 import { openLocation, readInput, spec } from "./kit/helpers.ts";
 
-test("space shows its continuations after the named delay", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("space shows its continuations after the named delay", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, tracker.tasks.landing));
   const { tunables } = await readInput(app);
   await app.press("Escape");
@@ -28,7 +28,7 @@ test("space shows its continuations after the named delay", { tags: ["pending"] 
   }
 });
 
-test("g shows its continuations too: a matcher property, not a space special case", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("g shows its continuations too: a matcher property, not a space special case", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, tracker.tasks.landing));
   const { tunables } = await readInput(app);
   await app.press("Escape");
@@ -37,7 +37,7 @@ test("g shows its continuations too: a matcher property, not a space special cas
   expect((await readInput(app)).whichKey!.entries.map((entry) => entry.keys)).toContain("g g");
 });
 
-test("an open popup suspends the sequence timeout; the continuation completes", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("an open popup suspends the sequence timeout; the continuation completes", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, tracker.tasks.landing));
   const { tunables } = await readInput(app);
   expect(tunables.whichKeySuspendsTimeout, "the default suspends the timeout").toBe(true);

@@ -47,7 +47,7 @@ import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { SEQUENCE_TIMEOUT_MS } from "./lib/input/key-matcher.ts";
 import { whichKeyTunables } from "./lib/input/which-key.ts";
-import { isPinnedWindowChord, windowContext } from "./lib/input/contexts.ts";
+import { isPinnedChord, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import {
   assignChips,
@@ -1070,13 +1070,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // Modifier chords stay native until the IME/native-editing
     // boundary set is pinned (draft-open, grouped decision): the port
     // never eats an OS or browser chord while the boundary is unset.
-    // The ONE carve-out is the oracle-pinned window chords (Ctrl-o,
-    // Ctrl-i - the app's own back/forward bindings): the window
-    // context owns exactly those two, so they reach the matcher;
-    // every other modifier chord still passes native.
+    // The carve-out is the pinned chords (contexts.ts PINNED_CHORDS:
+    // the prototype's own Ctrl-o/i trail and Ctrl-f/b/d/u paging):
+    // those reach the matcher; every other modifier chord still
+    // passes native.
     if (
       (event.ctrlKey || event.altKey || event.metaKey) &&
-      !isPinnedWindowChord({
+      !isPinnedChord({
         key: event.key,
         ctrl: event.ctrlKey,
         shift: event.shiftKey,

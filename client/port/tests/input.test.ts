@@ -8,7 +8,7 @@ import { test } from "vitest";
 import { commandContext, key, sequence } from "../src/lib/input/input-context.ts";
 import { createMatcher, SEQUENCE_TIMEOUT_MS, validateNoCollisions } from "../src/lib/input/key-matcher.ts";
 import { createHostMatcher, dispatchStroke, type HostScheduler } from "../src/lib/input/host.ts";
-import { boardReadingContext, isPinnedWindowChord, windowContext } from "../src/lib/input/contexts.ts";
+import { boardReadingContext, isPinnedChord, windowContext } from "../src/lib/input/contexts.ts";
 import { createPickerController } from "../src/lib/input/picker.ts";
 import type { KeyDisposition, KeyInput } from "../src/lib/input/input-context.ts";
 
@@ -87,14 +87,17 @@ test("the pinned window chords run back/forward through the host matcher", () =>
   assert.deepStrictEqual(ran, ["back", "forward"]);
 });
 
-test("the seam carve-out names exactly the two pinned chords", () => {
-  // only bare ctrl+o / ctrl+i pass the refusal; shift-combos, alt/meta
-  // variants and other keys never do
+test("the seam carve-out names exactly the prototype's six Ctrl chords", () => {
+  // only bare ctrl+o/i/f/b/d/u pass the refusal (inst16.html:494-495);
+  // shift-combos, alt/meta variants and other keys never do
   const pinned = (k: string, ctrl: boolean, shift: boolean, alt: boolean, meta: boolean) =>
-    isPinnedWindowChord({ key: k, ctrl, shift, alt, meta });
+    isPinnedChord({ key: k, ctrl, shift, alt, meta });
   assert.ok(pinned("o", true, false, false, false));
   assert.ok(pinned("i", true, false, false, false));
+  for (const k of ["f", "b", "d", "u"]) assert.ok(pinned(k, true, false, false, false), k);
   assert.ok(!pinned("p", true, false, false, false));
+  assert.ok(!pinned("c", true, false, false, false));
+  assert.ok(!pinned("f", true, true, false, false));
   assert.ok(!pinned("o", true, true, false, false));
   assert.ok(!pinned("o", true, false, true, false));
   assert.ok(!pinned("o", true, false, false, true));

@@ -1,4 +1,4 @@
-// PENDING (batch 3, red before the code): '?' is which-key with an empty
+// D6 (written red before the code, batch 3): '?' is which-key with an empty
 // prefix over the active context's whole command table. RECORDED
 // DIFFERENCE: the prototype's showHelp (inst16.html:90-96) is a
 // hand-curated key list; the port's help is table-driven (the
@@ -10,7 +10,7 @@
 import { expect, test } from "#scenario";
 import { openLocation, readInput, spec } from "./kit/helpers.ts";
 
-test("? lists the active context's whole command table", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("? lists the active context's whole command table", async ({ app, tracker }) => {
   await openLocation(app, spec(tracker, tracker.tasks.landing));
   await app.press("Escape");
   await app.press("?");

@@ -1,6 +1,6 @@
-// PENDING (batch 3, red before the code): which-key is a property of the
-// matcher's tables, not a space special case (human ruling r110). These
-// read a PROPOSED pure projection the feature adds:
+// D6 (written red before the code, batch 3): which-key is a property of
+// the matcher's tables, not a space special case (human ruling r110).
+// These read the pure projection:
 //
 //   src/lib/input/which-key.ts
 //     continuations(context: InputContext, prefix: readonly KeyInput[])
@@ -21,6 +21,7 @@ import {
   type InputContext,
   type KeyInput,
 } from "../src/lib/input/input-context.ts";
+import * as whichKeyModule from "../src/lib/input/which-key.ts";
 
 type Entry = { keys: string; label: string; actionId: string };
 type WhichKeyModule = {
@@ -28,10 +29,7 @@ type WhichKeyModule = {
   whichKeyTunables: { delayMs: number; suspendsTimeout: boolean };
 };
 
-// a runtime path, so the suite collects (and typechecks) before the
-// module exists
-const MODULE = "../src/lib/input/which-key.ts";
-const whichKey = (): Promise<WhichKeyModule> => import(/* @vite-ignore */ MODULE) as Promise<WhichKeyModule>;
+const whichKey = async (): Promise<WhichKeyModule> => whichKeyModule;
 
 const stroke = (k: string, over: Partial<KeyInput> = {}): KeyInput =>
   ({ key: k, ctrl: false, shift: false, alt: false, meta: false, ...over });
@@ -53,7 +51,7 @@ function table(): { context: InputContext; bindings: CommandBinding[] } {
   return { context: commandContext(() => bindings), bindings };
 }
 
-test("a pending prefix lists exactly its continuations from the table", { tags: ["pending"] }, async () => {
+test("a pending prefix lists exactly its continuations from the table", async () => {
   const { continuations } = await whichKey();
   const { context } = table();
   expect(continuations(context, [stroke("g")])).toEqual([{ keys: "g g", label: "scroll to the top", actionId: "t.top" }]);
@@ -61,14 +59,14 @@ test("a pending prefix lists exactly its continuations from the table", { tags: 
   expect(space).toEqual(["spc /", "spc spc"]);
 });
 
-test("composition: a command added to the table appears with no other change", { tags: ["pending"] }, async () => {
+test("composition: a command added to the table appears with no other change", async () => {
   const { continuations } = await whichKey();
   const { context, bindings } = table();
   bindings.push(bind("t.trail", "the trail", "g", "t"));
   expect(continuations(context, [stroke("g")]).map((entry) => entry.actionId).sort()).toEqual(["t.top", "t.trail"]);
 });
 
-test("help: the empty prefix lists every bound command with its keys", { tags: ["pending"] }, async () => {
+test("help: the empty prefix lists every bound command with its keys", async () => {
   const { continuations } = await whichKey();
   const { context } = table();
   const listed = continuations(context, []);
@@ -79,7 +77,7 @@ test("help: the empty prefix lists every bound command with its keys", { tags: [
   }
 });
 
-test("the popup delay and the timeout-suspend are named tunables", { tags: ["pending"] }, async () => {
+test("the popup delay and the timeout-suspend are named tunables", async () => {
   const { whichKeyTunables } = await whichKey();
   expect(whichKeyTunables.delayMs).toBeGreaterThan(0);
   expect(typeof whichKeyTunables.suspendsTimeout).toBe("boolean");

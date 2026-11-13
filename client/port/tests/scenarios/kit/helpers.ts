@@ -92,7 +92,7 @@ export async function answerAsk(app: AppDriver, window: string): Promise<void> {
   await app.press("Enter");
 }
 
-/** The readout's PROPOSED input field (kit/driver.ts InputView); a
+/** The readout's input field (kit/driver.ts InputView); a
  * build without it fails the read, naming the field. */
 export async function readInput(app: AppDriver): Promise<InputView> {
   const input = inputOf(await app.readout());
