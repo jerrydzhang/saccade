@@ -37,7 +37,7 @@ function sacBin(): string {
     ? explicit
     : (spawnSync("sh", ["-c", "command -v sac"], { encoding: "utf8" }).stdout ?? "").trim();
   if (!isAbsolute(found)) {
-    throw new Error("the scenarios need the real sac binary: set SACCADE_SERVE_BIN to an absolute path (just port-test-browser builds it)");
+    throw new Error("the scenarios need the real sac binary: set SACCADE_SERVE_BIN to an absolute path (just app-test-browser builds it)");
   }
   accessSync(found, constants.X_OK);
   return found;

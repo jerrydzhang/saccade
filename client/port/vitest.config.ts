@@ -37,11 +37,11 @@ const tags = [
 
 // pending: a scenario written RED, before the feature it gates. Skipped
 // in the ordinary runs (the gates stay green meanwhile); `just
-// port-test-pending` runs exactly these. The tag comes off when the
+// app-test-pending` runs exactly these. The tag comes off when the
 // feature lands and the test passes.
 const pending = {
   name: "pending",
-  description: "gates an unbuilt feature: red until it lands (just port-test-pending)",
+  description: "gates an unbuilt feature: red until it lands (just app-test-pending)",
   skip: !process.env.SAC_PORT_SUITE_PENDING,
 };
 

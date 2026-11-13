@@ -30,7 +30,7 @@ just viewer-check
 ```
 
 The native test project runs only through the gated session lane:
-`just port-test-native` (below, and `port/tests/scenarios/README.md`).
+`just app-test-native` (below, and `port/tests/scenarios/README.md`).
 
 ## Layout
 
@@ -67,7 +67,7 @@ that spawns runs inside one bwrap sandbox under
 - `preflight` - the minimal containment verification
 - `session suite` - a private headless Weston around the built app, then
   vitest's native project (payload `suite_payload.py`); what
-  `just port-test-native` runs
+  `just app-test-native` runs
 - `session up` / `up-t36` / `down` and the window verbs - the held
   WebDriver session the t36 Python port lane (`t36_*.py`) drives; that
   lane migrates into vitest next, then goes

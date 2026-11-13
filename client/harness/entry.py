@@ -53,7 +53,7 @@ FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
     ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
     # the app's frontend typecheck (client/port; its suites run through
-    # vitest: just port-test and just port-test-browser)
+    # vitest: just app-test and just app-test-browser)
     ("typecheck", ["node_modules/.bin/tsc", "--noEmit", "-p", "port/tsconfig.json"]),
     # the read-only herdr-core client is a pure crate: its contract
     # tests (request shapes, error mapping, truncation refusal, remote

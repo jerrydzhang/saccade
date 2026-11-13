@@ -7,13 +7,13 @@ in `client/harness/t36_*.py` remains until its scenarios migrate here.
 
 | project | what | command | runtime |
 | --- | --- | --- | --- |
-| unit | `tests/*.test.ts`, pure and component tests, in node | `just port-test` | about 1s |
-| browser | `tests/scenarios/*.scenario.ts` and `*.browser.ts` in headless WebKit | `just port-test-browser` | about 10s |
-| native | the scenarios tagged `native` or `multi-window`, in the built app, in the session sandbox | `just port-test-native` (gated, below) | about 8s in the sandbox |
+| unit | `tests/*.test.ts`, pure and component tests, in node | `just app-test` | about 1s |
+| browser | `tests/scenarios/*.scenario.ts` and `*.browser.ts` in headless WebKit | `just app-test-browser` | about 10s |
+| native | the scenarios tagged `native` or `multi-window`, in the built app, in the session sandbox | `just app-test-native` (gated, below) | about 8s in the sandbox |
 
 `just test` runs the unit and browser projects after the cargo suite, and the
 `port-unit` prek hook runs the unit project on every commit. One file or test
-name: `just port-test-browser s14` (vitest's own filters pass through).
+name: `just app-test-browser s14` (vitest's own filters pass through).
 
 ## Writing a scenario
 
@@ -66,7 +66,7 @@ The rules:
 
 A test that gates a feature not built yet is tagged `pending`
 (`{ tags: ["pending"] }`). Every ordinary run skips it, so the gates stay
-green meanwhile; `just port-test-pending` runs exactly those (unit, then
+green meanwhile; `just app-test-pending` runs exactly those (unit, then
 browser) and they fail until the feature lands. Never `test.fails`: a pending
 test passes when its feature works, and then its tag comes off. A pending
 test that needs a readout field the port lacks reads a PROPOSED field, named
@@ -135,7 +135,7 @@ fresh app: one window, no launch restore. WebdriverIO is the client, in
 classic WebDriver mode (WebKitWebDriver has no BiDi).
 
 ```sh
-SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<the caller-side tracker db> just port-test-native
+SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<the caller-side tracker db> just app-test-native
 ```
 
 `SAC_APP_BIN` defaults to the nix-built app (`.#saccade-app`; its

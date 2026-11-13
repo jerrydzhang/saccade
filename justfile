@@ -7,12 +7,12 @@ lint:
 
 # the full suite: the cargo workspace, the app shell's own tests, then
 # the app frontend's vitest unit and browser projects (the native
-# project is gated: just port-test-native)
+# project is gated: just app-test-native)
 test:
     cargo test -q
     just shell-test
-    just port-test
-    just port-test-browser
+    just app-test
+    just app-test-browser
 
 # the app shell library's tests (client/src-tauri/src, compiled through
 # client/port-shell): the GTK/WebKit build needs the saccade-app shell
@@ -22,20 +22,20 @@ shell-test:
 # The port's suite: one runner (vitest), three projects
 # (client/port/vitest.config.ts, client/port/tests/scenarios/README.md).
 # unit: the pure and component tests, in node.
-port-test:
+app-test:
     cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit
 
 # browser: the scenarios in headless WebKit against the port served by
 # vite, with a throwaway seeded tracker from the built sac; the
 # saccade-app shell carries the pinned Playwright browsers and the
 # software-EGL mesa pin
-port-test-browser *args:
+app-test-browser *args:
     cargo build -q -p saccade --bin sac
-    nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' port-test-browser {{args}}
+    nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' app-test-browser {{args}}
 
 # pending: the tests tagged pending, written red before the feature
 # they gate (skipped in every other run); unit, then browser
-port-test-pending:
+app-test-pending:
     cd client && SAC_PORT_SUITE_PENDING=1 node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --tags-filter pending || true
     cargo build -q -p saccade --bin sac
     nix develop .#saccade-app -c bash -c 'cd client && SAC_PORT_SUITE_PENDING=1 SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser --tags-filter pending'
@@ -47,7 +47,7 @@ port-test-pending:
 # caller passes SAC_APP_RUNTIME_AUTHORIZED and SACCADE_DB (the
 # caller-side tracker db the canary proves invisible); SAC_APP_BIN
 # defaults to the nix-built port app.
-port-test-native:
+app-test-native:
     cargo build -q -p saccade --bin sac
     nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app)/bin/saccade-app}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite'
 

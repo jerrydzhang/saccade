@@ -61,14 +61,14 @@ do, and `tracker/README.md` carries the tracker's law.
 - `cargo build` is the judge, not grep.
 - While iterating, run the suites that own the touched contract (the
   lib unit tests for tracker code; for app code `just viewer-check`
-  and the app's vitest projects, `just port-test` and
-  `just port-test-browser`); the full suite runs once before a commit
+  and the app's vitest projects, `just app-test` and
+  `just app-test-browser`); the full suite runs once before a commit
   lands.
 - A phase gate: the suites (`just test`: cargo, the app shell's
   tests, the app's vitest unit and browser projects), fmt, every prek
   hook on each commit, and the app's native project in the gated
   session lane:
-  `SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> just port-test-native`
+  `SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> just app-test-native`
   (the sandbox, the canary, a private Weston, then vitest's native
   project against the built app; `SAC_APP_BIN` names a built app, else
   `.#saccade-app` is built). The lane logs are inspected, not assumed.
