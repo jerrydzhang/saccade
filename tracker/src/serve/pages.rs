@@ -832,7 +832,8 @@ fn now_secs() -> u64 {
 /// recorded state - waiting (open, not claimed), in flight (open and
 /// claimed), awaiting judgment (offered), concluded in the last 24
 /// hours. Each section is one titled group holding one table; a row
-/// is task, title, agents, latest commit, with the task's birth moment
+/// is task, title, agents, latest commit, latest revision (rN, the
+/// revision the latest commit published), with the task's birth moment
 /// riding the row for the age to render from, and its location the
 /// board Enter opens through the link. Pure record: the agents' state
 /// shapes are the client's live join, never page data.
@@ -861,6 +862,11 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
             .last()
             .map(|c| c.commit.as_str().to_string())
             .unwrap_or_default();
+        let latest_revision = if ctx.commits.is_empty() {
+            String::new()
+        } else {
+            format!("r{}", ctx.commits.len())
+        };
         let birth_at = record_time(snapshot, ctx.birth);
         let row = table_row(
             vec![
@@ -868,6 +874,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
                 ctx.task.name.as_str().to_string(),
                 agents,
                 latest_commit,
+                latest_revision,
             ],
             Some(task),
             birth_at,
@@ -894,6 +901,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
         "title".to_string(),
         "agents".to_string(),
         "latest commit".to_string(),
+        "latest revision".to_string(),
     ];
     let section = |title: &str, rows: Vec<TableRow>| Part::Group {
         title: Some(title.to_string()),

@@ -63,8 +63,21 @@ impl WindowStore {
     pub fn open(path: &Path) -> Result<WindowStore, OpenFail> {
         let conn = Connection::open(path)
             .map_err(|e| OpenFail::Storage(format!("{}: {e}", path.display())))?;
+        // the record db's own durability settings (record/db.rs): WAL with
+        // synchronous=NORMAL commits without the rollback journal's
+        // fsyncs per write, and a busy wait instead of an immediate
+        // refusal; the default journal made every window act pay several
+        // fsyncs (t-36 m-556)
+        let storage = |e: rusqlite::Error| OpenFail::Storage(e.to_string());
+        conn.busy_timeout(std::time::Duration::from_millis(5000))
+            .map_err(storage)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(storage)?;
+        // journal_mode answers the resulting mode as a row: read, discard
+        conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+            .map_err(storage)?;
         conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| OpenFail::Storage(e.to_string()))?;
+            .map_err(storage)?;
         let version: Option<String> = conn
             .query_row(
                 "SELECT value FROM windows_meta WHERE key = 'schema_version'",
@@ -411,6 +424,31 @@ mod test {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("tracker.db.windows")
+    }
+
+    #[test]
+    fn the_store_opens_with_the_record_dbs_durability_settings() {
+        // WAL with synchronous=NORMAL and a busy timeout, as the record db
+        // opens (record/db.rs): the default rollback journal with full
+        // sync costs several fsyncs per write, which on a contended disk
+        // made every window act wait (t-36 m-556: the browser flake)
+        let path = scratch("durability");
+        let store = WindowStore::open(&path).unwrap();
+        let mode: String = store
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let synchronous: i64 = store
+            .conn
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1, "synchronous=NORMAL");
+        let timeout: i64 = store
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
     }
 
     #[test]

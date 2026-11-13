@@ -48,3 +48,6 @@ result-[0-9]*
 # Installed product skill: generated from tracker/skill in the devshell
 .agents
 .claude
+
+# vitest's run attachments (failure screenshots, traces) for the port suite
+client/port/.vitest

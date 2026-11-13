@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "saccade-app",
+  "version": "0.2.0",
+  "identifier": "dev.saccade.app",
+  "build": {
+    "devUrl": "http://localhost:1422",
+    "frontendDist": "../port/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Saccade",
+        "width": 1100,
+        "height": 800,
+        "minWidth": 520,
+        "minHeight": 360
+      }
+    ],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http: https:"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../src-tauri/icons/icon.png"
+    ]
+  }
+}

@@ -98,7 +98,7 @@ content:
 
 `text` is markdown with dollar math, fenced code blocks, and Mermaid
 diagrams in a mermaid-fenced block. Mermaid support is uneven across
-Markdown renderers; the viewer renders it (client/src/lib/render.ts).
+Markdown renderers; the app renders it (client/port/src/lib/render.ts).
 `group` nests content under an optional title; `figure` names a file in
 the board tree plus a caption; `incorporation` cites another task's
 revision **by number** with select paths and its own receiving text;

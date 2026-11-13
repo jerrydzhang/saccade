@@ -10144,8 +10144,8 @@ async fn the_agents_page_names_sessions_ownership_and_workspaces() {
 // The pipeline page (t-14 "Tasks and agents"): one view, sectioned by
 // recorded state - waiting (open, not claimed), in flight (open and
 // claimed), awaiting judgment (offered), concluded in the last 24
-// hours. A row is task, title, agents, latest commit, with the task's
-// birth moment riding the row and its location the board Enter opens
+// hours. A row is task, title, agents, latest commit, latest revision,
+// with the task's birth moment riding the row and its location the board Enter opens
 // through the link. The page's watch is the whole fold: any landing
 // can move some row.
 #[tokio::test(flavor = "multi_thread")]
@@ -10183,7 +10183,13 @@ async fn the_pipeline_page_sections_the_recorded_state() {
     let waiting = section_table(&doc, "waiting");
     assert_eq!(
         waiting["columns"],
-        json!(["task", "title", "agents", "latest commit"])
+        json!([
+            "task",
+            "title",
+            "agents",
+            "latest commit",
+            "latest revision"
+        ])
     );
     // the fixture's end state: t-1 open and unclaimed, t-0 offered
     let t1 = row_of(&waiting, "t-1").expect("t-1 waits");
@@ -10208,6 +10214,20 @@ async fn the_pipeline_page_sections_the_recorded_state() {
         .unwrap()["value"]
         .clone();
     assert_eq!(t0["cells"][3], commit);
+    // the latest revision names the revision that commit published: the
+    // board page's own revision fact reads "rK of N"
+    let (_, body) = get_json(&url, "/view/v1/t-0");
+    let revision_fact = json_of(&body)["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "fact" && p["label"] == "revision")
+        .unwrap()["value"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = revision_fact.split(' ').next().unwrap().to_string();
+    assert_eq!(t0["cells"][4], json!(shown));
     // the empty sections are present, plain and empty
     assert!(
         section_table(&doc, "in flight")["rows"]

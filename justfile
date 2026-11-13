@@ -5,17 +5,70 @@ lint:
     cargo check
     cargo clippy
 
+# the full suite: the cargo workspace, the app shell's own tests, then
+# the app frontend's vitest unit and browser projects (the native
+# project is gated: just app-test-native)
 test:
     cargo test -q
+    just shell-test
+    just app-test
+    just app-test-browser
+
+# the app shell library's tests (client/src-tauri/src, compiled through
+# client/port-shell): the GTK/WebKit build needs the saccade-app shell
+shell-test:
+    nix develop .#saccade-app -c bash -c 'cargo test -q --manifest-path client/port-shell/Cargo.toml'
+
+# The port's suite: one runner (vitest), three projects
+# (client/port/vitest.config.ts, client/port/tests/scenarios/README.md).
+# unit: the pure and component tests, in node.
+app-test:
+    cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit
+
+# browser: the scenarios in headless WebKit against the port served by
+# vite, with a throwaway seeded tracker from the built sac; the
+# saccade-app shell carries the pinned Playwright browsers and the
+# software-EGL mesa pin
+app-test-browser *args:
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' app-test-browser {{args}}
+
+# pending: the tests tagged pending, written red before the feature
+# they gate (skipped in every other run); unit, then browser
+app-test-pending:
+    cd client && SAC_PORT_SUITE_PENDING=1 node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --tags-filter pending || true
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'cd client && SAC_PORT_SUITE_PENDING=1 SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser --tags-filter pending'
+
+# native: the scenarios tagged native or multi-window, in the built
+# port app, through the session lane's suite mode (entry.py session
+# suite: the enforced sandbox, the canary, a private Weston, then
+# vitest's native project). Gated like every lane that spawns: the
+# caller passes SAC_APP_RUNTIME_AUTHORIZED and SACCADE_DB (the
+# caller-side tracker db the canary proves invisible); SAC_APP_BIN
+# defaults to the nix-built port app.
+app-test-native:
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app)/bin/saccade-app}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite'
 
 typecheck:
     tracker/native/typecheck.sh
 
+# the plain, uncontained checks: the harness's own checks, pyflakes, the
+# app frontend's typecheck, the core client's contract tests, the build
 viewer-check:
     python3 client/harness/entry.py check-fast
 
-viewer-native-check:
-    nix develop .#saccade-app -c bash -c 'cd client/src-tauri && cargo test'
+# The port's debug binary for native-lane iteration (r88): vite builds
+# the port dist, cargo builds the port crate with the embedded-dist
+# feature, patchelf sets a store rpath so the binary runs inside the
+# scrubbed lane sandbox, and the result is pinned at the lane's debug
+# root. Nix still builds the authoritative binary once, last, per
+# chunk - Nix reproduces this environment; it is not a per-iteration
+# toll.
+port-debug-bin:
+    cd client && node_modules/.bin/vite build -c port/vite.config.ts
+    nix develop .#saccade-app -c bash -c 'cargo build --manifest-path client/port-shell/Cargo.toml --features custom-protocol && bash client/harness/port_debug_pin.sh'
 
 viewer-shell:
     nix develop .#saccade-app

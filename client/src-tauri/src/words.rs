@@ -54,12 +54,21 @@ pub struct WordRow {
 pub struct WordsSnapshot {
     pub generation: u64,
     pub words: BTreeMap<String, WordRow>,
+    /// Whether the feed holds a live connection to Herdr core: the
+    /// strip says "Herdr unreachable" when it does not (t-34@r6 change 6).
+    pub connected: bool,
+    /// Why not, when not: the socket's path and the failure, or the
+    /// missing runtime directory - what the human needs to fix it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
 }
 
 #[derive(Debug, Default)]
 struct Table {
     generation: u64,
     words: BTreeMap<String, WordRow>,
+    connected: bool,
+    problem: Option<String>,
 }
 
 #[derive(Debug)]
@@ -69,6 +78,25 @@ struct Shared {
 }
 
 impl Shared {
+    /// The connection's state and, when down, why; a change is news for
+    /// the waiters and a line in the app's log.
+    fn set_connected(&self, connected: bool, problem: Option<String>) {
+        let mut table = self.table.lock().expect("the words table is not poisoned");
+        if table.connected == connected && table.problem == problem {
+            return;
+        }
+        match (&problem, connected) {
+            (_, true) => eprintln!("[bridge] herdr words feed connected"),
+            (Some(why), false) => eprintln!("[bridge] herdr words feed down: {why}"),
+            (None, false) => eprintln!("[bridge] herdr words feed down"),
+        }
+        table.connected = connected;
+        table.problem = if connected { None } else { problem };
+        table.generation += 1;
+        drop(table);
+        self.changed.notify_all();
+    }
+
     fn publish(&self, update: impl FnOnce(&mut BTreeMap<String, WordRow>)) {
         let mut table = self.table.lock().expect("the words table is not poisoned");
         table.generation += 1;
@@ -117,6 +145,8 @@ impl WordsFeed {
             return WordsSnapshot {
                 generation: table.generation,
                 words: table.words.clone(),
+                connected: table.connected,
+                problem: table.problem.clone(),
             };
         }
         let deadline = std::time::Instant::now() + hold;
@@ -139,6 +169,8 @@ impl WordsFeed {
         WordsSnapshot {
             generation: table.generation,
             words: table.words.clone(),
+            connected: table.connected,
+            problem: table.problem.clone(),
         }
     }
 }
@@ -169,24 +201,35 @@ fn feed_loop(shared: Arc<Shared>, socket: PathBuf, backoff: Duration) {
         let transport = SocketTransport::new(socket.clone());
         let mut connection = match EventsConnection::open(&transport) {
             Ok(connection) => connection,
-            Err(_) => {
+            Err(fail) => {
+                shared.set_connected(false, Some(fail.to_string()));
                 std::thread::sleep(backoff);
                 continue;
             }
         };
+        shared.set_connected(true, None);
         let mut first = true;
-        loop {
+        let why = loop {
             match connection.next_event(first) {
                 // a clean EOF, before any frame or mid-stream: the
-                // connection is done; reconnect on the backoff
-                Ok(CoreEvent::Other) => break,
+                // connection is done; reconnect on the backoff. An event
+                // this build does not read is skipped, never an end:
+                // treating one as an end dropped the feed on every
+                // unknown event, emptying the live states each time
+                Ok(CoreEvent::End) => {
+                    break format!("the core at {} closed the event stream", socket.display())
+                }
+                Ok(CoreEvent::Other) => {
+                    first = false;
+                }
                 Ok(event) => {
                     first = false;
                     apply(&shared, event);
                 }
-                Err(_) => break,
+                Err(fail) => break fail.to_string(),
             }
-        }
+        };
+        shared.set_connected(false, Some(why));
         std::thread::sleep(backoff);
     }
 }
@@ -248,7 +291,7 @@ fn apply(shared: &Shared, event: CoreEvent) {
                 row.at = at;
             });
         }
-        CoreEvent::Other => {}
+        CoreEvent::Other | CoreEvent::End => {}
     }
 }
 
@@ -258,8 +301,18 @@ static FEED: OnceLock<WordsFeed> = OnceLock::new();
 
 /// Start the app's feed, once, from the shell's setup: the socket the
 /// setup resolved, or none.
-pub fn start(socket: Option<PathBuf>) {
-    let _ = FEED.set(WordsFeed::spawn(socket, Duration::from_secs(2)));
+/// Start the app's feed on the resolved socket, or - when none could be
+/// resolved - park it with the reason, so the strip can say why.
+pub fn start(socket: Result<PathBuf, String>) {
+    let feed = match socket {
+        Ok(path) => WordsFeed::spawn(Some(path), Duration::from_secs(2)),
+        Err(why) => {
+            let feed = WordsFeed::spawn(None, Duration::from_secs(2));
+            feed.shared.set_connected(false, Some(why));
+            feed
+        }
+    };
+    let _ = FEED.set(feed);
 }
 
 /// The app's feed, started on demand when a command arrives first:
@@ -360,6 +413,10 @@ mod tests {
             );
             snapshot = feed.wait(snapshot.generation, Duration::from_secs(1));
         }
+        assert!(
+            snapshot.connected,
+            "a feed on a live core says it is connected"
+        );
         let row = snapshot.words.get("t1").expect("the terminal's row");
         assert_eq!(row.state.as_deref(), Some("working"));
         assert_eq!(row.msg.as_deref(), Some("editing src"));
@@ -371,10 +428,68 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_event_keeps_the_connection_and_the_words() {
+        // the human's core sends event types this build does not read;
+        // each one used to end the feed's connection and empty the table
+        let lines = vec![
+            r#"{"jsonrpc":"2.0","id":1,"result":{"channel":null,"seq":1,"terminals":[{"address":"t1","state":"live"}]}}"#.into(),
+            r#"{"jsonrpc":"2.0","method":"event","params":{"seq":2,"terminal":"t1","type":"created","data":{}}}"#.into(),
+            status_line(3, "t1", "working", "after an unknown event"),
+        ];
+        let (socket, _dir) = fake_core(&lines);
+        let feed = WordsFeed::spawn(Some(socket), Duration::from_millis(10));
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut snapshot = feed.wait(0, Duration::from_millis(400));
+        while snapshot
+            .words
+            .get("t1")
+            .and_then(|row| row.state.clone())
+            .is_none()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the word after the unknown event never landed"
+            );
+            snapshot = feed.wait(snapshot.generation, Duration::from_millis(500));
+        }
+        assert!(
+            snapshot.connected,
+            "the unknown event did not drop the connection"
+        );
+        assert_eq!(
+            snapshot.words["t1"].msg.as_deref(),
+            Some("after an unknown event")
+        );
+    }
+
+    #[test]
     fn a_feed_with_no_core_dials_nothing_and_answers_quiet() {
         let feed = WordsFeed::spawn(None, Duration::from_millis(10));
         let snapshot = feed.wait(0, Duration::from_millis(80));
         assert_eq!(snapshot.generation, 0);
         assert!(snapshot.words.is_empty());
+        assert!(
+            !snapshot.connected,
+            "no core: the strip can say Herdr is unreachable"
+        );
+    }
+
+    #[test]
+    fn a_feed_whose_core_is_gone_says_it_is_not_connected() {
+        let socket = std::env::temp_dir().join(format!("sac-no-core-{}.sock", std::process::id()));
+        let feed = WordsFeed::spawn(Some(socket), Duration::from_millis(10));
+        // the first landing is the feed's own clear; the failed dial
+        // follows it
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut snapshot = feed.wait(0, Duration::from_millis(200));
+        while snapshot.problem.is_none() && std::time::Instant::now() < deadline {
+            snapshot = feed.wait(snapshot.generation, Duration::from_millis(200));
+        }
+        assert!(!snapshot.connected);
+        let why = snapshot.problem.expect("the strip is told why");
+        assert!(
+            why.contains("sac-no-core"),
+            "the reason names the socket: {why}"
+        );
     }
 }

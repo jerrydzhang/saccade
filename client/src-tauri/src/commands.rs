@@ -38,6 +38,24 @@ pub fn test_open() -> Option<String> {
     spec
 }
 
+/// The key-trace diagnostic (SACCADE_KEY_TRACE, the port's
+/// lib/input/key-trace.ts): answers whether the variable is set and,
+/// when it is, writes the window's trace lines to this process's
+/// stderr - the terminal the person launched the app from. Unset (a
+/// normal run) it answers false and writes nothing.
+#[tauri::command]
+pub fn key_trace(window: tauri::Window, lines: Vec<String>) -> bool {
+    let on = std::env::var("SACCADE_KEY_TRACE")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if on {
+        for line in lines {
+            eprintln!("[key-trace] {} {}", window.label(), line);
+        }
+    }
+    on
+}
+
 /// The declared tracker machine (t-24@r12): the Herdr machine that
 /// hosts this tracker, read on demand by a bare-path open. None on the
 /// hub, where the local core's own machine is read.

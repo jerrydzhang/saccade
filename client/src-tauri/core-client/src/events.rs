@@ -52,8 +52,11 @@ pub enum CoreEvent {
     CoreRestarted,
     /// An event this build does not interpret. It rides the stream so
     /// a later consumer (the deck's document events, t-21) can join
-    /// the fan-out without a second subscription.
+    /// the fan-out without a second subscription. It is never the end
+    /// of the stream: a consumer skips it and reads on.
     Other,
+    /// The core closed the stream (a clean EOF): the connection is done.
+    End,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,7 +242,7 @@ impl EventsConnection {
                 detail: format!("stream read: {e}"),
             })?;
         if read == 0 {
-            return Ok(CoreEvent::Other);
+            return Ok(CoreEvent::End);
         }
         parse_line(line.trim_end_matches(['\n', '\r']), first)
     }
@@ -392,6 +395,18 @@ mod test {
             CoreEvent::CoreRestarted
         );
         assert_eq!(connection.next_event(false).unwrap(), CoreEvent::Other);
+    }
+
+    #[test]
+    fn an_unknown_event_is_not_the_end_of_the_stream() {
+        assert_eq!(
+            parse_line(
+                r#"{"jsonrpc":"2.0","method":"event","params":{"type":"output","terminal":"t1"}}"#,
+                false
+            )
+            .unwrap(),
+            CoreEvent::Other
+        );
     }
 
     #[test]

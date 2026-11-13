@@ -1,0 +1,45 @@
+/* The port's theme overlay (t-36 r93/r94): the ONE injection point
+ * for the design language. This file only ASSIGNS token values on
+ * :root - no selectors, no component rules, no !important. Removing
+ * this file (and its import in main.ts) restores the placement-only
+ * base exactly; replacing it swaps the whole language. The values are
+ * the round-16 prototype's compiled tokens (saccade-mockups-r16.html,
+ * provenance t-22@r3), transcribed - the visual judgment is deferred
+ * to vision-capable review per r94; every value here is reviewable.
+ *
+ * The instrument's own token block, extracted verbatim:
+ * fonts JetBrains Mono (UI) / Source Serif 4 (world) / Inter (heads);
+ * app-bg #0d0f13; inks #d6dae2 / #8b93a3 / #5b6372; accent #4c8dff;
+ * selection rgba(76,141,255,.28); lines rgba(255,255,255,.09);
+ * radii 3px/5px; the paper world #f4f1ea.
+ */
+
+:root {
+  /* type: the prototype's stack, its own fallbacks */
+  --port-font-sans: Inter, system-ui, sans-serif;
+  --port-font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --port-font-world: "Source Serif 4", Georgia, serif;
+
+  /* color: the r16 dark palette */
+  --port-color-background: #0d0f13;
+  --port-color-ink-strong: #ffffff;
+  --port-color-foreground: #d6dae2;
+  --port-color-muted: #8b93a3;
+  --port-color-faint: #5b6372;
+  --port-color-line: rgba(255, 255, 255, 0.09);
+  --port-color-line-soft: rgba(255, 255, 255, 0.05);
+  --port-color-accent: #4c8dff;
+  --port-color-selection: rgba(76, 141, 255, 0.28);
+  --port-color-hover: rgba(76, 141, 255, 0.13);
+
+  /* the world: the paper the board's prose sits on (r16's w-*) */
+  --port-world-background: #f4f1ea;
+  --port-world-foreground: #1c1b19;
+
+  /* space and line: the prototype's world rhythm */
+  --port-space-strip: 0.25rem 0.75rem;
+  --port-space-block: 0.85rem 0;
+  --port-measure: 44rem;
+  --port-world-leading: 1.62;
+  --port-radius: 3px;
+}

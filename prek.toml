@@ -13,6 +13,10 @@ hooks = [
     entry = "bash", language = "system",
     args = ["tracker/native/typecheck.sh"],
     pass_filenames = false, always_run = true },
+  { id = "port-unit", name = "the port's unit project passes (vitest)",
+    entry = "sh", language = "system",
+    args = ["-c", "test -x client/node_modules/.bin/vitest || { echo 'port-unit: client/node_modules is missing; run npm ci in client' >&2; exit 1; }; cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
+    pass_filenames = false, always_run = true },
 ]
 
 [[repos]]
@@ -34,14 +38,16 @@ hooks = [
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "merge-gate", name = "merge gate: the full suite and the #all build",
+  { id = "merge-gate", name = "merge gate: the full suite (just test) and the #all build",
     entry = "bash", language = "system",
     args = ["-c", '''
 set -eu
 # the push hands the hook git's own env: every scratch repo the tests
 # build would resolve against this checkout's git dir without the scrub
 unset $(git rev-parse --local-env-vars) 2>/dev/null || true
-cargo test -q
+# the full suite: cargo, the app shell's tests, the vitest unit and
+# browser projects (justfile test)
+just test
 sha="${PRE_COMMIT_TO_REF:-}"
 case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
 repo="$(git rev-parse --path-format=absolute --git-common-dir)"

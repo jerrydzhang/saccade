@@ -1,13 +1,17 @@
 //! The suite shell's window acts (t-14 "The suite"): one app, many
 //! first-class windows, the window manager owning all layout. The
 //! shell creates windows (`w`, the ask-once answer's new-window act,
-//! and resuming a detached window state here), focuses one only when the
-//! human asks (the window jump, through the platform's activation
-//! request), broadcasts the window jump's labels to every suite
-//! window, and detaches a closing window's state - closing
-//! detaches, the state stays (t-24@r20). Placement is never set: a
-//! new window gets whatever the window manager gives, and a new
-//! window never asks for focus.
+//! and resuming a detached window state here), focuses one when the
+//! human asks (the window jump) and when the human opens something
+//! through the link (o, i, w, the task row's Enter: the receiver is
+//! focused, human ruling t-36 m-547, reversing t-14's "a new window
+//! never asks for focus" for those acts), always through the
+//! platform's activation request (focus_suite_window), broadcasts the
+//! window jump's labels to every suite window, and detaches a closing
+//! window's state - closing detaches, the state stays (t-24@r20).
+//! Placement is never set: a new window gets whatever the window
+//! manager gives. A window created for any other reason (the launch
+//! restore) does not take focus when mapped.
 
 use std::thread;
 use std::time::Duration;
@@ -64,6 +68,14 @@ pub fn on_window_event(
                 "[shell] window {label} destroyed; detaching {}",
                 entry.state_id
             );
+            use tauri::Manager;
+            let remaining = window
+                .app_handle()
+                .webview_windows()
+                .into_keys()
+                .filter(|other| *other != label)
+                .count();
+            crate::session::closed(&entry.state_id, remaining);
             if let (Some(server), Some(device)) = (entry.server, entry.device) {
                 detach_async(server, device, entry.state_id);
             } else {
@@ -124,7 +136,8 @@ pub fn suite_windows(
 }
 
 /// Open a suite window: the window manager gives it what it gives,
-/// focus is never requested, and the state it should resume - when
+/// it does not take focus on map (the frontend's elsewhere acts then
+/// request focus for it, m-547), and the state it should resume - when
 /// the caller names one - is pre-seeded so the new window's bootstrap
 /// finds the binding and applies the state.
 #[tauri::command]
@@ -147,13 +160,102 @@ pub fn open_suite_window(
     let built_label = label.clone();
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::default())
         .title("Saccade")
+        // An explicit inner size at creation: an unmapped webview
+        // sizes its viewport to CONTENT until the compositor maps
+        // it, and an unconstrained viewport cannot scroll at all
+        // (clientHeight == scrollHeight) - the first-use verdict's
+        // defect 1, where j/k and paging were dead in every window
+        // the WM had not yet activated. The size forces the layout
+        // constraint at creation; the window does not take focus on map.
+        .inner_size(1024.0, 768.0)
         .focused(false)
         .build()
+        .and_then(|window| {
+            // The builder's size is a request; an unactivated GTK
+            // window can defer its widget allocation, leaving the
+            // webview's viewport unconstrained (content-sized, so
+            // nothing can scroll - defect 1's shape). An explicit
+            // resize after build forces the allocation now.
+            window.set_size(tauri::LogicalSize::new(1024.0, 768.0))?;
+            // focused(false) builds the GTK window with accept_focus
+            // false, and tao 0.37.2 restores it only on the toplevel's
+            // FIRST draw - which on niri (Wayland) never came: the
+            // compositor showed the window activated and GTK dropped
+            // every key (m-537/538). Not taking focus on map is not
+            // refusing focus: refuse the first, allow the second, now
+            // (the elsewhere acts request focus explicitly, m-547).
+            // tao's late draw hook only sets true again.
+            {
+                use gtk::prelude::GtkWindowExt;
+                let gtk_window = window.gtk_window()?;
+                gtk_window.set_focus_on_map(false);
+                gtk_window.set_accept_focus(true);
+            }
+            // m-540 (trace 2): niri activated the born window and GTK
+            // marked it active, yet keys reached nothing until a click
+            // inside: the WebKit view was not the toplevel's focus
+            // widget. Make it the focus widget now - grab_focus on a
+            // window that is not active sets the focus widget without
+            // asking for activation (never Tauri's set_focus, which
+            // requests it) - and again whenever the window becomes
+            // active without the view holding focus.
+            window.with_webview(|platform| {
+                use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+                let view = platform.inner();
+                view.grab_focus();
+                if let Some(toplevel) = view.toplevel() {
+                    if let Ok(toplevel) = toplevel.downcast::<gtk::Window>() {
+                        let view = view.clone();
+                        toplevel.connect_is_active_notify(move |toplevel| {
+                            let holds = toplevel
+                                .focused_widget()
+                                .is_some_and(|widget| widget == *view.upcast_ref::<gtk::Widget>());
+                            if toplevel.is_active() && !holds {
+                                view.grab_focus();
+                            }
+                        });
+                    }
+                }
+            })?;
+            Ok(window)
+        })
         .map(|_| built_label)
         .map_err(|error| {
             registry.take_binding(&label);
             format!("the window manager refused: {error}")
         })
+}
+
+/// GTK's own focus facts for the calling window (m-537/538): whether
+/// the toplevel accepts keyboard focus at all, whether it takes focus
+/// when mapped, and whether it is the active window now. Read from GTK
+/// directly - never inferred from focus events - because a window can
+/// be shown activated by the compositor while GTK drops its keys.
+#[derive(serde::Serialize)]
+pub struct FocusState {
+    pub accepts_focus: bool,
+    pub focus_on_map: bool,
+    pub is_active: bool,
+    /// The toplevel's focus widget's GType name ("WebKitWebView" when
+    /// keys reach the page), or None when the window has none.
+    pub focus_widget: Option<String>,
+}
+
+#[tauri::command]
+pub fn window_focus_state(window: tauri::WebviewWindow) -> Result<FocusState, String> {
+    use gtk::prelude::GtkWindowExt;
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    Ok(FocusState {
+        accepts_focus: gtk_window.accepts_focus(),
+        focus_on_map: gtk_window.gets_focus_on_map(),
+        is_active: gtk_window.is_active(),
+        focus_widget: {
+            use gtk::glib::prelude::ObjectExt;
+            gtk_window
+                .focused_widget()
+                .map(|widget| widget.type_().name().to_string())
+        },
+    })
 }
 
 /// The window jump's focus move: the human asked, so the activation

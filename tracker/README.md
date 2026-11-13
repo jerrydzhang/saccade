@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.0"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.1"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -188,7 +188,8 @@ nothing writes through `/view/v1`.
   the registration family, the claims and the commits), `tasks` (the
   pipeline: one table per recorded state - waiting, in flight,
   awaiting judgment, concluded last 24h - each row task, title,
-  agents, latest commit, with the task's birth moment riding the row
+  agents, latest commit, latest revision (rN, the revision that commit
+  published), with the task's birth moment riding the row
   and its location the board; the window is read-time, staleness is
   rendering; the agents' state shapes are the client's live join, never
   page data; the watch is the whole fold),

@@ -297,9 +297,9 @@
     # is called on, so overlays.default can build it against a
     # consumer's own nixpkgs - the packaged binary then shares the
     # host's GL stack instead of this flake's pin. The repo root rides
-    # in explicitly: the app's cargo tree spans client/src-tauri and
-    # the shared grammar crate, and package paths are rooted explicitly
-    # would stay an unnormalized ".." path inside flake evaluation.
+    # in explicitly: the app's cargo tree spans client/port-shell,
+    # client/src-tauri and the shared grammar crate, and a relative
+    # climb would stay an unnormalized ".." path inside flake evaluation.
     saccadeApp =
       pkgs: root:
         pkgs.callPackage ./saccade-app.nix {repoRoot = root;};
