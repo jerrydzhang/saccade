@@ -130,3 +130,27 @@ test("labels: two namespaces, stable order, single letters first", () => {
   const labels = assignLabels(["text", "group", "text", "figure"]);
   assert.deepEqual(labels, ["a", "A", "b", "B"]);
 });
+
+test("labels are prefix-free past 26 targets: every label is reachable by typing it", async () => {
+  // the prototype's labelsFor (inst16.html:100): up to 26 targets take
+  // single letters, more take two letters ALL of them - a single
+  // letter that prefixed a two-letter label could never complete
+  const { narrowStep, startNarrow } = await import("../src/lib/select/label-select.ts");
+  for (const count of [26, 27, 30]) {
+    const kinds = Array.from({ length: count }, () => "task" as const);
+    const labels = assignLabels(kinds);
+    for (const label of labels) {
+      assert.ok(!labels.some((other) => other !== label && other.startsWith(label)), `${label} prefixes another label (${count} targets)`);
+    }
+    labels.forEach((label, index) => {
+      let state = startNarrow(count);
+      let selected: number | null = null;
+      for (const ch of label) {
+        const step = narrowStep(state, kinds, kinds.map(() => ""), labels, ch);
+        state = step;
+        selected = step.selected;
+      }
+      assert.equal(selected, index, `${label} selects its own target (${count} targets)`);
+    });
+  }
+});

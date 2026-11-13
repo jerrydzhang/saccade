@@ -41,15 +41,19 @@ function combos(pool: string[]): string[] {
   return out;
 }
 
-/** The labels for `count` targets: the first targets of each namespace
- * get single letters, the rest get two-letter labels. Stable: target
- * order in the document is the label order. */
+/** The labels for `count` targets, per namespace: up to 26 targets
+ * take single letters; more take two-letter labels, ALL of them
+ * (inst16.html:100 labelsFor), so no label prefixes another and every
+ * one completes when typed. Stable: target order in the document is
+ * the label order. */
 export function assignLabels(kinds: TargetKind[]): string[] {
   const textTargets = kinds.map((kind, index) => (isTextKind(kind) ? index : -1)).filter((index) => index >= 0);
   const otherTargets = kinds.map((kind, index) => (isTextKind(kind) ? -1 : index)).filter((index) => index >= 0);
   const labels: string[] = new Array(kinds.length).fill("");
-  const textPool = [...LOWER, ...combos(LOWER)];
-  const otherPool = [...UPPER, ...combos(UPPER)];
+  const pool = (letters: string[], count: number): string[] =>
+    count <= letters.length ? letters : combos(letters);
+  const textPool = pool(LOWER, textTargets.length);
+  const otherPool = pool(UPPER, otherTargets.length);
   textTargets.forEach((index, position) => {
     labels[index] = textPool[position] ?? "";
   });
