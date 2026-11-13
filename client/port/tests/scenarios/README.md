@@ -1,8 +1,9 @@
 # The port's scenarios
 
 One runner (vitest), three projects (`client/port/vitest.config.ts`), and one
-way to write a scenario. The Python harness in `client/harness/` stays the
-authoritative gate until scenarios cut over; nothing here replaces it yet.
+way to write a scenario. These projects are the app's test gate (the old
+app's harness lanes retired with it, t-36 m-554); the t36 Python port lane
+in `client/harness/t36_*.py` remains until its scenarios migrate here.
 
 | project | what | command | runtime |
 | --- | --- | --- | --- |
@@ -116,7 +117,7 @@ Every module is a test-infrastructure module; each line says why it exists.
 WebKit is the nix-pinned Playwright WebKit (`PLAYWRIGHT_BROWSERS_PATH` from
 the `saccade-app` devshell; npm `playwright` is pinned to the same 1.63.0, so
 nothing is downloaded). It runs display-less on the devshell's pinned mesa
-with software EGL, the browser lane's own recipe, so the recipe enters
+with software EGL (the retired browser lane's recipe), so the recipe enters
 `nix develop .#saccade-app`. There is no Tauri bridge in a browser, so the
 port starts empty and reaches the tracker through the host a typed location
 carries; the tracker allows exactly the vitest server's origin.
