@@ -6,6 +6,7 @@ visible on every conversion failure; a stale publication drops itself
 at the generation boundary. -->
 
 <script lang="ts">
+  import { untrack } from "svelte";
   import { hydrate } from "../lib/board/hydrate.ts";
   import { paintMarks } from "../lib/find/marks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
@@ -145,13 +146,55 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     return { left: box.left - hostBox.left, top: box.top - hostBox.top };
   }
 
+  // The render's own key: a frame republished for anything else (the
+  // render outcomes this very render reports, a follow poll answering
+  // the SAME revision with equal content as new objects, a find or
+  // menu change) leaves the key equal and the board is NOT rebuilt.
+  // Rebuilding put every figure back to its placeholder and refetched
+  // it - right when the outcomes said the figures were displayed - so
+  // s/x or a click in that window found no asset (D3/D4). A pinned
+  // revision (repo/t-N@rK) is immutable, so its address names its
+  // content; any other source keys on the board object itself.
+  let boardSerial = 0;
+  let lastBoard: unknown = null;
+  const renderKey = $derived.by(() => {
+    const path = content.resolved?.path ?? "";
+    let identity = path;
+    if (!/@r\d+$/.test(path)) {
+      if (content.board !== lastBoard) {
+        lastBoard = content.board;
+        boardSerial += 1;
+      }
+      identity = `${path}#${boardSerial}`;
+    }
+    return [
+      content.status,
+      String(content.generation),
+      content.resolved?.machine ?? "",
+      identity,
+      content.board === null ? "no-board" : "board",
+      content.folded.join("\n"),
+    ].join("\u0000");
+  });
+  let renders = $state(0);
+
   $effect(() => {
-    const frame = content;
+    // tracked: the render key and the host element, nothing else (a
+    // prop object such as the controller reads as changed on every
+    // republication, so the render body runs untracked)
+    void renderKey;
     const element = host;
     if (element === null) return;
+    untrack(() => renderInto(element));
+  });
+
+  function renderInto(element: HTMLElement): void {
+    const frame = content;
+    const board = frame.board;
     const location = frame.resolved;
-    if (frame.status !== "loaded" || frame.board === null || location === null) {
+    if (frame.status !== "loaded" || board === null || location === null) {
       element.replaceChildren();
+      renders += 1;
       return;
     }
     // A pending load may still display this older frame. Never stamp
@@ -159,13 +202,14 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     const generation = frame.generation;
     const hooks: RenderHooks = {
       unitIndex: new Map(),
-      folded: new Set(content.folded),
+      folded: new Set(frame.folded),
       onDiagnostic: (diagnostic) => {
         renderNotes.push(diagnostic.message);
       },
     };
-    const container = renderBoard(frame.board, hooks);
+    const container = renderBoard(board, hooks);
     element.replaceChildren(container);
+    renders += 1;
     const collected: RenderOutcome[] = [];
     void hydrate(container, controller, location, generation, collected).then(
       (outcomes) => {
@@ -173,7 +217,8 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
         controller.reportRenderOutcomes(generation, outcomes);
       },
     );
-  });
+  }
+
   // D2: the match marks on the matched TEXT (lib/find/marks.ts): a
   // mark on every occurrence, the active one distinct, repainted on
   // every find-view change (typing, stepping, commit, clear) and
@@ -184,7 +229,7 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
   $effect(() => {
     const element = host;
     const view = find;
-    void content;
+    void renders;
     if (element === null) return;
     const active = paintMarks(element, { query: view.query, parts: view.marks });
     const stepped = view.active !== paintedActive;

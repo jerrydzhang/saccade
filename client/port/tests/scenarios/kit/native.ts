@@ -190,6 +190,12 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
     },
+    async partText(part) {
+      return browser.execute((path: string) => {
+        const element = document.querySelector(`[data-port-part=${JSON.stringify(path)}]`);
+        return element instanceof HTMLElement ? element.innerText : null;
+      }, part);
+    },
     async findMarks() {
       return browser.execute(() => {
       const out: { part: string | null; text: string; active: boolean }[] = [];

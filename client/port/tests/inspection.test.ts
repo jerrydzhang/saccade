@@ -66,3 +66,14 @@ test("the readout carries the inspection while open, null when closed", () => {
   const open = buildReadout({ ...base, inspection: { part: "/content/0", zoom: 1.5 } });
   assert.deepEqual(open.inspection, { part: "/content/0", zoom: 1.5 });
 });
+
+test("a figure shows by its file: images by extension, text as text, other bytes as binary", async () => {
+  const { figureShape } = await import("../src/lib/figures/shape.ts");
+  const encode = (text: string) => new TextEncoder().encode(text);
+  assert.deepEqual(figureShape("figures/plot.png", new Uint8Array([137, 80])), { kind: "image", mime: "image/png" });
+  assert.deepEqual(figureShape("a/b.JPG", new Uint8Array([1])), { kind: "image", mime: "image/jpeg" });
+  assert.deepEqual(figureShape("x.svg", encode("<svg/>")), { kind: "image", mime: "image/svg+xml" });
+  assert.deepEqual(figureShape("sweep.py", encode("def f():\n  pass\n")), { kind: "text", text: "def f():\n  pass\n" });
+  assert.deepEqual(figureShape("change.diff", encode("+a\n-b\n")), { kind: "text", text: "+a\n-b\n" });
+  assert.deepEqual(figureShape("blob.gz", new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xff])), { kind: "binary" });
+});

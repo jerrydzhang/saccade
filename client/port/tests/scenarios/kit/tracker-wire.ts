@@ -14,6 +14,13 @@ function base64(text: string): string {
   return btoa(binary);
 }
 
+function base64Of(content: string | Uint8Array): string {
+  if (typeof content === "string") return base64(content);
+  let binary = "";
+  for (const byte of content) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export function trackerDoor(base: string): TrackerDoor {
   const call = async (method: string, route: string, payload?: unknown): Promise<Record<string, unknown>> => {
     const reply = await fetch(`${base}${route}`, {
@@ -35,11 +42,16 @@ export function trackerDoor(base: string): TrackerDoor {
       });
       return String(reply.id);
     },
-    async commit(task, board, message) {
+    async commit(task, board, message, files = []) {
       const reply = await call("POST", "/api/v1/boards/commit", {
         context: CONTEXT,
         task: Number(task.replace(/^t-/, "")),
-        files: { files: [{ path: "board.yaml", content: base64(board) }] },
+        files: {
+          files: [
+            { path: "board.yaml", content: base64(board) },
+            ...files.map((file) => ({ path: file.path, content: base64Of(file.content) })),
+          ],
+        },
         message,
         client: CLIENT,
       });

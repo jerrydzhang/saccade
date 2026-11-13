@@ -27,7 +27,13 @@ export type WindowStateView = { id: string; location: string | null; attachedHer
 /** The throwaway tracker's door, mid-scenario (kit/tracker-wire.ts). */
 export interface TrackerDoor {
   createTask(name: string): Promise<string>;
-  commit(task: string, board: string, message: string): Promise<{ revision: number }>;
+  /** Commit a board, with any figure files beside board.yaml. */
+  commit(
+    task: string,
+    board: string,
+    message: string,
+    files?: readonly { path: string; content: string | Uint8Array }[],
+  ): Promise<{ revision: number }>;
   /** A window state, seen from `device`. */
   windowState(id: string, device: string): Promise<WindowStateView>;
   /** Fixture: a window state born and attached on `device`. */
@@ -79,6 +85,9 @@ export interface AppDriver {
    * one. A mark is a [data-port-find-match] element; a part-level
    * fallback mark reports the whole part's text. */
   findMarks(): Promise<FindMark[]>;
+  /** A rendered content part's visible text (innerText), or null when
+   * the part is not rendered: what a reader sees there. */
+  partText(part: string): Promise<string | null>;
   /** The labels of the live windows ("main" first). The browser has
    * exactly one. */
   windows(): Promise<string[]>;

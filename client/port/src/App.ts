@@ -386,13 +386,17 @@ export function createPortWindow(windowId = "main"): PortWindow {
         ? partElement
         : (partElement?.querySelector(".block-figure") ?? null);
     const img = (element?.querySelector("img.figure-img") as HTMLImageElement | null) ?? null;
-    if (element === null || img === null) {
+    const text = element?.querySelector("pre.figure-text")?.textContent ?? null;
+    if (element === null || (img === null && text === null)) {
       note = `the figure at ${part} is not displayed (no asset to enlarge)`;
       notifyStrip();
       return;
     }
     const caption = element.querySelector("figcaption")?.textContent ?? "";
-    inspection = { part, src: img.src, caption, zoom: inspectionZoomReset() };
+    inspection =
+      img !== null
+        ? { part, src: img.src, caption, zoom: inspectionZoomReset() }
+        : { part, src: "", text: text ?? "", caption, zoom: inspectionZoomReset() };
     notifyInspection();
     notifyStrip();
   }

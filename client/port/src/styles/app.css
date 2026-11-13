@@ -246,6 +246,22 @@ body {
   font-size: 0.8125rem;
 }
 
+/* a text figure: its text, scrollable in place (placement only) */
+.block-figure .figure-text {
+  max-height: 24rem;
+  overflow: auto;
+  margin: 0;
+  font-family: var(--port-font-mono);
+  font-size: 0.8125rem;
+  white-space: pre;
+}
+
+.port-inspection-text {
+  font-family: var(--port-font-mono);
+  white-space: pre;
+  margin: 0;
+}
+
 .block-figure .figure-frame img {
   max-width: 100%;
 }

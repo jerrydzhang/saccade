@@ -10,6 +10,8 @@ export type InspectionState = Readonly<{
   /** The displayed asset's src at open time (the honest "enlarge
    * what is shown" - a data: URL the hydration produced). */
   src: string;
+  /** A text figure's text (src is then empty): enlarged as text. */
+  text?: string;
   /** The figure's caption, as the board rendered it. */
   caption: string;
   zoom: number;

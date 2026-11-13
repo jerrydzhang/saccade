@@ -98,6 +98,12 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     },
+    async partText(part) {
+      // the app's iframe is its own realm: instanceof against this
+      // page's HTMLElement would always fail
+      const element = portWindow().document.querySelector(`[data-port-part=${JSON.stringify(part)}]`) as HTMLElement | null;
+      return element === null ? null : element.innerText;
+    },
     async findMarks() {
       const document = portWindow().document;
       const out: { part: string | null; text: string; active: boolean }[] = [];

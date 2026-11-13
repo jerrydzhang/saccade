@@ -235,8 +235,11 @@ function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
   const pair = content?.kind === "available" ? content.value
     : content?.kind === "pending" ? content.previous : null;
   const controller = pair?.props["controller"] as Pick<BoardUI, "findView"> | undefined;
-  return typeof controller?.findView === "function" ? controller.findView()
-    : { open: false, query: "", count: 0, active: -1 };
+  if (typeof controller?.findView !== "function") return { open: false, query: "", count: 0, active: -1 };
+  // the contract's four fields only: the view also carries the mark
+  // plan (a Map), which is presentation, not observation
+  const { open, query, count, active } = controller.findView();
+  return { open, query, count, active };
 }
 
 export function tasksViewOf(

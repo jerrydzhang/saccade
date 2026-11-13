@@ -18,6 +18,7 @@
 // window through the same suite-open-citation custom event, which the
 // port window assembles.
 
+import { figureShape } from "../figures/shape.ts";
 import { renderMath } from "../mathjax.ts";
 import { renderMermaid } from "../mermaid.ts";
 import type { RenderOutcome } from "../../instruments/board.ts";
@@ -246,10 +247,18 @@ async function hydrateFigure(frame: HTMLElement, host: HydrationHost, location: 
     outcomes.push({ kind: "figure", status: denied ? "denied" : "missing", message: outcome });
     return;
   }
-  const mime = input.endsWith(".svg") ? "image/svg+xml" : "image/png";
-  const b64 = bytesToBase64(outcome);
-  const img = el("img", { class: "figure-img", alt: input, src: `data:${mime};base64,${b64}` });
-  frame.append(img);
+  const shown = figureShape(input, outcome);
+  if (shown.kind === "image") {
+    const img = el("img", { class: "figure-img", alt: input, src: `data:${shown.mime};base64,${bytesToBase64(outcome)}` });
+    frame.append(img);
+  } else if (shown.kind === "text") {
+    // a text figure (.py, .ts, .diff, .json, .txt ...) reads as its
+    // text, the way the prototype's file view shows source
+    // (inst16.html:289); the inspection enlarges this same text
+    frame.append(el("pre", { class: "figure-text" }, shown.text));
+  } else {
+    frame.append(el("p", { class: "figure-binary" }, `figure ${input}: ${outcome.length} bytes, not an image or text`));
+  }
   outcomes.push({ kind: "figure", status: "ok", message: input });
 }
 
@@ -264,7 +273,8 @@ async function hydrateImage(span: HTMLElement, host: HydrationHost, location: Lo
     outcomes.push({ kind: "image", status: outcome.startsWith("denied") ? "denied" : "missing", message: outcome });
     return;
   }
-  const mime = src.endsWith(".svg") ? "image/svg+xml" : "image/png";
+  const shape = figureShape(src, outcome);
+  const mime = shape.kind === "image" ? shape.mime : "image/png";
   const img = el("img", { class: "md-img", alt: src, src: `data:${mime};base64,${bytesToBase64(outcome)}` });
   span.append(img);
   outcomes.push({ kind: "image", status: "ok", message: src });

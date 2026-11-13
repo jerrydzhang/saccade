@@ -111,7 +111,11 @@ from the registry's reviewed erasure boundary. -->
   {#if inspection !== null}
     <div class="port-inspection" data-port-control="inspection">
       <figure class="port-inspection-figure">
-        <img src={inspection.src} alt={inspection.caption || inspection.part} style="transform: scale({inspection.zoom})" />
+        {#if inspection.text !== undefined}
+          <pre class="port-inspection-text" style="transform: scale({inspection.zoom}); transform-origin: top left">{inspection.text}</pre>
+        {:else}
+          <img src={inspection.src} alt={inspection.caption || inspection.part} style="transform: scale({inspection.zoom})" />
+        {/if}
         {#if inspection.caption}
           <figcaption>{inspection.caption}</figcaption>
         {/if}
