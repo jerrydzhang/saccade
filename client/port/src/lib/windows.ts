@@ -9,16 +9,17 @@
 
 export type WindowDraft = { path: string; text: string };
 
-/** One stored window state as the wire answers it, this device's view
- * beside it. Cleared fields arrive absent. */
+/** One stored window state, this device's view beside it - as the
+ * client holds it: every field present (null when the wire left it
+ * out), the client's names (stateOf normalizes the wire). */
 export type WindowState = {
   id: string;
   location: string | null;
   part: string | null;
   zoom: number | null;
   /** The board column's width scale (lib/board/reading-layout.ts);
-   * absent from a tracker that predates it. */
-  width?: number | null;
+   * null from a tracker that predates it. */
+  width: number | null;
   drafts: WindowDraft[] | null;
   lastDevice: string | null;
   changed: number;
@@ -59,12 +60,46 @@ export function windowsUrl(base: URL | string, route: string): string {
   return new URL(`api/v1/windows/${route.replace(/^\//, "")}`, base).toString();
 }
 
+/** The state document as the tracker serializes it (its StateDoc):
+ * snake_case names, and a field with no value left out. */
+type WireState = {
+  id: string;
+  location?: string | null;
+  part?: string | null;
+  zoom?: number | null;
+  width?: number | null;
+  drafts?: WindowDraft[] | null;
+  last_device?: string | null;
+  changed: number;
+  attached_here: boolean;
+  link?: string | null;
+};
+
+/** The one boundary between the wire and the client: every read
+ * passes here, so nothing past it meets an absent field or a wire
+ * name (the old app's rule, 5a4b96d: an absent location reached as
+ * undefined once, and the restore died on it). */
+function normalizeState(wire: WireState): WindowState {
+  return {
+    id: wire.id,
+    location: wire.location ?? null,
+    part: wire.part ?? null,
+    zoom: wire.zoom ?? null,
+    width: wire.width ?? null,
+    drafts: wire.drafts ?? null,
+    lastDevice: wire.last_device ?? null,
+    changed: wire.changed,
+    attachedHere: wire.attached_here === true,
+    link: wire.link ?? null,
+  };
+}
+
 function stateOf(doc: unknown): WindowState {
-  const state = (doc as { state?: WindowState } | null)?.state;
-  if (state === null || typeof state !== "object") {
+  const state = (doc as { state?: WireState } | null)?.state;
+  if (state === null || state === undefined || typeof state !== "object") {
     throw new Error("the window store answered no state");
   }
-  return state;
+  return normalizeState(state);
 }
 
 export class WindowStore {
@@ -190,8 +225,8 @@ export class WindowStore {
       { method: "GET" },
     );
     if (status !== 200) this.#fail("states", status, doc);
-    const states = (doc as { states?: WindowState[] } | null)?.states;
+    const states = (doc as { states?: WireState[] } | null)?.states;
     if (!Array.isArray(states)) throw new Error("the window store answered no states");
-    return states;
+    return states.map(normalizeState);
   }
 }

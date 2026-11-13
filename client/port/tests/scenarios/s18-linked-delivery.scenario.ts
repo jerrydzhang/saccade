@@ -5,7 +5,7 @@
 // delivery lands on the receiver and the link is untouched; w opens a
 // third viewer at the citation. Native windows only.
 import { expect, test } from "#scenario";
-import { citationAct, openLocation, spec } from "./kit/helpers.ts";
+import { citationAct, citationActByLabel, openLocation, spec } from "./kit/helpers.ts";
 
 test("S18 linked delivery: o, i and w deliver the citation", { tags: ["multi-window"] }, async ({ app, tracker }) => {
   const { citingChild: citing, cited } = tracker.tasks;
@@ -24,7 +24,9 @@ test("S18 linked delivery: o, i and w deliver the citation", { tags: ["multi-win
 
   // i: the ask answers with the receiver's chip; the link stays
   const before = (await app.readout(receiver)).doors.delivered.length;
-  await citationAct(app, "i");
+  // the receiver holds focus now: the later acts go by keys
+  // (kit/helpers.ts citationActByLabel says why)
+  await citationActByLabel(app, "i");
   await expect.poll(() => app.shows("ask-input")).toBe(true);
   const chip = (await app.readout(receiver)).doors.jumpChip;
   expect(chip, "the receiver broadcasts a jump chip").toBeTruthy();
@@ -34,7 +36,7 @@ test("S18 linked delivery: o, i and w deliver the citation", { tags: ["multi-win
   expect((await app.readout("main")).window.link).toBe(receiver);
 
   // w: a third viewer opens at the citation
-  await citationAct(app, "w");
+  await citationActByLabel(app, "w");
   await expect.poll(async () => (await app.windows()).length, { timeout: 20_000 }).toBe(3);
   const third = (await app.windows()).find((label) => label !== "main" && label !== receiver)!;
   await expect.poll(async () => (await app.readout(third)).board.location, { timeout: 20_000 }).toBe(citedShown);
