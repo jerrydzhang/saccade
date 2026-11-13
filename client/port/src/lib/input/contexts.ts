@@ -11,6 +11,7 @@ import {
   type InputContext,
 } from "./input-context.ts";
 import { validateNoCollisions } from "./key-matcher.ts";
+import type { ReadingLayoutChange } from "../board/reading-layout.ts";
 import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 
 // The window's own surfaces. The picker is the open-location input (a
@@ -37,12 +38,14 @@ export interface WindowActions {
   showHelp(): void;
 }
 
-// The pinned chords: exactly the Ctrl chords the prototype claims
+// The pinned chords: the Ctrl chords the prototype claims
 // (inst16.html:494-495) - Ctrl-o / Ctrl-i (the trail, the app's own
-// back/forward since the old app) and Ctrl-f / b / d / u (paging, D5).
-// The seam consults these before its modifier-chord refusal; every
-// other ctrl/alt/meta chord still passes native (the IME/native-
-// editing boundary set stays draft-open, grouped decision).
+// back/forward since the old app) and Ctrl-f / b / d / u (paging, D5) -
+// and the human's column-width chords Ctrl-+ / Ctrl-- / Ctrl-= (the
+// board's reading layout). The seam consults these before its
+// modifier-chord refusal; every other ctrl/alt/meta chord still passes
+// native (the IME/native-editing boundary set stays draft-open,
+// grouped decision).
 export const PINNED_CHORDS: readonly { key: string; ctrl: boolean }[] = [
   { key: "o", ctrl: true },
   { key: "i", ctrl: true },
@@ -50,6 +53,9 @@ export const PINNED_CHORDS: readonly { key: string; ctrl: boolean }[] = [
   { key: "b", ctrl: true },
   { key: "d", ctrl: true },
   { key: "u", ctrl: true },
+  { key: "+", ctrl: true },
+  { key: "-", ctrl: true },
+  { key: "=", ctrl: true },
 ];
 
 // The modifier keys themselves: a bare press is never a command and
@@ -69,7 +75,9 @@ export function isPinnedChord(stroke: {
   return PINNED_CHORDS.some(
     (chord) =>
       stroke.ctrl === chord.ctrl &&
-      !stroke.shift &&
+      // a symbol's character already carries Shift (m-552): Ctrl-+ is
+      // Ctrl+Shift+= on a US layout; a letter chord never takes Shift
+      (!stroke.shift || !/^[a-z]$/.test(chord.key)) &&
       !stroke.alt &&
       !stroke.meta &&
       stroke.key.toLowerCase() === chord.key,
@@ -236,6 +244,9 @@ export interface ReadingActions {
   /** Escape: clear the committed search when one is live; an inert
    * consume otherwise (the reading context claims the stroke). */
   clearSearch(): void;
+  /** + - = zoom the board's text; Ctrl-+ Ctrl-- Ctrl-= its column's
+   * width (lib/board/reading-layout.ts). */
+  readingLayout(change: ReadingLayoutChange): void;
 }
 
 // The Tasks instrument's reading context: the same viewport reading
@@ -466,6 +477,19 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
       action: { id: "board.find", label: "find in this revision", run: () => actions.enterFind() },
       keys: [sequence(key("/"))],
     },
+    ...(
+      [
+        ["zoom-in", "larger text", key("+")],
+        ["zoom-out", "smaller text", key("-")],
+        ["zoom-reset", "text at its normal size", key("=")],
+        ["widen", "a wider column", ctrl("+")],
+        ["narrow", "a narrower column", ctrl("-")],
+        ["width-reset", "the column at its normal width", ctrl("=")],
+      ] as const
+    ).map(([change, label, stroke]) => ({
+      action: { id: `board.${change}`, label, run: () => actions.readingLayout(change) },
+      keys: [sequence(stroke)],
+    })),
   ]);
   validateNoCollisions(context);
   return context;

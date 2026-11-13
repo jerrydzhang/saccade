@@ -74,6 +74,14 @@ import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
 import { createKeyTrace } from "./lib/input/key-trace.ts";
+import {
+  changeReadingLayout,
+  DEFAULT_READING_LAYOUT,
+  readingLayoutOf,
+  readingLayoutVars,
+  type ReadingLayout,
+  type ReadingLayoutChange,
+} from "./lib/board/reading-layout.ts";
 
 /** The which-key popup delay in ms (the r110 tunable, nvim's
  * neighborhood - the human tunes). */
@@ -340,6 +348,45 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   let attachedViewport: HTMLElement | null = null;
 
+  // -- the board's reading layout (lib/board/reading-layout.ts) -------
+  // The window holds it beside the rest of its state: applied as CSS
+  // custom properties on the content scroller (the board's stylesheet
+  // reads them), and written to the window state once the steps
+  // settle, never per key press. A bound state's stored layout applies
+  // at boot unless this window already changed its own.
+  const READING_LAYOUT_SETTLE_MS = 400;
+  let readingLayout: ReadingLayout = DEFAULT_READING_LAYOUT;
+  let readingLayoutChanged = false;
+  let readingLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function applyReadingLayout(layout: ReadingLayout): void {
+    readingLayout = layout;
+    const element = attachedViewport;
+    if (element === null) return;
+    for (const [name, value] of Object.entries(readingLayoutVars(layout))) {
+      element.style.setProperty(name, value);
+    }
+  }
+
+  function changeLayout(change: ReadingLayoutChange): void {
+    readingLayoutChanged = true;
+    applyReadingLayout(changeReadingLayout(readingLayout, change));
+    scheduleReadingLayoutWrite();
+  }
+
+  function scheduleReadingLayoutWrite(): void {
+    if (readingLayoutTimer !== null) clearTimeout(readingLayoutTimer);
+    readingLayoutTimer = setTimeout(() => {
+      readingLayoutTimer = null;
+      if (windowStore === null || windowStateId === null) return;
+      const { zoom, width } = readingLayout;
+      void windowStore.patch(windowStateId, { zoom, width }).catch(() => {
+        // an unreachable store: the layout stays this session's; the
+        // next change writes it again
+      });
+    }, READING_LAYOUT_SETTLE_MS);
+  }
+
   // -- figure inspection (S04): a TEMPORARY window surface ----------
   // It dies on close, never enters the trail, and while open it is
   // modal for keys: the inspector's context answers every stroke
@@ -518,6 +565,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const state =
         boundId === null ? null : await windowStore.getState(boundId).catch(() => null);
       restored = state === null ? null : state.location;
+      if (readingLayoutChanged) scheduleReadingLayoutWrite();
+      else if (state !== null) applyReadingLayout(readingLayoutOf(state));
       await refreshLink();
       injectPorts();
       notifyStrip();
@@ -732,6 +781,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
           });
         },
       });
+    }
+    if (board !== undefined) {
+      (board.presentation as BoardUI).setReadingLayoutPort(changeLayout);
     }
     const tasks = instruments.tasks;
     if (tasks !== undefined) {
@@ -1362,6 +1414,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
           ? ((instruments.board.presentation as BoardUI | null)?.presentationStats() ?? null)
           : null,
       input: inputView(),
+      reading: readingLayout,
     });
   }
 
@@ -1374,6 +1427,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     attachViewport(element: HTMLElement | null) {
       viewport.attachElement(element);
       attachedViewport = element;
+      applyReadingLayout(readingLayout);
     },
     openSpec,
     boot,
@@ -1463,6 +1517,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     destroy() {
+      if (readingLayoutTimer !== null) clearTimeout(readingLayoutTimer);
       window.removeEventListener("keydown", windowKeyDown);
       windowHost.dispose();
       unsubscribeBoardFrame();

@@ -41,6 +41,8 @@ const US_SHIFTED = new Set([..."~!@#$%^&*()_+{}|:\"<>?"]);
 
 function keySyntax(key: string): string {
   const chord = /^Ctrl-(.)$/.exec(key);
+  // a shifted symbol under Ctrl holds Shift too (Ctrl-+ is Ctrl+Shift+=)
+  if (chord && US_SHIFTED.has(chord[1]!)) return `{Control>}{Shift>}${chord[1]}{/Shift}{/Control}`;
   if (chord) return `{Control>}${chord[1]}{/Control}`;
   if (key.length > 1) return `{${key}}`;
   if (key === "{" || key === "[") return key + key;

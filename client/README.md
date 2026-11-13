@@ -4,7 +4,10 @@ The Saccade suite's native app: a Svelte 5 frontend (`port/`) inside a
 Tauri 2 shell (`port-shell/` over the shell library in
 `src-tauri/src/`). Its windows hold the instruments - a board, the task
 list - read from a tracker over its HTTP wire, with each window's state
-kept in the tracker's window store (`/api/v1/windows`). The app is the
+kept in the tracker's window store (`/api/v1/windows`): what it shows,
+its link, and the board's reading layout (the text zoom and the column
+width, `port/src/lib/board/reading-layout.ts`; a tracker before 0.20.2
+drops the width). The app is the
 round 16 prototype's behaviour, built and tested scenario by scenario
 (t-36).
 

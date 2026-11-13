@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.1"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.2"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -250,8 +250,8 @@ The suite's window states, outside the record (t-14, ratified;
 storage settled on t-24@r20, the surface moved under `/api/v1` by
 t-28). `/view/v1` stays the pure record pages; `/api/v1/windows` is
 part of the tracker's own API and carries the client workspace state: what each suite window shows, its position in
-that content (the part at the reading height), its zoom, its
-annotation drafts, each device's attached set, and the per-device
+that content (the part at the reading height), its zoom and column
+width (the board's reading layout), its annotation drafts, each device's attached set, and the per-device
 links. Nothing here reads or writes the record; the window store never names
 record authority.
 
@@ -260,8 +260,10 @@ record authority.
   reading height settles while reading) and the event log is the one
   store that must never contend or be put at risk. The file carries
   its own schema version; opening is the bounded version-to-version
-  step - a missing version inits schema 1 transactionally, a newer
-  version refuses to serve rather than guessing. Whatever reproduces
+  step - a missing version inits schema 2 transactionally, a schema 1
+  file gains the width column and its version stamp in one
+  transaction (its rows read width as absent), a newer version
+  refuses to serve rather than guessing. Whatever reproduces
   the log (clone, import, a fresh db) carries no window store, which is
   correct: losing the window store loses window arrangements, never the
   record.

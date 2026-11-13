@@ -50,7 +50,11 @@ async function stroke(browser: Browser, key: string): Promise<void> {
   const shifted = CHORDS[key] ?? (/^[A-Z]$/.test(key) ? key.toLowerCase() : null);
   const action = browser.action("key");
   const chord = /^Ctrl-(.)$/.exec(key);
-  if (chord) {
+  const chordBase = chord ? CHORDS[chord[1]!] : undefined;
+  if (chord && chordBase !== undefined) {
+    // a shifted symbol under Ctrl holds Shift too (Ctrl-+ is Ctrl+Shift+=)
+    await action.down(Key.Control).down(Key.Shift).down(chordBase).up(chordBase).up(Key.Shift).up(Key.Control).perform();
+  } else if (chord) {
     await action.down(Key.Control).down(chord[1]!).up(chord[1]!).up(Key.Control).perform();
   } else if (named !== undefined) {
     await action.down(named).up(named).perform();

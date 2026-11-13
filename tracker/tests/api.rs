@@ -10494,7 +10494,7 @@ async fn the_windows_serve_window_states_outside_the_record() {
     assert_eq!(status, 200, "{body}");
     let doc = json_of(&body);
     assert_eq!(doc["windows"], 1);
-    assert_eq!(doc["schema"], 1);
+    assert_eq!(doc["schema"], 2);
     assert_eq!(doc["seq"], 0);
 
     // a read names its device: the window store answers one device's view alone
@@ -10506,12 +10506,13 @@ async fn the_windows_serve_window_states_outside_the_record() {
     let (status, body) = post_json(
         &base_url,
         "/api/v1/windows/states",
-        &json!({"id": "w-alpha", "device": "dev-1", "location": "tracker/t-19", "zoom": 1.2}),
+        &json!({"id": "w-alpha", "device": "dev-1", "location": "tracker/t-19", "zoom": 1.2, "width": 1.5}),
     );
     assert_eq!(status, 200, "{body}");
     let doc = json_of(&body);
     assert_eq!(doc["state"]["location"], "tracker/t-19");
     assert_eq!(doc["state"]["zoom"], 1.2);
+    assert_eq!(doc["state"]["width"], 1.5);
     assert_eq!(doc["state"]["attached_here"], false);
     assert_eq!(doc["state"]["link"], serde_json::Value::Null);
 
@@ -10555,12 +10556,13 @@ async fn the_windows_serve_window_states_outside_the_record() {
     let (status, body) = patch_json(
         &base_url,
         "/api/v1/windows/states/w-alpha",
-        &json!({"device": "dev-1", "part": "/content/2", "zoom": serde_json::Value::Null}),
+        &json!({"device": "dev-1", "part": "/content/2", "zoom": serde_json::Value::Null, "width": serde_json::Value::Null}),
     );
     assert_eq!(status, 200, "{body}");
     let doc = json_of(&body);
     assert_eq!(doc["state"]["part"], "/content/2");
     assert_eq!(doc["state"]["zoom"], serde_json::Value::Null);
+    assert_eq!(doc["state"]["width"], serde_json::Value::Null);
     assert_eq!(doc["state"]["location"], "tracker/t-19");
     assert_eq!(doc["state"]["last_device"], "dev-1");
 
