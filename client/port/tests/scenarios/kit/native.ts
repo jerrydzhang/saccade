@@ -190,6 +190,16 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
     },
+    async findMarks() {
+      return browser.execute(() => {
+      const out: { part: string | null; text: string; active: boolean }[] = [];
+        for (const mark of document.querySelectorAll("[data-port-find-match]")) {
+          const part = mark.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+          out.push({ part, text: mark.textContent ?? "", active: mark.hasAttribute("data-port-find-active") });
+        }
+        return out;
+      });
+    },
     async windows() {
       const labels = [...(await handles()).keys()];
       return labels.sort((a, b) => (a === "main" ? -1 : b === "main" ? 1 : a.localeCompare(b)));

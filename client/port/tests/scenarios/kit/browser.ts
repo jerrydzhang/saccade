@@ -98,6 +98,15 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     },
+    async findMarks() {
+      const document = portWindow().document;
+      const out: { part: string | null; text: string; active: boolean }[] = [];
+      for (const mark of document.querySelectorAll("[data-port-find-match]")) {
+        const part = mark.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+        out.push({ part, text: mark.textContent ?? "", active: mark.hasAttribute("data-port-find-active") });
+      }
+      return out;
+    },
     async windows() {
       return ["main"];
     },

@@ -7,6 +7,7 @@ at the generation boundary. -->
 
 <script lang="ts">
   import { hydrate } from "../lib/board/hydrate.ts";
+  import { paintMarks } from "../lib/find/marks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
 import { menuPlacement } from "../lib/menu/geometry.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
@@ -25,32 +26,9 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     active: -1,
     unitParts: [],
     activeUnit: null,
+    marks: new Map(),
   });
 
-  // D2: the match marks and the committed position indicator. The
-  // marks paint on every find-view change (typing, stepping,
-  // commit, clear); the active occurrence carries its own attribute
-  // so behaviour checks can see which part is active - form stays
-  // open (the floor's law), the tint rides the tokens.
-  $effect(() => {
-    const element = host;
-    if (element === null) return;
-    for (const marked of element.querySelectorAll("[data-port-find-match]")) {
-      marked.removeAttribute("data-port-find-match");
-      marked.removeAttribute("data-port-find-active");
-    }
-    if (find.query.length === 0) return;
-    for (const part of find.unitParts) {
-      const target = element.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
-      if (target instanceof HTMLElement) target.setAttribute("data-port-find-match", "");
-    }
-    if (find.activeUnit !== null) {
-      const target = element.querySelector(
-        `[data-port-part=${JSON.stringify(find.activeUnit)}]`,
-      );
-      if (target instanceof HTMLElement) target.setAttribute("data-port-find-active", "");
-    }
-  });
   const findOpen = $derived(find.open);
   let findInput: HTMLInputElement | null = $state(null);
   let findValue = $state("");
@@ -195,6 +173,25 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
         controller.reportRenderOutcomes(generation, outcomes);
       },
     );
+  });
+  // D2: the match marks on the matched TEXT (lib/find/marks.ts): a
+  // mark on every occurrence, the active one distinct, repainted on
+  // every find-view change (typing, stepping, commit, clear) and
+  // after every render (declared after the render effect, so it runs
+  // on the fresh DOM). A step brings the active mark into view - the
+  // nearest scroll, inside the part the controller already revealed.
+  let paintedActive = -1;
+  $effect(() => {
+    const element = host;
+    const view = find;
+    void content;
+    if (element === null) return;
+    const active = paintMarks(element, { query: view.query, parts: view.marks });
+    const stepped = view.active !== paintedActive;
+    paintedActive = view.active;
+    if (active !== null && stepped && active.tagName === "MARK") {
+      active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   });
 </script>
 

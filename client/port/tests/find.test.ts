@@ -74,3 +74,25 @@ test("live units remain current on Find exit; explicit navigation releases witho
   assert.equal(find.view().count, 2);
   find.close(); off();
 });
+
+test("D2: the shown text drops markdown syntax, math and mermaid; the view plans marks per part", async () => {
+  const { shownText } = await import("../src/lib/find/shown.ts");
+  assert.equal(shownText("A **alpha** and `alpha()` here."), "A alpha and alpha() here.");
+  assert.equal(shownText("x $\\alpha$ y"), "x  y");
+  assert.equal(shownText("```mermaid\nflowchart LR\n  alpha --> b\n```\n"), "");
+  const find = createFindInteraction({
+    units: () => [
+      { id: "/content/0", text: "alpha and alpha", source: "alpha and alpha" },
+      { id: "/content/1", text: "one alpha", source: "one alpha" },
+    ],
+    capture: () => ({ release: () => {} }),
+    reveal: () => {},
+  });
+  find.enter();
+  find.type("alpha");
+  assert.deepEqual([...find.view().marks], [["/content/0", { count: 2, active: 0 }], ["/content/1", { count: 1, active: -1 }]]);
+  find.step(1);
+  assert.deepEqual([...find.view().marks], [["/content/0", { count: 2, active: 1 }], ["/content/1", { count: 1, active: -1 }]]);
+  find.step(1);
+  assert.deepEqual([...find.view().marks], [["/content/0", { count: 2, active: -1 }], ["/content/1", { count: 1, active: 0 }]]);
+});

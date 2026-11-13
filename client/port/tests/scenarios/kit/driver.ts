@@ -42,6 +42,9 @@ declare module "vitest" {
   }
 }
 
+/** One painted find mark (AppDriver.findMarks). */
+export type FindMark = { part: string | null; text: string; active: boolean };
+
 /** A fresh app: one window, no launch restore, its own data. */
 export interface AppDriver {
   /** The readout of a window: the focused one by default. */
@@ -73,6 +76,11 @@ export interface AppDriver {
    * reads a data-port-find-active attribute on the match's part
    * (find-next.scenario.ts, the known defect). */
   activeMatch(): Promise<string | null>;
+  /** Find's painted marks in document order (D2): each mark's text as
+   * shown, the content part it sits in, and whether it is the active
+   * one. A mark is a [data-port-find-match] element; a part-level
+   * fallback mark reports the whole part's text. */
+  findMarks(): Promise<FindMark[]>;
   /** The labels of the live windows ("main" first). The browser has
    * exactly one. */
   windows(): Promise<string[]>;

@@ -16,6 +16,10 @@ export type FindView = Readonly<{
   /** The ACTIVE occurrence's part (D2's mark target), or null when
    * no occurrence is active. */
   activeUnit: string | null;
+  /** Per matched part: its occurrence count and the active
+   * occurrence's index within it (-1 when the active one is
+   * elsewhere) - the mark painter's plan (marks.ts). */
+  marks: ReadonlyMap<string, { count: number; active: number }>;
 }>;
 export interface FindInteractionDeps {
   units(): readonly FindUnit[];
@@ -30,7 +34,15 @@ export function createFindInteraction(deps: FindInteractionDeps) {
     const occurrences = session.occurrences();
     const count = occurrences.length;
     const active = count > 0 ? session.active() : -1;
+    const marks = new Map<string, { count: number; active: number }>();
+    occurrences.forEach((occurrence, index) => {
+      const entry = marks.get(occurrence.unit.id) ?? { count: 0, active: -1 };
+      if (index === active) entry.active = entry.count;
+      entry.count += 1;
+      marks.set(occurrence.unit.id, entry);
+    });
     return {
+      marks,
       open: session.isOpen(),
       query: session.query(),
       count,
