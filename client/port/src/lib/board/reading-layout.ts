@@ -72,3 +72,65 @@ export function readingLayoutVars(layout: ReadingLayout): Record<string, string>
     "--port-reading-width": String(layout.width),
   };
 }
+
+/** The window's holder of its reading layout: the current scales, a
+ * key's change applied at once and written once the steps settle
+ * (never per key press), and a bound state's stored layout restored
+ * unless this window already changed its own - then this window's
+ * layout is written to the state instead. The window supplies where
+ * the CSS goes and how a write reaches its state. */
+export interface ReadingLayoutHolder {
+  current(): ReadingLayout;
+  change(change: ReadingLayoutChange): void;
+  /** The window's state bound (null when the bind read nothing). */
+  bound(stored: { zoom?: number | null; width?: number | null } | null): void;
+  /** Re-apply the current layout (a newly attached scroller). */
+  apply(): void;
+  destroy(): void;
+}
+
+export const READING_LAYOUT_SETTLE_MS = 400;
+
+export function createReadingLayoutHolder(deps: {
+  apply(vars: Record<string, string>): void;
+  /** Write the layout to the window's state; a refusal is the
+   * caller's to swallow (the next change writes again). */
+  write(layout: ReadingLayout): void;
+  schedule(ms: number, run: () => void): number;
+  cancel(id: number): void;
+}): ReadingLayoutHolder {
+  let layout: ReadingLayout = DEFAULT_READING_LAYOUT;
+  let changedHere = false;
+  let timer: number | null = null;
+
+  function show(next: ReadingLayout): void {
+    layout = next;
+    deps.apply(readingLayoutVars(layout));
+  }
+
+  function scheduleWrite(): void {
+    if (timer !== null) deps.cancel(timer);
+    timer = deps.schedule(READING_LAYOUT_SETTLE_MS, () => {
+      timer = null;
+      deps.write(layout);
+    });
+  }
+
+  return {
+    current: () => layout,
+    change(change) {
+      changedHere = true;
+      show(changeReadingLayout(layout, change));
+      scheduleWrite();
+    },
+    bound(stored) {
+      if (changedHere) scheduleWrite();
+      else if (stored !== null) show(readingLayoutOf(stored));
+    },
+    apply: () => show(layout),
+    destroy() {
+      if (timer !== null) deps.cancel(timer);
+      timer = null;
+    },
+  };
+}

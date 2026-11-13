@@ -10,8 +10,8 @@ return anchor's identity), data-port-open names the row's link. -->
 <script lang="ts">
   import type { MenuView, SelectSessionView } from "./tasks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
-import { placeMenuInStage } from "../lib/menu/geometry.ts";
-import { bindMenuDismissal } from "../lib/menu/dismiss.ts";
+import ActMenu from "../components/ActMenu.svelte";
+import { partMeasureIn } from "../lib/select/measure.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
@@ -74,40 +74,6 @@ import { ageOf } from "../lib/tasks/page.ts";
   // the ages are read against the moment the shown page arrived: a
   // follow refresh moves them with the rows
   const now = $derived((void content.page, Date.now()));
-let menuElement: HTMLElement | null = $state(null);
-  let menuAt = $state({ x: 4, y: 4 });
-
-  // An open menu closes on a pointer-down or a wheel outside it
-  // (lib/menu/dismiss.ts); bound only while the menu is painted.
-  $effect(() => {
-    const element = menuElement;
-    if (element === null) return;
-    return bindMenuDismissal(element, controller.menuSession());
-  });
-
-  $effect(() => {
-    if (menu === null) return;
-    const element = menuElement;
-    const stageElement = host?.parentElement ?? null;
-    if (element === null || stageElement === null) return;
-    const hostElement = host;
-    if (hostElement === null) return;
-    const targetElement =
-      menu.part !== null
-        ? hostElement.querySelector(`[data-port-part=${JSON.stringify(menu.part)}]`)
-        : null;
-    menuAt = placeMenuInStage({ menu: element, stage: stageElement, host: hostElement, at: menu.at, target: targetElement });
-  });
-
-  function chipBox(part: string): { left: number; top: number } | null {
-    const element = host;
-    if (element === null) return null;
-    const target = element.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
-    if (!(target instanceof HTMLElement)) return null;
-    const hostBox = element.getBoundingClientRect();
-    const box = target.getBoundingClientRect();
-    return { left: box.left - hostBox.left, top: box.top - hostBox.top };
-  }
 
   const page = $derived(content.page);
 
@@ -185,26 +151,9 @@ a11y click advisories do not apply. -->
   {/if}
 </div>
 {#if select !== null}
-  <LabelOverlay chips={select.labels} measure={chipBox} typed={select.pendingLabel} />
+  <LabelOverlay chips={select.labels} measure={partMeasureIn(host)} typed={select.pendingLabel} />
 {/if}
 {#if menu !== null}
-  <div
-      class="port-menu"
-      data-port-menu=""
-      data-port-menu-part={menu.part ?? ""}
-      bind:this={menuElement}
-      style="left: {menuAt.x}px; top: {menuAt.y}px"
-    >
-    <div class="port-menu-label">{menu.label}</div>
-    {#each menu.acts as act, index (act.key)}
-      <button
-        class="port-menu-act"
-        data-port-menu-act={act.key}
-        onclick={(event) => {
-          event.stopPropagation();
-          controller.menuSession().choose(index);
-        }}>{act.key} {act.label}{#if index === 0}<span class="port-menu-enter">{"  \u21b5"}</span>{/if}</button>
-    {/each}
-  </div>
+  <ActMenu {menu} {host} session={controller.menuSession()} />
 {/if}
 </div>

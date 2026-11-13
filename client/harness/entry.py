@@ -251,7 +251,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
     # never an arbitrary host path. The debug pin exists so iteration
     # runs the environment we develop in; Nix still builds the
     # authoritative binary once, last, per chunk
-    app_accepted = app.startswith("/nix/store/") or app.startswith("/var/tmp/saccade-app-1000/debug-bin/")
+    app_accepted = app.startswith("/nix/store/") or app.startswith(f"/var/tmp/saccade-app-{os.getuid()}/debug-bin/")
     if not app_accepted or not os.access(app, os.X_OK):
         print(
             "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
