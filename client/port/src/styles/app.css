@@ -332,6 +332,13 @@ body {
   white-space: pre-wrap;
 }
 
+/* a ref in prose (lib/board/refs.ts): a link, as a citation is */
+.port-ref {
+  color: var(--port-color-accent);
+  cursor: pointer;
+  font-family: var(--port-font-mono);
+}
+
 .citation-link {
   color: var(--port-color-accent);
 }

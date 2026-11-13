@@ -37,7 +37,8 @@ function ownTextNodes(element: HTMLElement): Text[] {
       if (parent === null) return NodeFilter.FILTER_REJECT;
       const skipped = parent.closest(SKIP);
       if (skipped !== null && element.contains(skipped)) return NodeFilter.FILTER_REJECT;
-      const owner = parent.closest("[data-port-part]");
+      // a prose ref is its own target but its text is its block's
+      const owner = parent.closest('[data-port-part]:not([data-port-kind="ref"])');
       if (owner !== element) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },

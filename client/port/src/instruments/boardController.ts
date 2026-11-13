@@ -132,6 +132,8 @@ export interface BoardUI extends HydrationHost {
   /** A plain click on a figure runs its first act (enlarge) through
    * the shared menu path. */
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
+  /** A plain click on a prose ref: its first act (follow here). */
+  refPrimaryClick(part: string): void;
   /** The window services the reference acts ride (the one open
    * funnel and the copy observation); injected by the window, and no
    * reference act is offered before then. */
@@ -281,6 +283,12 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (target === undefined || target.source === undefined) return;
       const label = `${target.source.task}@r${target.source.revision}`;
       boardMenu.session.primaryClick({ kind: "reference", label, part });
+      notifyMenu();
+    },
+    refPrimaryClick(part: string) {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      if (target === undefined) return;
+      boardMenu.session.primaryClick({ kind: "ref", label: target.text, part });
       notifyMenu();
     },
     figurePrimaryClick(part: string, kind: "figure" | "diagram" = "figure") {
@@ -631,6 +639,10 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     referencePorts: () => referencePorts,
     referenceMachine: () => scope.frame().resolved?.machine ?? null,
+    refOf: (part) => {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      return target !== undefined && target.kind === "ref" ? target.text : null;
+    },
     partCitation: (part) => {
       // the SHOWN revision (a bare open displays its resolved pin)
       // plus the part's full canonical path - never the parent

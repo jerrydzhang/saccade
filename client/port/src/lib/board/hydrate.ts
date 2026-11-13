@@ -46,6 +46,8 @@ export interface HydrationHost {
    * act, scenario 4's enlarge). */
   /** A plain click on a figure or a rendered diagram: its first act. */
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
+  /** A plain click on a prose ref: its first act (follow here). */
+  refPrimaryClick(part: string): void;
 }
 
 export async function hydrate(
@@ -113,7 +115,8 @@ async function hydrateCitations(
         href: "#",
         "data-port-control": "citation",
         "data-port-open": path,
-        ...(part !== null ? { "data-port-part-of": part } : {}),
+        // the citation is a select target of its own (lib/board/targets.ts)
+        ...(part !== null ? { "data-port-part-of": part, "data-port-part": `${part}/citation`, "data-port-kind": "reference" } : {}),
       },
       path,
     );
@@ -150,6 +153,21 @@ async function hydrateCitations(
       console.log("[port] middle-click citation open deferred (elsewhere slice)");
     });
     span.replaceChildren(link);
+  }
+
+  // a prose ref's plain click runs its first act (follow here), as the
+  // prototype's primary on a ref; the right-gesture guard as citations
+  for (const ref of Array.from(container.querySelectorAll<HTMLElement>(".port-ref[data-port-part]"))) {
+    const part = ref.getAttribute("data-port-part")!;
+    let refContextmenuAt = 0;
+    ref.addEventListener("contextmenu", () => {
+      refContextmenuAt = performance.now();
+    });
+    ref.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (performance.now() - refContextmenuAt < 250) return;
+      _host.refPrimaryClick(part);
+    });
   }
 
   // the figures' plain click runs THEIR first act (enlarge, scenario

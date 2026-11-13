@@ -19,7 +19,9 @@ export type TargetKind =
   | "citation"
   | "group"
   | "control"
-  | "task";
+  | "task"
+  | "ref"
+  | "reference";
 
 /** Whether a target carries prose (text and annotations). */
 export function isTextKind(kind: TargetKind): boolean {

@@ -220,3 +220,23 @@ test("m-545: every mermaid fence in a block is a diagram target of its own, in d
     ],
   );
 });
+
+test("m-547: refs in prose are targets of their own, in document order; code and links carry none", async () => {
+  const { refsIn, refAddress } = await import("../src/lib/board/refs.ts");
+  assert.deepEqual(refsIn("See t-3@r14 and t-5@r4:/content/2, i-3 asked, m-12 too."), ["t-3@r14", "t-5@r4:/content/2", "i-3", "m-12"]);
+  assert.deepEqual(refsIn("Not `t-9` in code, not [t-8](x) in a link, ~~t-7~~ struck, but t-6 here."), ["t-6"]);
+  assert.deepEqual(refAddress("t-5@r4:/content/2"), { path: "t-5@r4", part: "/content/2" });
+  assert.deepEqual(refAddress("t-3"), { path: "t-3", part: null });
+  assert.equal(refAddress("i-3"), null);
+  const board = {
+    content: [{ kind: "text", markdown: "See t-3@r14 and i-2.", pos: { start: { line: 1 }, end: { line: 1 } } }],
+  } as unknown as Board;
+  assert.deepEqual(
+    boardTargetsOf(board).map((t) => [t.part, t.kind, t.text]),
+    [
+      ["/content/0", "text", "See t-3@r14 and i-2."],
+      ["/content/0/ref/0", "ref", "t-3@r14"],
+      ["/content/0/ref/1", "ref", "i-2"],
+    ],
+  );
+});

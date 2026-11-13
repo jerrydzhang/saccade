@@ -15,6 +15,7 @@
 
 import type { Action, InputContext, KeyInput, KeyResolution } from "../input/input-context.ts";
 import { selectToPart } from "../board/targets.ts";
+import { refAddress } from "../board/refs.ts";
 import { formatLocation } from "../location.ts";
 import { createActMenu } from "./create.ts";
 import type { MenuAct, MenuSession, MenuTarget } from "./session.ts";
@@ -59,6 +60,8 @@ export interface BoardMenuDeps {
    * part's full path), or null when the shown frame carries no
    * pinned revision to cite. */
   partCitation(part: string): string | null;
+  /** A prose ref target's ref text (t-3@r14, i-2 ...), or null. */
+  refOf?(part: string): string | null;
   /** Capture input while open. Lease release returns to the CURRENT
    * base; a menu never reinstalls its own saved reading context. */
   capture(context: InputContext): { release(): void };
@@ -90,7 +93,7 @@ export function actsFor(
   target: MenuTarget,
   deps: Pick<
     BoardMenuDeps,
-    "isFolded" | "toggleFold" | "referenceOf" | "referencePorts" | "referenceMachine" | "partCitation"
+    "isFolded" | "toggleFold" | "referenceOf" | "referencePorts" | "referenceMachine" | "partCitation" | "refOf"
   >,
 ): readonly MenuAct[] {
   if (target.kind === "group" && target.part !== null) {
@@ -195,6 +198,30 @@ export function actsFor(
           run: () => ports.copy(citation),
         },
       },
+    ];
+  }
+  if (target.kind === "ref" && target.part !== null) {
+    // a ref in prose (the prototype's ref kind, inst16.html:43): f
+    // follow here first, the OPEN acts, y copy; a ref the port cannot
+    // open (i-N, m-N) only copies
+    const ref = deps.refOf?.(target.part) ?? null;
+    const ports = deps.referencePorts();
+    const machine = deps.referenceMachine();
+    if (ref === null || ports === null) return [];
+    const copy: MenuAct = { key: "y", action: { id: "ref.copy", label: "copy reference", run: () => ports.copy(ref) } };
+    const address = refAddress(ref);
+    if (address === null || machine === null) return [copy];
+    const spec = formatLocation({ machine, path: address.path });
+    return [
+      { key: "f", action: { id: "ref.follow", label: "follow here", run: () => ports.open(spec, address.part) } },
+      ...(ports.elsewhere
+        ? ([
+            { key: "o", action: { id: "ref.open-at-link", label: "open at the link", run: () => ports.elsewhere?.(spec, "link") } },
+            { key: "i", action: { id: "ref.open-once", label: "open elsewhere once", run: () => ports.elsewhere?.(spec, "once") } },
+            { key: "w", action: { id: "ref.open-new", label: "open in a new viewer", run: () => ports.elsewhere?.(spec, "new") } },
+          ] as const)
+        : []),
+      copy,
     ];
   }
   if (target.kind === "reference" && target.part !== null) {

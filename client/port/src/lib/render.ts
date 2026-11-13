@@ -18,6 +18,7 @@ import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./m
 import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
 import { diagramPart } from "./board/targets.ts";
+import { refPart, splitRefs } from "./board/refs.ts";
 
 /** The history diff's painted change mark on a block. The history mode
  * paints it; until that slice lands, blocks carry no mark. */
@@ -55,6 +56,46 @@ export function authoredMathOf(
 }
 
 type Attrs = Record<string, string | boolean | undefined>;
+
+/** Per render (one hooks object), the refs seen in each block, and the
+ * depth of ref-less context (a link or a deletion) being rendered. */
+const refCounts = new WeakMap<RenderHooks, Map<string, number>>();
+const refless = new WeakMap<RenderHooks, number>();
+
+function withoutRefs<T>(hooks: RenderHooks, render: () => T): T {
+  refless.set(hooks, (refless.get(hooks) ?? 0) + 1);
+  try {
+    return render();
+  } finally {
+    refless.set(hooks, (refless.get(hooks) ?? 1) - 1);
+  }
+}
+
+/** A text run, its refs as their own parts (lib/board/refs.ts). */
+function renderText(value: string, hooks: RenderHooks, blockId: string, lineAttr: Attrs): HTMLElement {
+  if ((refless.get(hooks) ?? 0) > 0) return el("span", { class: "md-text", ...lineAttr }, value);
+  const pieces = splitRefs(value);
+  if (!pieces.some((piece) => piece.kind === "ref")) return el("span", { class: "md-text", ...lineAttr }, value);
+  const seen = refCounts.get(hooks) ?? new Map<string, number>();
+  refCounts.set(hooks, seen);
+  const span = el("span", { class: "md-text", ...lineAttr });
+  for (const piece of pieces) {
+    if (piece.kind === "text") {
+      span.append(piece.text);
+      continue;
+    }
+    const ordinal = seen.get(blockId) ?? 0;
+    seen.set(blockId, ordinal + 1);
+    span.append(
+      el(
+        "span",
+        { class: "port-ref", "data-port-part": refPart(blockId, ordinal), "data-port-kind": "ref", "data-port-ref": piece.ref },
+        piece.ref,
+      ),
+    );
+  }
+  return span;
+}
 
 /** Per render (one hooks object), the diagrams seen in each block. */
 const diagramCounts = new WeakMap<RenderHooks, Map<string, number>>();
@@ -571,7 +612,7 @@ export function renderPhrasing(
 
   switch (node.type) {
     case "text":
-      return el("span", { class: "md-text", ...lineAttr }, node.value);
+      return renderText(node.value, hooks, blockId, lineAttr);
     case "emphasis":
       return el(
         "em",
@@ -602,13 +643,8 @@ export function renderPhrasing(
       return el(
         "del",
         { ...lineAttr },
-        ...renderChildren(
-          node.children as PhrasingContent[],
-          node,
-          blockOffset,
-          blockLine,
-          hooks,
-          blockId,
+        ...withoutRefs(hooks, () =>
+          renderChildren(node.children as PhrasingContent[], node, blockOffset, blockLine, hooks, blockId),
         ),
       );
     case "inlineCode": {
@@ -651,13 +687,8 @@ export function renderPhrasing(
           title: `${node.url} (navigation is inert in the read-only viewer)`,
           ...lineAttr,
         },
-        ...renderChildren(
-          node.children as PhrasingContent[],
-          node,
-          blockOffset,
-          blockLine,
-          hooks,
-          blockId,
+        ...withoutRefs(hooks, () =>
+          renderChildren(node.children as PhrasingContent[], node, blockOffset, blockLine, hooks, blockId),
         ),
       );
       anchor.addEventListener("click", (event) => event.preventDefault());

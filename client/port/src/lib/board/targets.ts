@@ -5,6 +5,7 @@
 import type { Board } from "./model.ts";
 import type { TargetKind } from "../select/label-select.ts";
 import { parseMarkdown } from "../markdown.ts";
+import { refPart, refsIn } from "./refs.ts";
 
 /** A diagram's part path: its block's part plus its ordinal there (the
  * renderer stamps the same path on the rendered diagram). */
@@ -80,6 +81,21 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       if (block.kind === "text" || block.kind === "annotation") {
         parseMarkdown(block.markdown, 0, 1).mermaidFences.forEach((_, ordinal) => {
           out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram" });
+        });
+        // every ref in the prose is a target of its own (the prototype's
+        // linkify, inst16.html:197); its text is the ref itself
+        refsIn(block.markdown).forEach((ref, ordinal) => {
+          out.push({ part: refPart(part, ordinal), kind: "ref", text: ref });
+        });
+      }
+      // an incorporation's citation is a target of its own (the
+      // prototype's .ref in the cited source line, inst16.html:206)
+      if (block.kind === "incorporation") {
+        out.push({
+          part: `${part}/citation`,
+          kind: "reference",
+          text: `${block.source.task}@r${block.source.revision}`,
+          source: { task: block.source.task, revision: block.source.revision, select: block.source.select },
         });
       }
       if (block.kind === "group" || block.kind === "incorporation") {
