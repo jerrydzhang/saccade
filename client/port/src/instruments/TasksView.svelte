@@ -160,7 +160,7 @@ a11y click advisories do not apply. -->
   {/if}
 </div>
 {#if select !== null}
-  <LabelOverlay chips={select.labels} measure={chipBox} />
+  <LabelOverlay chips={select.labels} measure={chipBox} typed={select.pendingLabel} />
 {/if}
 {#if menu !== null}
   <div

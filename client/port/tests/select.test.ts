@@ -149,11 +149,50 @@ test("labels are prefix-free past 26 targets: every label is reachable by typing
       let state = startNarrow(count);
       let selected: number | null = null;
       for (const ch of label) {
-        const step = narrowStep(state, kinds, kinds.map(() => ""), labels, ch);
+        const step = narrowStep(state, labels, ch);
         state = step;
         selected = step.selected;
       }
       assert.equal(selected, index, `${label} selects its own target (${count} targets)`);
     });
   }
+});
+
+test("m-541: letters match labels only - a letter only text would match ends the session", () => {
+  // the prototype's hintKey (inst16.html:106): no text narrowing; the
+  // staging's narrowing turned trace 1's 'co' into an invisible text
+  // search that held every key
+  const targets: SelectableTarget[] = [
+    { part: "/content/0", kind: "text", text: "alpha prose" },
+    { part: "/content/1", kind: "text", text: "beta prose" },
+  ];
+  const { session, context, events } = harness(targets, () => true);
+  session.enter();
+  assert.deepEqual(session.view()?.labels.map((l) => l.label), ["a", "b"]);
+  // 'p' names no label (it is in both texts): zero matches, exit
+  const step = context()?.onUnmatched?.(key("p"));
+  assert.equal(step?.kind, "consume");
+  assert.equal(session.view(), null);
+  assert.ok(!events.some((event) => event.startsWith("selected:")));
+});
+
+test("m-541: the typed prefix filters the painted labels; the next letter selects", () => {
+  const targets: SelectableTarget[] = Array.from({ length: 30 }, (_, index) => ({
+    part: `/content/${index}`,
+    kind: "text" as const,
+    text: `paragraph ${index}`,
+  }));
+  const { session, context, events } = harness(targets, () => true);
+  session.enter();
+  const all = session.view()!.labels;
+  assert.equal(all.length, 30);
+  context()?.onUnmatched?.(key("b"));
+  const view = session.view()!;
+  assert.equal(view.pendingLabel, "b");
+  assert.ok(view.labels.length > 0 && view.labels.every((l) => l.label.startsWith("b")), "only b- labels stay painted");
+  assert.ok(view.labels.length < all.length);
+  const target = view.labels[0]!;
+  context()?.onUnmatched?.(key(target.label[1]!));
+  assert.ok(events.includes(`selected:${target.part}`));
+  assert.equal(session.view(), null);
 });

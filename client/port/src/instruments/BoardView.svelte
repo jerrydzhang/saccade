@@ -263,7 +263,7 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
   <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
   </div>
   {#if select !== null}
-    <LabelOverlay chips={select.labels} measure={chipBox} />
+    <LabelOverlay chips={select.labels} measure={chipBox} typed={select.pendingLabel} />
   {/if}
   {#if menu !== null}
     <div

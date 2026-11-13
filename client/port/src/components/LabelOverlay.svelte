@@ -12,9 +12,13 @@
   let {
     chips,
     measure,
+    typed = "",
   }: {
     chips: readonly { readonly part: string; readonly label: string }[];
     measure: PartMeasure;
+    /** The label keystrokes typed so far: each chip shows them marked
+     * (the prototype's hintKey span.typed). */
+    typed?: string;
   } = $props();
 
   const placements = $derived(chipPlacements(chips, measure));
@@ -27,7 +31,8 @@
         class="port-label-chip"
         data-port-label={entry.label}
         data-port-part={entry.part}
-        style="left: {entry.left}px; top: {entry.top}px">{entry.label}</span>
+        style="left: {entry.left}px; top: {entry.top}px"
+        >{#if typed.length > 0}<span class="port-label-typed">{entry.label.slice(0, typed.length)}</span>{entry.label.slice(typed.length)}{:else}{entry.label}{/if}</span>
     {/if}
   {/each}
 </div>

@@ -18,8 +18,8 @@ export type SelectableTarget = Readonly<{
 export type SelectSessionView = Readonly<{
   active: true;
   labels: readonly { part: string; label: string }[];
+  /** The label keystrokes typed so far (the chips show it). */
   pendingLabel: string;
-  query: string;
 }>;
 
 export interface SelectSessionDeps {
@@ -76,7 +76,6 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
     const kinds: TargetKind[] = visible.map((target) => target.kind);
     const labels = assignLabels(kinds);
     const byLabel = visible.map((target, index) => ({ part: target.part, label: labels[index] ?? "" }));
-    const texts = visible.map((target) => target.text);
     let narrow: NarrowState = startNarrow(visible.length);
 
     const session: InputContext = {
@@ -91,12 +90,12 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
         // the prototype's hintKey (inst16.html:106): a non-letter is
         // ignored (consumed inert, the session stays)
         if (!/^[a-zA-Z]$/.test(stroke.key)) return { kind: "consume" };
-        const step = narrowStep(narrow, kinds, texts, labels, stroke.key);
-        narrow = { alive: step.alive, pendingLabel: step.pendingLabel, query: step.query };
+        const step = narrowStep(narrow, labels, stroke.key);
+        narrow = { alive: step.alive, pendingLabel: step.pendingLabel };
         // ZERO remaining matches clears the labels and exits (hintKey),
         // never a session alive with nothing to select that eats every
-        // later key (the human's second trace, m-536)
-        if (step.selected === null && step.pendingLabel === "" && step.alive.length === 0) {
+        // later key (the human's traces, m-536)
+        if (step.exit) {
           exit();
           return { kind: "consume" };
         }
@@ -108,13 +107,19 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
             return { kind: "consume" };
           }
         }
-        view = { active: true, labels: byLabel, pendingLabel: step.pendingLabel, query: step.query };
+        // the pending prefix filters the chips: only the labels it still
+        // matches stay painted (hintKey hides the rest)
+        view = {
+          active: true,
+          labels: byLabel.filter((_, index) => step.alive.includes(index)),
+          pendingLabel: step.pendingLabel,
+        };
         notify();
         return { kind: "consume" };
       },
     };
     active = session;
-    view = { active: true, labels: byLabel, pendingLabel: "", query: "" };
+    view = { active: true, labels: byLabel, pendingLabel: "" };
     lease = deps.capture(session);
     notify();
   }

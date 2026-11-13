@@ -158,6 +158,11 @@ body {
   color: var(--port-color-muted);
 }
 
+/* the typed part of a label chip (the prototype's hintKey span.typed) */
+.port-label-typed {
+  opacity: 0.5;
+}
+
 .port-label-chip {
   position: absolute;
   padding: 0 0.25rem;
