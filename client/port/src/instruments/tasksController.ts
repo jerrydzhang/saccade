@@ -12,7 +12,7 @@
 // (targets come from the page model; geometry only decides
 // visibility and placement).
 //
-// The shown list follows the record (lib/tasks/follow.ts): a bounded
+// The shown list follows the record (lib/instruments/follow.ts): a bounded
 // poll re-reads the page and refreshes through the pipeline when its
 // rows changed.
 //
@@ -35,7 +35,7 @@ import type { InputContext } from "../lib/contracts/input.ts";
 import { tasksReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
 import { createTasksMenu, type TaskPorts, type TasksMenu } from "../lib/tasks/menu.ts";
-import { createTasksFollow } from "../lib/tasks/follow.ts";
+import { createFollow } from "../lib/instruments/follow.ts";
 import type { MenuView } from "../lib/menu/session.ts";
 import type {
   Address,
@@ -107,6 +107,10 @@ export interface TasksUI {
   setTaskPorts(ports: TaskPorts): void;
 }
 
+/** How often a shown list re-reads its page (a named tunable,
+ * t-36@r64; the board follows at the same pace). */
+export const TASKS_FOLLOW_POLL_MS = 3000;
+
 const EMPTY_FRAME: TasksData = {
   generation: 0,
   asked: "",
@@ -127,18 +131,19 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   const scope = createLoadScope<TasksData>(EMPTY_FRAME);
   let resolved: Location | null = null;
 
-  // The follow (lib/tasks/follow.ts): the asked address while a list
-  // from a tracker is shown, and the shown page's content signature.
+  // The follow (lib/instruments/follow.ts): the asked address while a
+  // list from a tracker is shown, and the shown page's content
+  // signature - the page has no revision, so its rows are compared.
   let followAddress: Address | null = null;
   let shownSignature: string | null = null;
   // the latest explicit open: an older one answering late never
   // starts a follow
   let openIntent = 0;
-  const follow = createTasksFollow({
-    async current() {
-      if (followAddress === null) return null;
+  const follow = createFollow<Address>({
+    intervalMs: TASKS_FOLLOW_POLL_MS,
+    async current(address) {
       try {
-        const source = sourceFor(followAddress.machine);
+        const source = sourceFor(address.machine);
         if (!(source instanceof TrackerSource)) return null;
         return JSON.stringify(tasksPageOf(await source.instrumentPage("tasks")));
       } catch {
@@ -146,6 +151,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       }
     },
     shown: () => shownSignature,
+    same: (shown, current) => shown === current,
     async refresh() {
       const address = followAddress;
       if (address === null) return;
@@ -352,7 +358,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       });
       if (!scope.isDestroyed() && intent === openIntent && address.machine.startsWith("tracker:")) {
         followAddress = { ...address };
-        follow.start();
+        follow.start(followAddress);
       }
       return outcome;
     },

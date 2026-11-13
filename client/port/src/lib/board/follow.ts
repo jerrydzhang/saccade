@@ -5,6 +5,12 @@
 // latest intent wins, failures retain content, and the poll itself
 // never notifies. A pinned open (t-N@rK) never follows. The interval
 // is a named tunable (t-36@r64 policy: value changes are mechanical).
+//
+// The loop itself is the instruments' shared one
+// (lib/instruments/follow.ts); this module names the board's key (the
+// task), its comparison (the pinned revision) and its interval.
+
+import { createFollow as createSharedFollow } from "../instruments/follow.ts";
 
 export const FOLLOW_POLL_MS = 3000;
 
@@ -31,53 +37,21 @@ export interface Follow {
 }
 
 export function createFollow(deps: FollowDeps): Follow {
-  let timer: number | null = null;
-  let generation = 0;
-
-  function stop(): void {
-    generation += 1;
-    armedTask = null;
-    if (timer !== null) {
-      deps.cancel(timer);
-      timer = null;
-    }
-  }
-
-  function arm(task: number, token: number): void {
-    if (token !== generation) return;
-    timer = deps.schedule(FOLLOW_POLL_MS, () => {
-      timer = null;
-      void poll(task, token);
-    });
-  }
-
-  async function poll(task: number, token: number): Promise<void> {
-    try {
-      const current = await deps.currentRevision(task);
-      if (token !== generation || current === null) return;
-      const shown = deps.shownRevision();
-      if (shown === null || !pinnedEqual(shown, current)) await deps.refresh();
-    } catch {
-      // A failed read retries. Refresh failures report through the
-      // normal pipeline; neither kind ends the follow intent.
-    } finally {
-      // Schedule after completion: slow reads/refreshes never overlap.
-      arm(task, token);
-    }
-  }
-
-  let armedTask: number | null = null;
+  const follow = createSharedFollow<number>({
+    intervalMs: FOLLOW_POLL_MS,
+    current: (task) => deps.currentRevision(task),
+    shown: () => deps.shownRevision(),
+    same: pinnedEqual,
+    refresh: () => deps.refresh(),
+    schedule: (ms, run) => deps.schedule(ms, run),
+    cancel: (id) => deps.cancel(id),
+  });
   return {
-    start(task) {
-      stop();
-      armedTask = task;
-      arm(task, generation);
-    },
-    stop,
-    /** Whether a follow poll is armed, and for which task (the S15
-     * diagnosis's readout surface). */
-    running(): { armed: boolean; task: number | null } {
-      return { armed: armedTask !== null, task: armedTask };
+    start: (task) => follow.start(task),
+    stop: () => follow.stop(),
+    running() {
+      const { armed, key } = follow.running();
+      return { armed, task: key };
     },
   };
 }
