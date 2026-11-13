@@ -14,7 +14,8 @@ come from `client/harness/t36_seeds.py`.
 
 `just test` runs the unit and browser projects after the cargo suite, and the
 `port-unit` prek hook runs the unit project on every commit. One file or test
-name: `just app-test-browser s14` (vitest's own filters pass through).
+name: `just app-test-browser s14` (vitest's own filters pass through), and the
+same for the native project: `just app-test-native s18`.
 
 ## Writing a scenario
 
@@ -55,6 +56,12 @@ The rules:
 - Tag the test `{ tags: ["native"] }` when it should also run in the native
   app, or `{ tags: ["multi-window"] }` when it needs real windows. The browser
   project skips `multi-window`.
+- In a `multi-window` scenario, once another window has taken focus, act in
+  the unfocused window by keys, not the pointer: a WebDriver pointer action
+  into an inactive window was sometimes never delivered (the page saw no event)
+  and waited out the test, and the lane cannot re-activate an existing window
+  (Weston ignores the shell's activation request for a mapped window).
+  `citationActByLabel` is the keyboard twin of `citationAct`.
 - A known defect is `test.fails("KNOWN DEFECT: ...")` with a comment naming
   the file and line. When the fix lands the test "fails"; drop `fails` then.
 - If the readout lacks what a scenario needs, do not patch the app from

@@ -83,6 +83,26 @@ export async function citationAct(app: AppDriver, key: string): Promise<void> {
   await app.press(key);
 }
 
+/** The first citation's act through its label - s, the label, the
+ * act's key: the keyboard path to the menu citationAct opens by
+ * right-click (scenario 9 pins both paths as the same acts). For a
+ * window that another window has taken focus from: keys reach an
+ * inactive window, while a WebDriver pointer action into one was
+ * sometimes never delivered and waited forever (S18's hang; traced
+ * with capture listeners: the page saw no event at all). */
+export async function citationActByLabel(app: AppDriver, key: string): Promise<void> {
+  if ("oiw".includes(key)) await whenBound(app);
+  const incorporation = (await app.readout()).content?.parts.find((part) => part.kind === "incorporation")?.part;
+  if (incorporation === undefined) throw new Error("the board shows no incorporation to cite");
+  const citation = `${incorporation}/citation`;
+  await app.press("s");
+  await expect.poll(async () => (await app.labels()).map((label) => label.part)).toContain(citation);
+  const label = (await app.labels()).find((entry) => entry.part === citation)!.label;
+  await app.type(label.toLowerCase());
+  await expect.poll(() => app.menuOpen()).toBe(true);
+  await app.press(key);
+}
+
 /** Answer a live ask with a window's chip, typed into the ask field. */
 export async function answerAsk(app: AppDriver, window: string): Promise<void> {
   await expect.poll(() => app.shows("ask-input")).toBe(true);
