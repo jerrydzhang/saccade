@@ -100,8 +100,14 @@ export function createKeyTrace(probe: Probe): KeyTrace {
         accepts_focus: boolean;
         focus_on_map: boolean;
         is_active: boolean;
+        focus_widget?: string | null;
       };
-      return { "gtk.acceptsFocus": state.accepts_focus, "gtk.focusOnMap": state.focus_on_map, "gtk.active": state.is_active };
+      return {
+        "gtk.acceptsFocus": state.accepts_focus,
+        "gtk.focusOnMap": state.focus_on_map,
+        "gtk.active": state.is_active,
+        "gtk.focusWidget": state.focus_widget ?? "none",
+      };
     } catch (error) {
       return { "gtk.focus": `unavailable: ${String(error).slice(0, 60)}` };
     }

@@ -60,7 +60,14 @@ export type PortObservation = {
     /** GTK's own focus facts for this window (the shell's
      * window_focus_state), refreshed in the background; null with
      * no bridge or before the first answer (m-537). */
-    focus: Readonly<{ acceptsFocus: boolean; focusOnMap: boolean; active: boolean }> | null;
+    focus: Readonly<{
+      acceptsFocus: boolean;
+      focusOnMap: boolean;
+      active: boolean;
+      /** The GTK focus widget's type ("WebKitWebView" when keys reach
+       * the page), or null when the window has no focus widget. */
+      focusWidget: string | null;
+    }> | null;
   }>;
   board: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";

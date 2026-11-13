@@ -185,6 +185,32 @@ pub fn open_suite_window(
                 gtk_window.set_focus_on_map(false);
                 gtk_window.set_accept_focus(true);
             }
+            // m-540 (trace 2): niri activated the born window and GTK
+            // marked it active, yet keys reached nothing until a click
+            // inside: the WebKit view was not the toplevel's focus
+            // widget. Make it the focus widget now - grab_focus on a
+            // window that is not active sets the focus widget without
+            // asking for activation (never Tauri's set_focus, which
+            // requests it) - and again whenever the window becomes
+            // active without the view holding focus.
+            window.with_webview(|platform| {
+                use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+                let view = platform.inner();
+                view.grab_focus();
+                if let Some(toplevel) = view.toplevel() {
+                    if let Ok(toplevel) = toplevel.downcast::<gtk::Window>() {
+                        let view = view.clone();
+                        toplevel.connect_is_active_notify(move |toplevel| {
+                            let holds = toplevel
+                                .focused_widget()
+                                .is_some_and(|widget| widget == *view.upcast_ref::<gtk::Widget>());
+                            if toplevel.is_active() && !holds {
+                                view.grab_focus();
+                            }
+                        });
+                    }
+                }
+            })?;
             Ok(window)
         })
         .map(|_| built_label)
@@ -204,6 +230,9 @@ pub struct FocusState {
     pub accepts_focus: bool,
     pub focus_on_map: bool,
     pub is_active: bool,
+    /// The toplevel's focus widget's GType name ("WebKitWebView" when
+    /// keys reach the page), or None when the window has none.
+    pub focus_widget: Option<String>,
 }
 
 #[tauri::command]
@@ -214,6 +243,12 @@ pub fn window_focus_state(window: tauri::WebviewWindow) -> Result<FocusState, St
         accepts_focus: gtk_window.accepts_focus(),
         focus_on_map: gtk_window.gets_focus_on_map(),
         is_active: gtk_window.is_active(),
+        focus_widget: {
+            use gtk::glib::prelude::ObjectExt;
+            gtk_window
+                .focused_widget()
+                .map(|widget| widget.type_().name().to_string())
+        },
     })
 }
 

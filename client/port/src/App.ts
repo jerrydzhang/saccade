@@ -1015,7 +1015,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return {
       "select.labels": view.labels.slice(0, 40).map((entry) => `${entry.label}=${entry.part}`).join(",") +
         (view.labels.length > 40 ? `,+${view.labels.length - 40}` : ""),
-      "select.typed": `${view.pendingLabel}|${view.query}`,
+      "select.typed": view.pendingLabel,
     };
   }
 
@@ -1254,8 +1254,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
     focusRefreshing = true;
     void invoke("window_focus_state")
       .then((answer) => {
-        const state = answer as { accepts_focus: boolean; focus_on_map: boolean; is_active: boolean };
-        focusState = { acceptsFocus: state.accepts_focus, focusOnMap: state.focus_on_map, active: state.is_active };
+        const state = answer as { accepts_focus: boolean; focus_on_map: boolean; is_active: boolean; focus_widget?: string | null };
+        focusState = {
+          acceptsFocus: state.accepts_focus,
+          focusOnMap: state.focus_on_map,
+          active: state.is_active,
+          focusWidget: state.focus_widget ?? null,
+        };
       })
       .catch(() => {})
       .finally(() => {

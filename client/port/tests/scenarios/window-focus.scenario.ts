@@ -20,3 +20,17 @@ test("a window born by o accepts keyboard focus and does not take it on map", { 
   await new Promise((resolve) => setTimeout(resolve, 1_500)); // a hold: the state must STAY right
   expect((await app.readout(born)).window.focus).toMatchObject({ acceptsFocus: true, focusOnMap: false });
 });
+
+// Trace 2 (m-540): on niri the born window was active in GTK and still
+// dropped every key until a click inside it - the WebKit view was not
+// the toplevel's focus widget. WebDriver's own keys go to the page
+// directly, so a key press here cannot stand in for the compositor's
+// activation: the focus-widget fact is asserted, read from GTK. Born
+// and never clicked, the window's focus widget is its webview.
+test("a window born by o has its webview as GTK focus widget, before any click", { tags: ["multi-window"] }, async ({ app, tracker }) => {
+  await openLocation(app, spec(tracker, tracker.tasks.citingChild));
+  await citationAct(app, "o");
+  await expect.poll(async () => (await app.windows()).length, { timeout: 20_000 }).toBe(2);
+  const born = (await app.windows()).find((label) => label !== "main")!;
+  await expect.poll(async () => (await app.readout(born)).window.focus?.focusWidget ?? null, { timeout: 10_000 }).toBe("WebKitWebView");
+});
