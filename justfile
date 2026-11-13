@@ -5,10 +5,19 @@ lint:
     cargo check
     cargo clippy
 
+# the full suite: the cargo workspace, the app shell's own tests, then
+# the app frontend's vitest unit and browser projects (the native
+# project is gated: just port-test-native)
 test:
     cargo test -q
+    just shell-test
     just port-test
     just port-test-browser
+
+# the app shell library's tests (client/src-tauri/src, compiled through
+# client/port-shell): the GTK/WebKit build needs the saccade-app shell
+shell-test:
+    nix develop .#saccade-app -c bash -c 'cargo test -q --manifest-path client/port-shell/Cargo.toml'
 
 # The port's suite: one runner (vitest), three projects
 # (client/port/vitest.config.ts, client/port/tests/scenarios/README.md).
@@ -45,6 +54,8 @@ port-test-native:
 typecheck:
     tracker/native/typecheck.sh
 
+# the plain, uncontained checks: the harness's own checks, pyflakes, the
+# app frontend's typecheck, the core client's contract tests, the build
 viewer-check:
     python3 client/harness/entry.py check-fast
 
@@ -58,9 +69,6 @@ viewer-check:
 port-debug-bin:
     cd client && node_modules/.bin/vite build -c port/vite.config.ts
     nix develop .#saccade-app -c bash -c 'cargo build --manifest-path client/port-shell/Cargo.toml --features custom-protocol && bash client/harness/port_debug_pin.sh'
-
-viewer-native-check:
-    nix develop .#saccade-app -c bash -c 'cd client/src-tauri && cargo test'
 
 viewer-shell:
     nix develop .#saccade-app

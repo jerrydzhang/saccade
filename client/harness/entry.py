@@ -2,34 +2,30 @@
 """The single documented entry point for saccade-app development.
 
 Lanes:
-  check-fast   plain tool runs: svelte-check, pure contract tests, build.
-               These are ordinary build-tool invocations; they are
-               uncontained on purpose and claim nothing about service
-               isolation.
+  check-fast   plain tool runs: the harness's own checks, the pyflakes
+               pass, the app frontend's typecheck, the core client's
+               contract tests, the frontend build. Ordinary build-tool
+               invocations, uncontained on purpose; they claim nothing
+               about service isolation.
   preflight    GATED. The minimal containment verification: static
                reads, then one bwrap sandbox running the containment
                canary with full namespace/path baselines, bounded
                timeout, owned cleanup. No test payload, browser, core,
                compositor or SSH activity in this lane.
-  browser      GATED. Playwright checks inside an enforced sandbox after
-               preflight passes.
-  native       GATED. The Tauri/WebKitGTK application under a private
-               headless Weston inside an enforced sandbox.
-  remote       GATED. The remote mesh lane: two private herdr-core
-               instances and the headless viewer opening a machine-
-               named location through them (harness/remote-lane.md);
-               assertions on the render, the figure bytes and the
-               remote containment refusal. Runs only under a named
-               runtime authorization.
-  session      GATED. The interactive WebDriver session tool: up holds
-               one sandbox with the private compositor, the tauri-driver
-               -> WebKitWebDriver chain and the packaged app for an
-               explicit max lifetime; inspect/input/observe/shot act and
-               observe over a private run-root socket (never a
-               host-visible port); down tears the chain down in owned
-               order. checks runs the scripted check sequence as a
-               series of those commands under one supervisor.
+  session      GATED. The enforced sandbox with a private headless
+               Weston around the packaged app: suite runs the app's
+               vitest native project (client/port, the payload
+               suite_payload.py); up / up-t36 hold one sandbox with the
+               tauri-driver -> WebKitWebDriver chain and the app for an
+               explicit max lifetime, and inspect/input/observe/shot and
+               the window verbs act and observe over a private run-root
+               socket (never a host-visible port) - the t36 Python port
+               lane's driver; down tears the chain down in owned order.
   serve        GATED, not implemented in this change.
+
+(The old app's browser, native and remote lanes, the scripted session
+checks and the session tracker sequence retired with the old app,
+t-36 m-554.)
 
 Everything that spawns sandbox processes goes through
 isolation.PidfdSupervisor: one bwrap supervisor per run, kernel-verified
@@ -55,7 +51,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
     # the app's frontend typecheck (client/port; its suites run through
     # vitest: just port-test and just port-test-browser)
     ("typecheck", ["node_modules/.bin/tsc", "--noEmit", "-p", "port/tsconfig.json"]),
@@ -67,18 +63,9 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
-# the gate engine is WebKit alone (record 2926); Chromium runs only
-# behind SAC_APP_BROWSER_TRIAGE_CHROMIUM and never gates
-BROWSER_TIMEOUT_SECONDS = 180
-NATIVE_TIMEOUT_SECONDS = 120
 SESSION_UP_TIMEOUT_SECONDS = 90
 SESSION_DOWN_TIMEOUT_SECONDS = 30
 SESSION_DEFAULT_LIFETIME_SECONDS = 1800
-# the scripted check sequence under one supervisor
-SESSION_CHECKS_TIMEOUT_SECONDS = 300
-# the tracker sequence's whole bound: server start, seed, the UI walk,
-# the bounded-refusal wait, teardown
-SESSION_TRACKER_TIMEOUT_SECONDS = 300
 # the suite mode's whole bound: weston, then the port suite's native
 # project (one fresh app chain per test), teardown
 SESSION_SUITE_TIMEOUT_SECONDS = 960
@@ -86,26 +73,12 @@ SESSION_SUITE_TIMEOUT_SECONDS = 960
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
 CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
-# Browser-lane payload and binds: the built frontend is the only host
-# byte the lane reads, read-only. The stdlib loopback server removed the
-# need for any node bind; the lane script rides /lane.
-BROWSER_LANE_SANDBOX_PATH = "/lane/browser_lane.py"
-TRACKER_MOCK_SANDBOX_PATH = "/mock/tracker_mock.py"
-DIST_SANDBOX = "/app/dist"
-NATIVE_LANE_SANDBOX_PATH = "/lane/native_lane.py"
 SESSION_PAYLOAD_SANDBOX_PATH = "/lane/webdriver_session.py"
 SESSION_CLIENT_SANDBOX_PATH = "/lane/webdriver_client.py"
 # the suite mode: its payload beside the session modules, and the client
 # tree (node_modules, the port, the scenarios, the seed module) read-only
 SUITE_PAYLOAD_SANDBOX_PATH = "/lane/suite_payload.py"
 SUITE_CLIENT_SANDBOX_PATH = "/suite/client"
-REMOTE_LANE_SANDBOX_PATH = "/lane/remote_lane.py"
-VIA_PROGRAM_SANDBOX_PATH = "/pin/via_b.py"
-REMOTE_TIMEOUT_SECONDS = 180
-# the escape fixture's target doubles as the imported session module;
-# its presence inside the sandbox is what makes the containment
-# refusal a denial rather than a missing-file result
-REMOTE_HERDR_PIN = "hc 0.1.17"
 # the control socket and ready marker live in the run root, which is
 # bind-mounted read-write at the identical path: the host reaches the
 # payload over a private Unix socket inside a 0700 tree, never a port
@@ -227,6 +200,13 @@ def preflight() -> int:
             print(f"[preflight] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+REMOTE_LOCATION = "b:/board/real.yaml"
+
+
+SESSION_TARGET_ID = re.compile(r"^[A-Za-z0-9:_-]{1,120}$")
+SESSION_SHOT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+
+
 def verify_fontconfig_file(path: str) -> tuple[bool, str]:
     """The pinned generated fontconfig: must be a store path as given,
     readable, and reference at least one font directory inside the
@@ -250,645 +230,6 @@ def fontconfig_content_ok(text: str) -> tuple[bool, str]:
     if not any(d.startswith("/nix/store/") for d in dirs):
         return False, f"fontconfig references no store font directories: {dirs}"
     return True, ""
-
-
-def verify_playwright_closure(python: str) -> tuple[bool, str]:
-    """Pure closure check: the pinned interpreter must belong to a
-    withPackages-style env whose site-packages contain the playwright
-    module, so the scrubbed-env launch can import it without inheriting
-    any host PYTHONPATH."""
-    bin_dir = pathlib.Path(python).resolve().parent
-    env_root = bin_dir.parent
-    matches = sorted(env_root.glob("lib/python3.*/site-packages/playwright/__init__.py"))
-    if not matches:
-        return False, f"playwright module not found in the pinned closure under {env_root}"
-    return True, ""
-
-
-def browser_lane() -> int:
-    """Gated browser lane. Same supervisor, same canary-first order:
-    the payload runs the containment canary in-process BEFORE it starts
-    the loopback server or the Playwright driver. WebKit gates the lane
-    (the default engine); one reused headless WPE browser runs the
-    check list over the built frontend, and Chromium joins only behind
-    SAC_APP_BROWSER_TRIAGE_CHROMIUM as a triage pass that never
-    gates; screenshots land in the run root for later inspection.
-    Bounded by BROWSER_TIMEOUT_SECONDS; pidfd-only cleanup on all
-    paths.
-
-    Lane env additions beyond the fresh allowlist, all explicit and
-    absolute: PLAYWRIGHT_BROWSERS_PATH (pinned browser package),
-    SHOTS_DIR (the run root's own shots directory, already rw-bound),
-    FONTCONFIG_FILE (the pinned generated config),
-    __EGL_VENDOR_LIBRARY_DIRS (pinned mesa egl_vendor.d) and
-    LIBGL_ALWAYS_SOFTWARE (the WPE browser's display-less EGL, the
-    native lane's software-GL pin). The lane binds read-only: the
-    canary at /canary, the lane script at /lane, client/dist at
-    /app/dist. The payload python is the pinned withPackages
-    interpreter, its closure verified to contain the playwright module
-    before any launch (the scrubbed env inherits no host PYTHONPATH).
-    Chromium runs headless with its own sandbox disabled - the enforced
-    bwrap boundary is the containment.
-    """
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    isolation.gate_or_exit("browser")
-
-    found = shutil.which("bwrap")
-    if found is None:
-        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return 1
-    bwrap = str(pathlib.Path(found).resolve())
-    python = str(pathlib.Path(sys.executable).resolve())
-    canary = str((HERE / "containment_canary.py").resolve())
-    lane = str((HERE / "browser_lane.py").resolve())
-
-    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
-    if not browsers.startswith("/"):
-        print("containment refusal: PLAYWRIGHT_BROWSERS_PATH must be an absolute pinned path", file=sys.stderr)
-        return 1
-
-    # Chromium's font init is fatal without a fontconfig configuration
-    # (the diagnosed first-attempt failure): pass the pinned generated
-    # config through, never host /etc/fonts or font directories.
-    fontconf = os.environ.get("FONTCONFIG_FILE", "")
-    usable, reason = verify_fontconfig_file(fontconf)
-    if not usable:
-        print(f"containment refusal: {reason}", file=sys.stderr)
-        return 1
-
-    # the WPE browser's display-less EGL: same software-GL pin as the
-    # native lane (pinned mesa vendor dir + forced software rendering);
-    # the sandbox env carries them so the browser process inherits both
-    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
-    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
-        print(
-            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
-            file=sys.stderr,
-        )
-        return 1
-
-    dist = (VIEWER / "dist").resolve()
-    if not dist.is_dir():
-        print("containment refusal: client/dist is missing; run check-fast first", file=sys.stderr)
-        return 1
-
-    tracker_db, refusal = caller_tracker_db(tracker_db_arg, os.environ.get("SACCADE_DB") or "")
-    if tracker_db is None:
-        print(f"containment refusal: {refusal}", file=sys.stderr)
-        return 1
-    if not os.path.exists(tracker_db):
-        print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
-        return 1
-
-    try:
-        isolation.static_preflight(bwrap)
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-
-    # The pinned launch path must carry its own playwright closure: the
-    # scrubbed sandbox env inherits no host PYTHONPATH, so the module
-    # must exist inside the withPackages env the interpreter belongs to.
-    usable, reason = verify_playwright_closure(python)
-    if not usable:
-        print(f"containment refusal: {reason}", file=sys.stderr)
-        return 1
-
-    run_root = isolation.make_run_root("browser")
-    env = isolation.env_allowlist(run_root)
-    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
-    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
-    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
-    env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
-    env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
-    env["SHOTS_DIR"] = str(run_root / "shots")
-    env["FONTCONFIG_FILE"] = fontconf
-    env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    # cross-engine triage opt-in: chromium results never gate the lane
-    env["SAC_APP_BROWSER_TRIAGE_CHROMIUM"] = os.environ.get("SAC_APP_BROWSER_TRIAGE_CHROMIUM", "")
-
-    # the env-gated reference page (test plumbing, same containment): an
-    # absolute .html file bound read-only at the fixed sandbox path and
-    # served by the lane's own loopback server at /reference.html (a
-    # scrubbed sandbox has no mime database, so a file:// page renders
-    # as plain source), navigated once after the product pass, screenshot
-    # retained in the run root. Set but invalid refuses; unset changes
-    # nothing.
-    reference_raw = os.environ.get("SAC_APP_BROWSER_REFERENCE_HTML", "")
-    reference: pathlib.Path | None = None
-    if reference_raw:
-        reference = pathlib.Path(reference_raw)
-        if not (reference.is_absolute() and reference.is_file() and reference.suffix == ".html"):
-            print(
-                "containment refusal: SAC_APP_BROWSER_REFERENCE_HTML must be an absolute, readable .html file",
-                file=sys.stderr,
-            )
-            return 1
-        env["SAC_APP_BROWSER_REFERENCE_HTML"] = str(reference)
-
-    ro_binds = [
-        (canary, CANARY_SANDBOX_PATH),
-        (lane, BROWSER_LANE_SANDBOX_PATH),
-        (str((HERE / "tracker_mock.py").resolve()), TRACKER_MOCK_SANDBOX_PATH),
-        (str(dist), DIST_SANDBOX),
-    ]
-    if reference is not None:
-        ro_binds.append((str(reference), "/app/reference.html"))
-        # the reference may vendor its pinned libraries in a sibling
-        # reference-assets/ directory; bound read-only when present
-        assets = reference.parent / "reference-assets"
-        if assets.is_dir():
-            ro_binds.append((str(assets), "/app/reference-assets"))
-    cmd = isolation.build_command(bwrap, run_root, [python, BROWSER_LANE_SANDBOX_PATH], ro_binds)
-
-    print("[browser] gate command:", " ".join(cmd), flush=True)
-    print(f"[browser] run root: {run_root}", flush=True)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-    log_path = run_root / "logs" / "browser.log"
-    started = time.monotonic()
-    try:
-        supervisor.start()
-        try:
-            code = supervisor.wait(timeout=BROWSER_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            print(f"[browser] timeout after {BROWSER_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
-            supervisor.stop()
-            log_path.write_text(supervisor.read_output())
-            print("containment refusal: browser lane exceeded the time bound", file=sys.stderr)
-            return 1
-        output = supervisor.read_output()
-        log_path.write_text(output)
-        cost = time.monotonic() - started
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        print(f"[browser] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
-        return code
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-    finally:
-        code = supervisor.stop()
-        if code != 0 and code is not None:
-            print(f"[browser] supervisor exit after cleanup: {code}", file=sys.stderr)
-
-
-def native_lane(board_arg: str, tracker_db_arg: str) -> int:
-    """Gated native/WebKitGTK lane. Same supervisor, same canary-first
-    order: the payload runs the containment canary in-process BEFORE the
-    private headless Weston or the app exists. One foreground app launch
-    on the explicit board argument (the same foreground open a human
-    client uses); bounded frame captures; owned teardown of the app and
-    compositor children.
-
-    Binds read-only: the canary, the lane script, the pinned app binary
-    (a /nix/store path, covered by the store bind), the weston binary,
-    the weston-screenshooter binary, and the explicit board file. Env
-    additions: WESTON_BIN/APP_BIN/SCREENSHOOTER_BIN (absolute pinned
-    paths), BOARD_FILE (absolute explicit board), FONTCONFIG_FILE (the
-    pinned generated config), SHOTS_DIR (run-root shots). No GPU, no
-    display socket beyond the fresh private XDG_RUNTIME_DIR, no host
-    service contact. 120s bound; pidfd-only cleanup.
-    """
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    isolation.gate_or_exit("native")
-
-    found = shutil.which("bwrap")
-    if found is None:
-        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return 1
-    bwrap = str(pathlib.Path(found).resolve())
-    python = str(pathlib.Path(sys.executable).resolve())
-    canary = str((HERE / "containment_canary.py").resolve())
-    lane = str((HERE / "native_lane.py").resolve())
-
-    weston = shutil.which("weston")
-    shooter = shutil.which("weston-screenshooter")
-    if weston is None or shooter is None:
-        print(
-            "containment refusal: weston/weston-screenshooter are not in PATH (pinned devshell expected)",
-            file=sys.stderr,
-        )
-        return 1
-    weston_bin = str(pathlib.Path(weston).resolve())
-    shooter_bin = str(pathlib.Path(shooter).resolve())
-
-    app = os.environ.get("SAC_APP_BIN", "")
-    if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
-        print(
-            "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
-            file=sys.stderr,
-        )
-        return 1
-
-    # the lane's software-GL path: the packaged app's glvnd libEGL finds
-    # no vendor inside the sandbox (its closure carries mesa-libgbm only,
-    # and the compiled-in /usr paths do not exist), so the lane pins
-    # mesa's egl_vendor.d - llvmpipe/swrast, never /run/opengl-driver,
-    # never /dev/dri, never a host GPU path
-    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
-    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
-        print(
-            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
-            file=sys.stderr,
-        )
-        return 1
-
-    # the app's explicit board: an absolute host path whose parent
-    # DIRECTORY is bound read-only at the neutral sandbox path /board -
-    # never a host /home path, so the canary's host-visibility check
-    # holds and companion/relative assets resolve beside it
-    if not board_arg.startswith("/") or not os.path.isfile(board_arg):
-        print(
-            "containment refusal: pass --board <absolute board.yaml> for the native lane",
-            file=sys.stderr,
-        )
-        return 1
-    board_dir = pathlib.Path(board_arg).resolve().parent
-    board_name = pathlib.Path(board_arg).resolve().name
-    board_sandbox_path = f"/board/{board_name}"
-
-    tracker_db, refusal = caller_tracker_db(
-        os.environ.get("SACCADE_DB") or "", tracker_db_arg or ""
-    )
-    if tracker_db is None:
-        print(f"containment refusal: {refusal}", file=sys.stderr)
-        return 1
-    if not os.path.exists(tracker_db):
-        print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
-        return 1
-
-    fontconf = os.environ.get("FONTCONFIG_FILE", "")
-    usable, reason = verify_fontconfig_file(fontconf)
-    if not usable:
-        print(f"containment refusal: {reason}", file=sys.stderr)
-        return 1
-
-    try:
-        isolation.static_preflight(bwrap)
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-
-    run_root = isolation.make_run_root("native")
-    env = isolation.env_allowlist(run_root)
-    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
-    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
-    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
-    env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
-    env["WESTON_BIN"] = weston_bin
-    env["APP_BIN"] = app
-    env["SCREENSHOOTER_BIN"] = shooter_bin
-    env["BOARD_FILE"] = board_sandbox_path
-    # the host directory this lane's /board carries: check bodies write
-    # host fixtures (S10's tall board) beside the session board, where
-    # the /board bind serves them - the sandboxed lane itself can
-    # never see the host path, so it echoes this string back
-    env["SESSION_BOARD_DIR_HOST"] = str(board_dir)
-    env["FONTCONFIG_FILE"] = fontconf
-    env["SHOTS_DIR"] = str(run_root / "shots")
-    env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
-    # the shell feasibility probe (t-19, test-only machinery): passed
-    # through only when the caller set it, so a routine lane run without
-    # it stays exactly as before
-    env["SAC_APP_SHELL_PROBE"] = os.environ.get("SAC_APP_SHELL_PROBE", "")
-    env["GDK_SCALE"] = "1"
-    env["GDK_DPI_SCALE"] = "1"
-    (run_root / "shots").mkdir(parents=True, exist_ok=True)
-
-    ro_binds = [
-        (canary, CANARY_SANDBOX_PATH),
-        (lane, NATIVE_LANE_SANDBOX_PATH),
-        (str((HERE / "tracker_mock.py").resolve()), TRACKER_MOCK_SANDBOX_PATH),
-        (app, app),
-        (weston_bin, weston_bin),
-        (shooter_bin, shooter_bin),
-        (str(board_dir), "/board"),
-    ]
-    cmd = isolation.build_command(bwrap, run_root, [python, NATIVE_LANE_SANDBOX_PATH], ro_binds)
-
-    print("[native] gate command:", " ".join(cmd), flush=True)
-    print(f"[native] run root: {run_root}", flush=True)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-    log_path = run_root / "logs" / "native.log"
-    started = time.monotonic()
-    try:
-        supervisor.start()
-        try:
-            code = supervisor.wait(timeout=NATIVE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            print(f"[native] timeout after {NATIVE_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
-            supervisor.stop()
-            log_path.write_text(supervisor.read_output())
-            print("containment refusal: native lane exceeded the time bound", file=sys.stderr)
-            return 1
-        output = supervisor.read_output()
-        log_path.write_text(output)
-        cost = time.monotonic() - started
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        print(f"[native] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
-        return code
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-    finally:
-        code = supervisor.stop()
-        if code != 0 and code is not None:
-            print(f"[native] supervisor exit after cleanup: {code}", file=sys.stderr)
-
-
-# --- remote lane: the two-core mesh under the headless viewer ------------
-
-REMOTE_LOCATION = "b:/board/real.yaml"
-
-
-def remote_resolved(tracker_db_candidate: str) -> dict | None:
-    """Every pinned path the remote mesh lane consumes: the session
-    lane's refusals verbatim, plus the herdr-core pin (an executable
-    store binary whose --version reads exactly the pinned release) and
-    the checked-in fixture tree. Returns None after printing a
-    refusal."""
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    found = shutil.which("bwrap")
-    if found is None:
-        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return None
-    bwrap = str(pathlib.Path(found).resolve())
-    python = str(pathlib.Path(sys.executable).resolve())
-    canary = str((HERE / "containment_canary.py").resolve())
-    lane_py = str((HERE / "remote_lane.py").resolve())
-    via_py = str((HERE / "via_b.py").resolve())
-    session_py = str((HERE / "webdriver_session.py").resolve())
-    client_py = str((HERE / "webdriver_client.py").resolve())
-    # the sandbox has no /bin; the pinned bash binds there because the
-    # via program IS the remote shell for the mesh: it runs the core's
-    # handover line under /bin/sh -c, read-only, store-pinned
-    bash = shutil.which("bash")
-    if bash is None:
-        print("containment refusal: bash is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return None
-    bash_bin = str(pathlib.Path(bash).resolve())
-    if not bash_bin.startswith("/nix/store/"):
-        print(
-            "containment refusal: the /bin/sh bind must be a pinned store bash; "
-            f"resolved {bash_bin!r}",
-            file=sys.stderr,
-        )
-        return None
-    # the mesh's fixed-argv readers (realpath, cat) must resolve on the
-    # machine that spawns them; the sandbox has no /usr/bin, so the
-    # pinned coreutils bin dir rides the PATH the via and core B see
-    # (record 3114: an env value under /nix/store, never a bind). The
-    # adapter's argv stays exactly realpath/cat.
-    realpath_located = shutil.which("realpath")
-    if realpath_located is None:
-        print("containment refusal: realpath is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return None
-    coreutils_bin = str(pathlib.Path(realpath_located).resolve().parent)
-    if not coreutils_bin.startswith("/nix/store/"):
-        print(
-            "containment refusal: the coreutils PATH dir must be a pinned store directory; "
-            f"resolved {coreutils_bin!r}",
-            file=sys.stderr,
-        )
-        return None
-    fixture_dir = HERE / "remote_fixture"
-    if not fixture_dir.is_dir() or not (fixture_dir / "real.yaml").is_file():
-        print("containment refusal: harness/remote_fixture with real.yaml is missing", file=sys.stderr)
-        return None
-
-    tools: dict[str, str | None] = {}
-    for name, binary in (
-        ("weston", "weston"),
-        ("shooter", "weston-screenshooter"),
-        ("tauri_driver", "tauri-driver"),
-        ("webkit_driver", "WebKitWebDriver"),
-    ):
-        located = shutil.which(binary)
-        tools[name] = str(pathlib.Path(located).resolve()) if located else None
-    missing = sorted(name for name, path in tools.items() if path is None)
-    if missing:
-        print(
-            f"containment refusal: not in PATH (pinned devshell expected): {', '.join(missing)}",
-            file=sys.stderr,
-        )
-        return None
-
-    app = os.environ.get("SAC_APP_BIN", "")
-    if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
-        print(
-            "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
-            file=sys.stderr,
-        )
-        return None
-
-    core = os.environ.get("SAC_APP_HERDR_CORE_BIN", "")
-    if not core.startswith("/nix/store/") or not os.access(core, os.X_OK):
-        print(
-            "containment refusal: SAC_APP_HERDR_CORE_BIN must be an executable pinned herdr-core binary",
-            file=sys.stderr,
-        )
-        return None
-    try:
-        version = subprocess.run([core, "--version"], capture_output=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        print("containment refusal: herdr-core --version timed out", file=sys.stderr)
-        return None
-    said = version.stdout.decode(errors="replace").strip()
-    if version.returncode != 0 or said != REMOTE_HERDR_PIN:
-        print(
-            f"containment refusal: the pinned herdr-core must report {REMOTE_HERDR_PIN!r}; it reported {said!r}",
-            file=sys.stderr,
-        )
-        return None
-
-    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
-    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
-        print(
-            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
-            file=sys.stderr,
-        )
-        return None
-
-    tracker_db, refusal = caller_tracker_db(os.environ.get("SACCADE_DB") or "", tracker_db_candidate or "")
-    if tracker_db is None:
-        print(f"containment refusal: {refusal}", file=sys.stderr)
-        return None
-    if not os.path.exists(tracker_db):
-        print("containment refusal: baseline tracker db does not exist on the caller side", file=sys.stderr)
-        return None
-
-    fontconf = os.environ.get("FONTCONFIG_FILE", "")
-    usable, reason = verify_fontconfig_file(fontconf)
-    if not usable:
-        print(f"containment refusal: {reason}", file=sys.stderr)
-        return None
-
-    try:
-        isolation.static_preflight(bwrap)
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return None
-
-    return {
-        "bwrap": bwrap,
-        "python": python,
-        "canary": canary,
-        "lane_py": lane_py,
-        "via_py": via_py,
-        "session_py": session_py,
-        "client_py": client_py,
-        "bash_bin": bash_bin,
-        "coreutils_bin": coreutils_bin,
-        "weston": tools["weston"],
-        "shooter": tools["shooter"],
-        "tauri_driver": tools["tauri_driver"],
-        "webkit_driver": tools["webkit_driver"],
-        "app": app,
-        "herdr_core": core,
-        "fixture_dir": str(fixture_dir),
-        "tracker_db": tracker_db,
-        "fontconf": fontconf,
-        "mesa_dir": mesa_dir,
-    }
-
-
-def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
-    """The fresh allowlist plus the session lane's pins, and the mesh's
-    own: the pinned core binary, the via interpreter, session a for the
-    whole chain (the app's bridge resolves a.sock exactly as on a real
-    client device), and the fixed machine-named location."""
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    env = isolation.env_allowlist(run_root)
-    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
-    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
-    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
-    env["CONTAINMENT_HOST_TRACKER_DB"] = resolved["tracker_db"]
-    env["WESTON_BIN"] = resolved["weston"]
-    env["SCREENSHOOTER_BIN"] = resolved["shooter"]
-    env["TAURI_DRIVER_BIN"] = resolved["tauri_driver"]
-    env["WEBKIT_DRIVER_BIN"] = resolved["webkit_driver"]
-    env["APP_BIN"] = resolved["app"]
-    env["FONTCONFIG_FILE"] = resolved["fontconf"]
-    env["SHOTS_DIR"] = str(run_root / "shots")
-    env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
-    env["GDK_SCALE"] = "1"
-    env["GDK_DPI_SCALE"] = "1"
-    env["SAC_APP_HERDR_CORE_BIN"] = resolved["herdr_core"]
-    env["SAC_APP_VIA_PY"] = resolved["python"]
-    env["HC_SESSION"] = "a"
-    env["BOARD_LOCATION"] = REMOTE_LOCATION
-    # the mesh's shell lines locate herdr-core on PATH (command -v) and
-    # the fixed-argv readers resolve there too: the pinned core's bin
-    # dir and the pinned coreutils bin dir lead, so a resolved name is
-    # the tested bytes and nothing else
-    env["SAC_APP_COREUTILS_BIN"] = resolved["coreutils_bin"]
-    env["PATH"] = (
-        f"{os.path.dirname(resolved['herdr_core'])}:{resolved['coreutils_bin']}:{env['PATH']}"
-    )
-    (run_root / "shots").mkdir(parents=True, exist_ok=True)
-    return env
-
-
-def remote_binds(resolved: dict) -> list[tuple[str, str]]:
-    """Read-only binds: the canary, the lane modules, the via program,
-    the pinned binaries (covered by the /nix/store bind - stated
-    explicitly for review) and the B-side fixture tree at the neutral
-    board path. The session module's bind does double duty: the lane
-    imports its helpers from it, and it is the escape fixture's
-    existing, readable, outside-the-board target."""
-    return [
-        (resolved["canary"], CANARY_SANDBOX_PATH),
-        (resolved["lane_py"], REMOTE_LANE_SANDBOX_PATH),
-        (resolved["via_py"], VIA_PROGRAM_SANDBOX_PATH),
-        (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
-        (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
-        (resolved["bash_bin"], "/bin/sh"),
-        (resolved["fixture_dir"], "/board"),
-        (resolved["app"], resolved["app"]),
-        (resolved["weston"], resolved["weston"]),
-        (resolved["shooter"], resolved["shooter"]),
-        (resolved["tauri_driver"], resolved["tauri_driver"]),
-        (resolved["webkit_driver"], resolved["webkit_driver"]),
-        (resolved["herdr_core"], resolved["herdr_core"]),
-    ]
-
-
-def remote_lane() -> int:
-    """Gated remote mesh lane, exactly harness/remote-lane.md's
-    reviewed shape: same supervisor, same canary-first order, one
-    bound. The payload stands up two private cores, joins b to a's list
-    through the via program, opens the machine-named location in the
-    headless viewer and asserts the render, the figure bytes and the
-    remote containment refusal. pidfd-only cleanup; 180s bound."""
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    isolation.gate_or_exit("remote")
-
-    found = shutil.which("bwrap")
-    if found is None:
-        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return 1
-    bwrap = str(pathlib.Path(found).resolve())
-    python = str(pathlib.Path(sys.executable).resolve())
-    resolved = remote_resolved(tracker_db_arg)
-    if resolved is None:
-        return 1
-    if resolved["bwrap"] != bwrap or resolved["python"] != python:
-        print("containment refusal: resolved tools drifted between resolution and spawn", file=sys.stderr)
-        return 1
-
-    run_root = isolation.make_run_root("remote")
-    env = remote_env(resolved, run_root)
-    ro_binds = remote_binds(resolved)
-    cmd = isolation.build_command(bwrap, run_root, [python, REMOTE_LANE_SANDBOX_PATH], ro_binds)
-
-    print("[remote] gate command:", " ".join(cmd), flush=True)
-    print(f"[remote] run root: {run_root}", flush=True)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-    log_path = run_root / "logs" / "remote.log"
-    started = time.monotonic()
-    try:
-        supervisor.start()
-        try:
-            code = supervisor.wait(timeout=REMOTE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            print(f"[remote] timeout after {REMOTE_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
-            supervisor.stop()
-            log_path.write_text(supervisor.read_output())
-            print("containment refusal: remote lane exceeded the time bound", file=sys.stderr)
-            return 1
-        output = supervisor.read_output()
-        log_path.write_text(output)
-        cost = time.monotonic() - started
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        print(f"[remote] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
-        return code
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-    finally:
-        code = supervisor.stop()
-        if code != 0 and code is not None:
-            print(f"[remote] supervisor exit after cleanup: {code}", file=sys.stderr)
-
-
-# --- session lane: the interactive WebDriver tool ------------------------
-
-SESSION_TARGET_ID = re.compile(r"^[A-Za-z0-9:_-]{1,120}$")
-SESSION_SHOT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 
 
 def session_state_path() -> pathlib.Path:
@@ -1109,7 +450,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         serve_bin = os.environ.get("SACCADE_SERVE_BIN", "")
         if not serve_bin.startswith("/") or not os.access(serve_bin, os.X_OK):
             print(
-                "containment refusal: SACCADE_SERVE_BIN must be an executable absolute sac binary for the tracker sequence",
+                "containment refusal: SACCADE_SERVE_BIN must be an executable absolute sac binary for the seed server",
                 file=sys.stderr,
             )
             return None
@@ -1198,7 +539,7 @@ def session_binds(resolved: dict, mode: str = "plain") -> list[tuple[str, str]]:
     binaries (covered by the /nix/store bind - stated explicitly for
     review) and the board's parent directory. The screenshooter stays
     bound: shot captures compositor frames beside WebDriver shots.
-    The tracker sequence adds its own sac binary at /lane/sac; the
+    A run that seeds a tracker adds its own sac binary at /lane/sac; the
     t36 mode adds the seed and feed-proxy modules beside it."""
     binds = [
         (resolved["canary"], CANARY_SANDBOX_PATH),
@@ -1401,8 +742,8 @@ def session_up(board_arg: str, lifetime: float, mode: str = "plain", reuse_root:
     env = session_env(resolved, run_root, token, lifetime)
     if mode == "t36":
         env["SESSION_MODE"] = "t36"
-        # the payload's own seed server rides /lane/sac (session_tracker's
-        # convention); the prelude refuses without it
+        # the payload's own seed server rides /lane/sac; the prelude
+        # refuses without it
         env["SAC_APP_SERVE_BIN"] = "/lane/sac"
     cmd = isolation.build_command(
         resolved["bwrap"],
@@ -1451,61 +792,6 @@ def session_up(board_arg: str, lifetime: float, mode: str = "plain", reuse_root:
     except (ChildProcessError, OSError):
         pass
     return 1
-
-
-def session_tracker(board_arg: str, tracker_db_candidate: str) -> int:
-    """Gated. One bounded sandbox run: the payload spawns a real
-    `sac serve` on a throwaway db, commits two seed boards on the wire,
-    drives the packaged app through the tracker UI by WebDriver input,
-    navigates a citation, then answers a stopped server with a bounded
-    structured refusal. The sequence owns its teardown; the supervisor
-    stop is the backstop."""
-    isolation_gate("webdriver")
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    resolved = session_resolved(board_arg, tracker_db_candidate, require_serve_bin=True)
-    if resolved is None:
-        return 1
-
-    import uuid
-
-    run_root = isolation.make_run_root("session-tracker")
-    token = uuid.uuid4().hex
-    env = session_env(resolved, run_root, token, SESSION_DEFAULT_LIFETIME_SECONDS)
-    env["SESSION_MODE"] = "tracker"
-    env["SAC_APP_SERVE_BIN"] = "/lane/sac"
-    (run_root / "logs").mkdir(exist_ok=True)
-    cmd = isolation.build_command(
-        resolved["bwrap"],
-        run_root,
-        [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
-        session_binds(resolved),
-    )
-    print("[webdriver] gate command:", " ".join(cmd), flush=True)
-    print(f"[webdriver] run root: {run_root}", flush=True)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-    started = time.monotonic()
-    try:
-        supervisor.start()
-        try:
-            code = supervisor.wait(timeout=SESSION_TRACKER_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            print("[webdriver] the tracker sequence exceeded its bound; stopping via pidfd", file=sys.stderr)
-            supervisor.stop()
-            code = None
-        output = supervisor.read_output()
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        cost = time.monotonic() - started
-        print(f"[webdriver] tracker sequence done in {cost:.1f}s; payload exit={code}", flush=True)
-        return 0 if code == 0 else 1
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-    finally:
-        code = supervisor.stop()
-        if code != 0 and code is not None:
-            print(f"[webdriver] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
 def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
@@ -1743,401 +1029,6 @@ def session_shot(args: list[str]) -> int:
     return session_command({"cmd": "shot", "name": name})
 
 
-def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: str) -> int:
-    """The scripted checks, expressed only through the session command
-    surface: semantic addressing via the projected targets, real input
-    on elements, observation of geometry, and a shot per state."""
-    failures = 0
-    log = open(log_path, "a", encoding="utf-8")
-
-    def check(name: str, condition: bool, detail: str = "") -> None:
-        nonlocal failures
-        if not condition:
-            failures += 1
-        line = f"[webdriver] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}"
-        print(line, flush=True)
-        log.write(line + "\n")
-        log.flush()
-
-    def wait_response(payload: dict, predicate, timeout: float) -> dict | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                response = session_request(socket_path, payload, timeout=20.0)
-            except (OSError, RuntimeError, ValueError):
-                time.sleep(0.5)
-                continue
-            if predicate(response):
-                return response
-            time.sleep(0.4)
-        return None
-
-    def inspection_of(response: dict | None) -> dict | None:
-        value = (response or {}).get("inspection")
-        return value if isinstance(value, dict) else None
-
-    def target_ids(inspection: dict | None) -> list[str]:
-        return [t.get("id", "") for t in (inspection or {}).get("targets", [])]
-
-    def shot(name: str) -> None:
-        try:
-            response = session_request(socket_path, {"cmd": "shot", "name": name}, timeout=45.0)
-        except (OSError, RuntimeError, ValueError) as error:
-            check(f"shot {name}", False, str(error))
-            return
-        ok = bool(response.get("ok") and response.get("web"))
-        check(f"shot {name} saved", ok, json.dumps(response)[:200])
-
-    board_path = resolved["board_sandbox"]
-
-    # 1: the board opened through the lanes' test-open channel
-    # (t-24@r11: the launch argument left the human surface) - the
-    # header shows the loaded path and the projection reports a loaded
-    # resource
-    opened = wait_response(
-        {"cmd": "inspect"},
-        lambda r: (i := inspection_of(r)) is not None
-        and i.get("resource", {}).get("status") == "loaded"
-        and i.get("errors") == [],
-        45.0,
-    )
-    check("board opens through the test-open channel", opened is not None, board_path)
-    header = None
-    if opened is not None:
-        try:
-            header = session_request(socket_path, {"cmd": "observe", "target": "board:location"}, timeout=20.0)
-        except (OSError, RuntimeError, ValueError) as error:
-            check("header shows the loaded path", False, str(error))
-        else:
-            observed = header.get("observed") or {}
-            check(
-                "header shows the loaded path",
-                observed.get("text") == board_path,
-                repr(observed.get("text"))[:120],
-            )
-    shot("01-board-open")
-
-    # 2: the projection lists the diagram as an addressable target
-    diagram_id = ""
-    projected = wait_response(
-        {"cmd": "inspect"},
-        lambda r: any(tid.startswith("diagram:") for tid in target_ids(inspection_of(r))),
-        30.0,
-    )
-    ids = target_ids(inspection_of(projected))
-    diagram_id = next((tid for tid in ids if tid.startswith("diagram:")), "")
-    check("diagram targets are projected", bool(diagram_id), str(ids)[:160])
-    if not diagram_id:
-        return failures
-
-    # 3: real click on the diagram frame expands the overlay
-    try:
-        clicked = session_request(socket_path, {"cmd": "input", "kind": "click", "target": diagram_id}, timeout=30.0)
-    except (OSError, RuntimeError, ValueError) as error:
-        clicked = {"ok": False, "error": str(error)}
-    check("diagram click accepted", bool(clicked.get("ok")), json.dumps(clicked)[:160])
-    expanded = wait_response(
-        {"cmd": "inspect"},
-        lambda r: "overlay:zoom-in" in target_ids(inspection_of(r)) and "diagram-stage" in target_ids(inspection_of(r)),
-        15.0,
-    )
-    check("clicking a diagram expands it", expanded is not None, "overlay targets absent")
-    shot("02-diagram-expanded")
-
-    # 4: the + control changes the rendered geometry, not just the label
-    geometry = {}
-    for label in ("before", "after"):
-        try:
-            observed = session_request(socket_path, {"cmd": "observe", "target": "diagram-svg"}, timeout=20.0)
-            geometry[label] = (observed.get("observed") or {}).get("rect", {})
-        except (OSError, RuntimeError, ValueError) as error:
-            geometry[label] = {"error": str(error)}
-        if label == "before":
-            try:
-                session_request(socket_path, {"cmd": "input", "kind": "click", "target": "overlay:zoom-in"}, timeout=30.0)
-            except (OSError, RuntimeError, ValueError) as error:
-                check("zoom control clicked", False, str(error))
-    before = geometry.get("before") or {}
-    after = geometry.get("after") or {}
-    grew = (
-        isinstance(before.get("width"), (int, float))
-        and isinstance(after.get("width"), (int, float))
-        and float(after["width"]) > float(before["width"]) * 1.1
-    )
-    check(
-        "'+' changes the expanded svg's rendered size",
-        grew,
-        f"width {before.get('width')} -> {after.get('width')}",
-    )
-    shot("03-diagram-zoomed")
-
-    # 5: a real pointer drag on the stage moves the diagram
-    panned = {}
-    for label in ("before", "after"):
-        try:
-            observed = session_request(socket_path, {"cmd": "observe", "target": "diagram-svg"}, timeout=20.0)
-            panned[label] = (observed.get("observed") or {}).get("rect", {})
-        except (OSError, RuntimeError, ValueError) as error:
-            panned[label] = {"error": str(error)}
-        if label == "before":
-            try:
-                drag = session_request(
-                    socket_path,
-                    {"cmd": "input", "kind": "drag", "target": "diagram-stage", "dx": 140, "dy": 40},
-                    timeout=45.0,
-                )
-                check("drag accepted", bool(drag.get("ok")), json.dumps(drag)[:160])
-            except (OSError, RuntimeError, ValueError) as error:
-                check("drag accepted", False, str(error))
-    moved = (
-        isinstance(panned.get("before"), dict)
-        and isinstance(panned.get("after"), dict)
-        and "error" not in panned["before"]
-        and "error" not in panned["after"]
-        and abs(float(panned["after"].get("x", 0)) - float(panned["before"].get("x", 0)))
-        + abs(float(panned["after"].get("y", 0)) - float(panned["before"].get("y", 0)))
-        > 40
-    )
-    check(
-        "drag pan moves the diagram",
-        moved,
-        f"before {panned.get('before')} after {panned.get('after')}",
-    )
-    shot("04-diagram-panned")
-
-    # 5a: the drag is a gesture - the diagram's label text must not be
-    # selected by it
-    try:
-        chosen = session_request(socket_path, {"cmd": "selection"}, timeout=20.0)
-        selected = chosen.get("selection")
-    except (OSError, RuntimeError, ValueError) as error:
-        selected = f"error: {error}"
-    check("drag leaves no text selection", selected == "", repr(selected)[:120])
-
-    # 5b: reset returns the rendered geometry: the width shrinks back
-    # from the zoomed size toward the unzoomed base
-    try:
-        session_request(socket_path, {"cmd": "input", "kind": "click", "target": "overlay:reset"}, timeout=30.0)
-    except (OSError, RuntimeError, ValueError) as error:
-        check("reset clicked", False, str(error))
-    try:
-        observed = session_request(socket_path, {"cmd": "observe", "target": "diagram-svg"}, timeout=20.0)
-        reset_rect = (observed.get("observed") or {}).get("rect", {})
-    except (OSError, RuntimeError, ValueError) as error:
-        reset_rect = {"error": str(error)}
-    shrank = (
-        isinstance(reset_rect.get("width"), (int, float))
-        and isinstance(panned.get("after"), dict)
-        and isinstance(panned["after"].get("width"), (int, float))
-        and float(reset_rect["width"]) < float(panned["after"]["width"]) * 0.95
-    )
-    check(
-        "reset returns the rendered geometry",
-        shrank,
-        f"zoomed width {panned.get('after', {}).get('width')} -> reset width {reset_rect.get('width')}",
-    )
-    shot("05-diagram-reset")
-
-    # 6: close returns to the board (real click on the overlay's control)
-    try:
-        session_request(socket_path, {"cmd": "input", "kind": "click", "target": "overlay:close"}, timeout=30.0)
-    except (OSError, RuntimeError, ValueError) as error:
-        check("close clicked", False, str(error))
-    closed = wait_response(
-        {"cmd": "inspect"},
-        lambda r: not any(tid.startswith("overlay:") for tid in target_ids(inspection_of(r))),
-        15.0,
-    )
-    check("closing returns to the board", closed is not None, "overlay targets persisted")
-
-    # 7: Ctrl+F opens the on-demand search, then a match is found
-    try:
-        hotkey = session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "f"]}, timeout=30.0)
-        check("ctrl+f accepted", bool(hotkey.get("ok")), json.dumps(hotkey)[:160])
-    except (OSError, RuntimeError, ValueError) as error:
-        check("ctrl+f accepted", False, str(error))
-    search_open = wait_response(
-        {"cmd": "inspect"},
-        lambda r: "search" in target_ids(inspection_of(r)),
-        15.0,
-    )
-    check("search opens on demand", search_open is not None, "search target absent")
-    try:
-        typed = session_request(socket_path, {"cmd": "input", "kind": "type", "target": "search", "text": query}, timeout=30.0)
-        check("search input accepted", bool(typed.get("ok")), json.dumps(typed)[:160])
-    except (OSError, RuntimeError, ValueError) as error:
-        check("search input accepted", False, str(error))
-    state_pattern = re.compile(r"^(\d+) / (\d+)$")
-    found = wait_response(
-        {"cmd": "observe", "target": "search:state"},
-        lambda r: bool(state_pattern.match(((r.get("observed") or {}).get("text") or "").strip())),
-        15.0,
-    )
-    search_text = (((found or {}).get("observed") or {}).get("text") or "").strip()
-    match = state_pattern.match(search_text)
-    check("search finds an occurrence", match is not None and int(match.group(2)) >= 1, repr(search_text))
-    shot("06-search-match")
-
-    # 8: next match advances when a second occurrence exists
-    if match is not None and int(match.group(2)) >= 2:
-        try:
-            session_request(socket_path, {"cmd": "input", "kind": "click", "target": "search:next"}, timeout=30.0)
-        except (OSError, RuntimeError, ValueError) as error:
-            check("next match clicked", False, str(error))
-        advanced = wait_response(
-            {"cmd": "observe", "target": "search:state"},
-            lambda r: ((r.get("observed") or {}).get("text") or "").strip().startswith("2 / "),
-            15.0,
-        )
-        check("next match reaches the second occurrence", advanced is not None, search_text)
-    else:
-        check("next match reaches the second occurrence", False, f"query {query!r} had fewer than two occurrences")
-
-    # 8: the native copy path - Plain on demand (Ctrl+Shift+C), then a
-    # formula-plus-prose selection copied with Ctrl+C reaches the
-    # bridge with the Plain TeX bytes (the engine's own copy command
-    # never dispatches natively)
-    try:
-        session_request(
-            socket_path,
-            {"cmd": "evaluate", "script": "window.__saccadeApp.setCopyMode('plain'); return true;"},
-            timeout=30.0,
-        )
-    except (OSError, RuntimeError, ValueError):
-        pass
-    try:
-        session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["escape"]}, timeout=30.0)
-        time.sleep(0.3)
-    except (OSError, RuntimeError, ValueError):
-        pass
-    try:
-        selection_result = session_request(
-            socket_path,
-            {
-                "cmd": "evaluate",
-                "script": (
-                    "const math = document.querySelector('.block-text .math-inline');"
-                    "if (!math) return 'no math';"
-                    "const paragraph = math.closest('p');"
-                    "const children = Array.from(paragraph.children);"
-                    "const mathIndex = children.indexOf(math);"
-                    "const range = document.createRange();"
-                    "range.setStart(children[0], 0);"
-                    "range.setEnd(children[mathIndex + 1].firstChild, 9);"
-                    "const selection = window.getSelection();"
-                    "selection.removeAllRanges();"
-                    "selection.addRange(range);"
-                    "return JSON.stringify(String(selection));"
-                ),
-            },
-            timeout=30.0,
-        )
-        check(
-            "formula-plus-prose selection is set",
-            bool(selection_result.get("ok")) and "B_k" not in (selection_result.get("value") or "null"),
-            json.dumps(selection_result)[:200],
-        )
-    except (OSError, RuntimeError, ValueError) as error:
-        check("formula-plus-prose selection is set", False, str(error))
-    try:
-        session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "c"]}, timeout=30.0)
-        time.sleep(0.8)
-        last = session_request(
-            socket_path,
-            {"cmd": "evaluate", "script": "return JSON.stringify(window.__lastCopy || null);"},
-            timeout=30.0,
-        )
-        last_copy = json.loads(last.get("value") or "null")
-        ok = (
-            isinstance(last_copy, dict)
-            and last_copy.get("mode") == "plain"
-            and "B_k" in (last_copy.get("text") or "")
-        )
-        check("plain copy reaches the bridge with the TeX bytes", ok, json.dumps(last_copy)[:200])
-    except (OSError, RuntimeError, ValueError) as error:
-        check("plain copy reaches the bridge with the TeX bytes", False, str(error))
-
-    return failures
-
-
-def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifetime: float) -> int:
-    """Gated. The scripted check sequence under one supervisor, then the
-    owned teardown through the same command surface an agent uses."""
-    isolation_gate("webdriver")
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    resolved = session_resolved(board_arg, tracker_db_candidate)
-    if resolved is None:
-        return 1
-
-    import uuid
-
-    run_root = isolation.make_run_root("session")
-    token = uuid.uuid4().hex
-    env = session_env(resolved, run_root, token, lifetime)
-    (run_root / "logs").mkdir(exist_ok=True)
-    checks_log = run_root / "logs" / "session-checks.log"
-    cmd = isolation.build_command(
-        resolved["bwrap"],
-        run_root,
-        [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
-        session_binds(resolved),
-    )
-    print("[webdriver] gate command:", " ".join(cmd), flush=True)
-    print(f"[webdriver] run root: {run_root}", flush=True)
-    socket_path = str(run_root / SESSION_SOCKET_NAME)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-    started = time.monotonic()
-    failures = 1  # until the check sequence has run, any early exit fails
-    try:
-        supervisor.start()
-        up_deadline = time.monotonic() + SESSION_UP_TIMEOUT_SECONDS
-        up = None
-        while time.monotonic() < up_deadline:
-            if supervisor._proc.poll() is not None:
-                break
-            try:
-                up = session_request(socket_path, {"cmd": "status"}, timeout=2.0)
-                break
-            except (OSError, RuntimeError, ValueError):
-                time.sleep(0.5)
-                up = None
-        if not isinstance(up, dict) or not up.get("ok"):
-            print("[webdriver] the session never came up", file=sys.stderr)
-            if supervisor._proc.poll() is not None:
-                # the payload already exited: its captured stdout is the
-                # diagnosis (EOF is reached, so the read cannot block)
-                output = supervisor.read_output()
-                print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr, flush=True)
-            return 1
-        failures = run_session_checks(socket_path, resolved, query, str(checks_log))
-        try:
-            session_request(socket_path, {"cmd": "down"}, timeout=20.0)
-        except (OSError, RuntimeError, ValueError):
-            pass
-        remaining = started + SESSION_CHECKS_TIMEOUT_SECONDS - time.monotonic()
-        try:
-            code = supervisor.wait(timeout=max(remaining, 10.0))
-        except subprocess.TimeoutExpired:
-            print("[webdriver] checks exceeded the session bound; stopping via pidfd", file=sys.stderr)
-            supervisor.stop()
-            code = None
-        output = supervisor.read_output()
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        cost = time.monotonic() - started
-        print(f"[webdriver] checks done in {cost:.1f}s; payload exit={code}", flush=True)
-        print(f"[webdriver] checks log: {checks_log}", flush=True)
-        return 1 if failures or (code not in (0, None)) else 0
-    except isolation.ContainmentRefused as error:
-        print(f"containment refusal: {error}", file=sys.stderr)
-        return 1
-    finally:
-        code = supervisor.stop()
-        if code != 0 and code is not None:
-            print(f"[webdriver] supervisor exit after cleanup: {code}", file=sys.stderr)
-
-
 def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
     if not rest:
         print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks/tracker/windows/open-window/focus-window/observe-window/evaluate-window", file=sys.stderr)
@@ -2151,18 +1042,10 @@ def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
             raise SystemExit(2)
         lifetime = parse_scalar(args[index + 1], "--max-lifetime")
         args = args[:index] + args[index + 2 :]
-    query = "board"
-    if "--search-query" in args:
-        index = args.index("--search-query")
-        if index + 1 >= len(args):
-            print("[session] --search-query needs a value", file=sys.stderr)
-            raise SystemExit(2)
-        query = args[index + 1]
-        args = args[:index] + args[index + 2 :]
     if args and verb not in ("input", "observe", "shot", "open-window", "focus-window", "observe-window", "evaluate-window"):
         print(f"[session] verb {verb!r} takes no positional arguments", file=sys.stderr)
         raise SystemExit(2)
-    return verb, {"args": args, "query": query}, lifetime
+    return verb, {"args": args}, lifetime
 
 
 def session_main(rest: list[str], board_arg: str) -> int:
@@ -2178,10 +1061,6 @@ def session_main(rest: list[str], board_arg: str) -> int:
         return session_down()
     if verb == "status":
         return session_status()
-    if verb == "checks":
-        return session_checks(board_arg, tracker_db_arg, options["query"], lifetime)
-    if verb == "tracker":
-        return session_tracker(board_arg, tracker_db_arg)
     if verb == "suite":
         return session_suite(board_arg, tracker_db_arg)
     if verb == "inspect":
@@ -2250,7 +1129,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Saccade app harness")
     parser.add_argument(
         "lane",
-        choices=["check-fast", "preflight", "browser", "native", "session", "remote", "serve"],
+        choices=["check-fast", "preflight", "session", "serve"],
     )
     parser.add_argument("--tracker-db", help="absolute caller-side tracker db path for the preflight baseline")
     parser.add_argument("--board", help="absolute board file for the native and session lanes")
@@ -2262,14 +1141,8 @@ def main() -> int:
         return check_fast()
     if args.lane == "preflight":
         return preflight()
-    if args.lane == "browser":
-        return browser_lane()
-    if args.lane == "native":
-        return native_lane(board_arg, tracker_db_arg)
     if args.lane == "session":
         return session_main(args.session_args, board_arg)
-    if args.lane == "remote":
-        return remote_lane()
     return gated_stub(args.lane)
 
 

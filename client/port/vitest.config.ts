@@ -47,7 +47,7 @@ const pending = {
 
 // WebKit's display-less EGL: the saccade-app devshell's pinned mesa
 // vendor dir with forced software rendering (the browser lane's own
-// recipe, client/harness/entry.py and browser_lane.py)
+// recipe, kept here when that lane retired)
 function webkitEnv(): Record<string, string> {
   const mesa = process.env.SAC_APP_MESA_EGL_VENDOR_DIR ?? "";
   const env: Record<string, string> = {};

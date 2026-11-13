@@ -40,7 +40,6 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 
 HERE = "/lane"
 sys.path.insert(0, "/canary")
@@ -390,9 +389,8 @@ class SessionState:
         self.board_dir_host = ""
         self.expires_epoch = 0.0
         self.torn_down = False
-        # the tracker sequence's own server: spawned, fed, stopped and
-        # re-checked inside one bounded run; never adopted, never
-        # outliving the sandbox
+        # a server this payload spawned, stopped by teardown; never
+        # adopted, never outliving the sandbox
         self.server: subprocess.Popen[bytes] | None = None
         self.server_port = 0
         # the t36 lane mode's own machinery: the feed proxy on the
@@ -779,29 +777,6 @@ def serve(state: SessionState, socket_path: str, lifetime: float, ready_file: st
     return teardown(state)
 
 
-def tracker_free_port() -> int:
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind((NATIVE_HOST, 0))
-    port = int(probe.getsockname()[1])
-    probe.close()
-    return port
-
-
-def tracker_post(base: str, route: str, payload: dict) -> dict:
-    request = urllib.request.Request(
-        base + route,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as reply:
-            return json.loads(reply.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"{route} answered {error.code}: {detail}") from None
-
-
 TRACKER_CITED_BOARD = """grammar: 1
 task: t-0
 content:
@@ -820,12 +795,6 @@ content:
       content:
         - text: the receiving text for the cited seed
 """
-
-
-def tracker_finish(state: SessionState) -> int:
-    """Teardown, then the lane's verdict: any failed check fails the run."""
-    teardown(state)
-    return 1 if any(not ok for ok, _name, _detail in RESULTS) else 0
 
 
 def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
@@ -883,285 +852,6 @@ def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
         gate("the t36 seed boards committed (groups on the real wire)", False, str(error)[:200])
         teardown(state)
         raise SystemExit(1)
-
-
-def run_tracker_sequence(state: SessionState) -> int:
-    """The scripted tracker sequence: a real `sac serve` on a throwaway
-    db inside this sandbox, two boards committed on the real wire, the
-    packaged app driven by WebDriver input through the tracker UI (the
-    server setting typed and saved, the location opened), the citation
-    navigated, and a stopped server answered by a structured refusal in
-    bounded time - never an endless load. Runs under the real CSP."""
-    assert state.client is not None
-    serve_bin = os.environ.get("SAC_APP_SERVE_BIN", "")
-    if not serve_bin.startswith("/"):
-        print("containment refusal: SAC_APP_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
-        teardown(state)
-        return 1
-    root = state.shots.parent / "tracker"
-    # the tracker's name is the repo directory's basename: the location
-    # spec names it, so the dir carries the name the spec uses
-    (root / "lanetracker").mkdir(parents=True, exist_ok=True)
-    db = root / "lanetracker.db"
-    port = tracker_free_port()
-    server_log_path = state.shots.parent / "logs" / "tracker-serve.log"
-    server_log = open(server_log_path, "wb")
-    try:
-        state.server = subprocess.Popen(
-            [serve_bin, "serve", "--db", str(db), "--repo", str(root / "lanetracker"),
-             "--bind", NATIVE_HOST, "--port", str(port)],
-            # the server shells out to git, which the scrubbed env would
-            # never find: the pinned git rides /lane beside the server
-            env={**os.environ, "PATH": "/lane:" + os.environ.get("PATH", "/usr/bin:/bin")},
-            stdout=server_log,
-            stderr=server_log,
-        )
-    finally:
-        server_log.close()
-    state.server_port = port
-    base = f"http://{NATIVE_HOST}:{port}"
-    deadline = time.monotonic() + 20
-    ready = False
-    while time.monotonic() < deadline:
-        if state.server.poll() is not None:
-            break
-        try:
-            with urllib.request.urlopen(base + "/api/v1/version", timeout=2) as reply:
-                ready = reply.status == 200
-                break
-        except urllib.error.HTTPError:
-            # any typed answer means the wire is up; a wrong status is
-            # still an answer
-            ready = True
-            break
-        except OSError:
-            time.sleep(0.3)
-    check("a real sac serve answers on the sandbox loopback", ready, f"log: {server_log_path}")
-    if not ready:
-        return tracker_finish(state)
-
-    # two boards on the real wire: t-0 the cited plain account, t-1
-    # citing it by revision - the citation the sequence navigates
-    context = {"actor": "lane", "tier": "agent", "scope": None}
-    ids: list[int] = []
-    try:
-        for name in ("the cited seed account", "the citing account"):
-            reply = tracker_post(base, "/api/v1/command", {
-                "context": context,
-                "command": {"create_task": {"name": name}},
-                "at": None,
-                "client": "lane",
-            })
-            ids.append(int(str(reply["id"]).removeprefix("t-")))
-        for task, board_text in ((ids[0], TRACKER_CITED_BOARD), (ids[1], TRACKER_CITING_BOARD)):
-            reply = tracker_post(base, "/api/v1/boards/commit", {
-                "context": context,
-                "task": task,
-                "files": {"files": [{"path": "board.yaml",
-                                     "content": base64.b64encode(board_text.encode("utf-8")).decode("ascii")}]},
-                "message": "the lane's seed commit",
-                "client": "lane",
-            })
-            check(f"t-{task}'s seed board committed at revision 1", reply.get("revision") == 1, str(reply)[:160])
-    except (OSError, ValueError, KeyError) as error:
-        check("two boards committed on the real wire", False, str(error)[:200])
-        return tracker_finish(state)
-
-    def inspect_bounded(predicate, timeout: float):
-        deadline = time.monotonic() + timeout
-        last = None
-        while time.monotonic() < deadline:
-            try:
-                last = state.client.execute(INSPECT_SCRIPT)
-            except WebDriverError as error:
-                last = {"error": str(error)[:160]}
-            if isinstance(last, dict) and predicate(last):
-                return last
-            time.sleep(0.4)
-        return last
-
-    # the human path: type the server address once, then open the
-    # tracker-named location; every stroke is real WebDriver input
-    try:
-        # the first open names the host: it reaches the tracker and
-        # remembers it (t-34@r6 change 5)
-        open_via_picker(state.client, f"{NATIVE_HOST}:{port}/lanetracker/t-{ids[1]}")
-    except WebDriverError as error:
-        check("the tracker UI takes real input", False, str(error)[:200])
-        return tracker_finish(state)
-    check("the tracker UI takes real input", True)
-    loaded = inspect_bounded(
-        lambda i: i.get("resource", {}).get("status") == "loaded"
-        and i.get("identity", {}).get("task") == f"t-{ids[1]}"
-        and i.get("resource", {}).get("machine") == "tracker:lanetracker",
-        30.0,
-    )
-    ok = isinstance(loaded, dict) and loaded.get("resource", {}).get("status") == "loaded"
-    check("a tracker location loads through the real server under the real CSP", bool(ok), str(loaded)[:300])
-    if not ok:
-        return tracker_finish(state)
-
-    # the annotation act on a task board (t-17, re-pinned here because
-    # t-21's lanes caught the act-part walk matching nothing): a opens
-    # the draft editor, its cancel closes it
-    try:
-        perform_input(state.client, {"kind": "key", "keys": ["a"]})
-    except WebDriverError as error:
-        check("a on a task board opens the draft editor", False, str(error)[:200])
-        return tracker_finish(state)
-    editor_up = False
-    editor_deadline = time.monotonic() + 10
-    while time.monotonic() < editor_deadline:
-        editor_up = (
-            state.client.execute(
-                "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
-            )
-            is True
-        )
-        if editor_up:
-            break
-        time.sleep(0.5)
-    check("a on a task board opens the draft editor", editor_up)
-    if editor_up:
-        try:
-            perform_input(state.client, {"kind": "click", "target": "draft:cancel"})
-        except WebDriverError as error:
-            check("the draft editor's cancel closes it", False, str(error)[:200])
-        editor_closed = True
-        closed_deadline = time.monotonic() + 5
-        while time.monotonic() < closed_deadline:
-            editor_closed = (
-                state.client.execute(
-                    "return document.querySelector('[data-control=\"draft:input\"]') === null;"
-                )
-                is True
-            )
-            if editor_closed:
-                break
-            time.sleep(0.3)
-        check("the draft editor's cancel closes it", editor_closed)
-
-    cited_ok = False
-    cited = inspect_bounded(lambda i: "board:open-citation" in [t.get("id", "") for t in i.get("targets", [])], 10.0)
-    if isinstance(cited, dict) and "board:open-citation" in [t.get("id", "") for t in cited.get("targets", [])]:
-        try:
-            perform_input(state.client, {"kind": "click", "target": "board:open-citation"})
-            navigated = inspect_bounded(
-                lambda i: i.get("resource", {}).get("status") == "loaded"
-                and i.get("identity", {}).get("task") == f"t-{ids[0]}"
-                and i.get("resource", {}).get("path") == f"t-{ids[0]}@r1",
-                15.0,
-            )
-            cited_ok = isinstance(navigated, dict) and navigated.get("resource", {}).get("path") == f"t-{ids[0]}@r1"
-        except WebDriverError as error:
-            check("the citation opens the cited revision", False, str(error)[:200])
-    check("the citation opens the cited revision through the real wire", bool(cited_ok))
-
-    # the landing-on-a-real-server pin: t-2 first holds text only; the
-    # figure commit lands; a re-open must render the committed figure
-    # from the new revision - never a stale tree or a missing file
-    landing_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-    landing_r1 = (
-        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, first pass"
-    )
-    landing_r2 = (
-        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, revised\n"
-        "  - figure:\n      input: figures/landing.png\n      caption: the landing figure, committed\n"
-    )
-    try:
-        reply = tracker_post(base, "/api/v1/command", {
-            "context": {"actor": "lane", "tier": "agent", "scope": None},
-            "command": {"create_task": {"name": "the landing board"}},
-            "at": None,
-            "client": "lane",
-        })
-        landing_task = int(str(reply["id"]).removeprefix("t-"))
-        reply = tracker_post(base, "/api/v1/boards/commit", {
-            "context": {"actor": "lane", "tier": "agent", "scope": None},
-            "task": landing_task,
-            "files": {"files": [{"path": "board.yaml",
-                                 "content": base64.b64encode(landing_r1.format(landing_task).encode("utf-8")).decode("ascii")}]},
-            "message": "the landing seed, text only",
-            "client": "lane",
-        })
-        check(
-            f"t-{landing_task}'s landing seed commits at revision 1 (text only)",
-            reply.get("revision") == 1,
-            str(reply)[:160],
-        )
-        open_via_picker(state.client, f"lanetracker/t-{landing_task}")
-        loaded_seed = inspect_bounded(
-            lambda i: i.get("resource", {}).get("status") == "loaded",
-            20.0,
-        )
-        check("the landing seed opens at revision 1", bool(
-            isinstance(loaded_seed, dict) and loaded_seed.get("resource", {}).get("status") == "loaded"
-        ))
-        reply = tracker_post(base, "/api/v1/boards/commit", {
-            "context": {"actor": "lane", "tier": "agent", "scope": None},
-            "task": landing_task,
-            "files": {"files": [
-                {"path": "board.yaml",
-                 "content": base64.b64encode(landing_r2.format(landing_task).encode("utf-8")).decode("ascii")},
-                {"path": "figures/landing.png", "content": landing_png},
-            ]},
-            "message": "the landing board, revised with the figure",
-            "client": "lane",
-        })
-        check(
-            f"t-{landing_task}'s figure commit lands at revision 2",
-            reply.get("revision") == 2,
-            str(reply)[:160],
-        )
-        open_via_picker(state.client, f"lanetracker/t-{landing_task}")
-        reopened = inspect_bounded(
-            lambda i: i.get("resource", {}).get("status") == "loaded"
-            and i.get("identity", {}).get("task") == f"t-{landing_task}"
-            and any(o.get("kind") == "figure" for o in i.get("renderOutcomes", [])),
-            20.0,
-        )
-        outcomes = reopened.get("renderOutcomes", []) if isinstance(reopened, dict) else []
-        missing = [o for o in outcomes if o.get("kind") == "figure" and o.get("status") == "missing"]
-        ok = [o for o in outcomes if o.get("kind") == "figure" and o.get("status") == "ok"]
-        check(
-            "a landed figure renders on re-open: no stale tree, no missing file",
-            missing == [] and len(ok) == 1,
-            str(outcomes)[:200],
-        )
-    except WebDriverError as error:
-        check("the landing-on-a-real-server pin runs", False, str(error)[:200])
-    try:
-        png = state.client.screenshot()
-        (state.shots / "tracker-real-server.png").write_bytes(png)
-    except WebDriverError:
-        pass
-
-    # the server dies: the next open is a structured refusal in bounded
-    # time (the request bound plus slack), never an endless load
-    if state.server.poll() is None:
-        state.server.terminate()
-        try:
-            state.server.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            state.server.kill()
-            state.server.wait(timeout=5)
-    check("the tracker server stopped", state.server.poll() is not None)
-    stopped_at = time.monotonic()
-    try:
-        open_via_picker(state.client, f"lanetracker/t-{ids[1]}")
-    except WebDriverError as error:
-        check("the stopped-server open takes input", False, str(error)[:200])
-    refused = inspect_bounded(
-        lambda i: i.get("resource", {}).get("status") == "invalid" and bool(i.get("errors")),
-        20.0,
-    )
-    bounded = (
-        isinstance(refused, dict)
-        and refused.get("resource", {}).get("status") == "invalid"
-        and (time.monotonic() - stopped_at) < 25.0
-    )
-    check("a stopped server refuses in bounded time, never endless loading", bool(bounded), str(refused)[:300])
-    return tracker_finish(state)
 
 
 def main() -> int:
@@ -1288,8 +978,6 @@ def main() -> int:
         if not ready:
             return teardown(state)
 
-        if os.environ.get("SESSION_MODE") == "tracker":
-            return run_tracker_sequence(state)
         code = serve(state, socket_path, lifetime, ready_file)
         cost = time.monotonic() - started
         passed = sum(1 for ok, _name, _detail in RESULTS if ok)
