@@ -59,7 +59,15 @@ export function trackerDoor(base: string): TrackerDoor {
     },
     async windowState(id, device) {
       const reply = await call("GET", `/api/v1/windows/states/${encodeURIComponent(id)}?device=${encodeURIComponent(device)}`);
-      return reply.state as WindowStateView;
+      // the wire's own names, absent fields left out (the tracker's
+      // StateDoc): the view the scenarios read is mapped, never cast
+      const state = reply.state as { id: string; location?: string | null; attached_here?: boolean; link?: string | null };
+      return {
+        id: state.id,
+        location: state.location ?? null,
+        attachedHere: state.attached_here === true,
+        link: state.link ?? null,
+      } satisfies WindowStateView;
     },
     async attachedWindow(id, device) {
       // a window this device already shows, born and attached the way

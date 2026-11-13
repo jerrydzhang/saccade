@@ -39,9 +39,9 @@ const stateDoc = (fields: Partial<{ id: string; link: string | null; location: s
     part: null,
     zoom: null,
     drafts: null,
-    lastDevice: null,
+    last_device: null,
     changed: 3,
-    attachedHere: true,
+    attached_here: true,
     link: fields.link ?? null,
     ...fields,
   },
@@ -116,4 +116,41 @@ test("attach and detach post the state against the device", async () => {
     body: { state: "s-1" },
   });
   assert.equal(calls.calls[1]!.route, "devices/d-9/detach");
+});
+
+// The state document exactly as the tracker serializes it
+// (tracker/src/serve/windows.rs StateDoc): snake_case names, and a
+// field with no value is ABSENT, never null. The client read it
+// as-is, so after a relaunch an absent location arrived as undefined
+// and the restore threw on its length, and attached_here never
+// matched attachedHere.
+const wireState = {
+  id: "s-1",
+  last_device: "d-2",
+  changed: 4,
+  attached_here: true,
+};
+const normalized = {
+  id: "s-1",
+  location: null,
+  part: null,
+  zoom: null,
+  width: null,
+  drafts: null,
+  lastDevice: "d-2",
+  changed: 4,
+  attachedHere: true,
+  link: null,
+};
+
+test("a state read from the wire carries every field: absent ones null, names the client's", async () => {
+  const wire = fakeStore([{ status: 200, doc: { windows: 1, seq: 4, state: wireState } }]);
+  const store = new WindowStore({ base: "http://tracker.test", fetcher: wire.fetcher, device: "d-1" });
+  assert.deepEqual(await store.getState("s-1"), normalized);
+});
+
+test("a listing from the wire is normalized state by state", async () => {
+  const wire = fakeStore([{ status: 200, doc: { windows: 1, seq: 4, states: [wireState] } }]);
+  const store = new WindowStore({ base: "http://tracker.test", fetcher: wire.fetcher, device: "d-1" });
+  assert.deepEqual(await store.list(), [normalized]);
 });
