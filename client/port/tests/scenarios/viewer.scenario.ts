@@ -147,3 +147,32 @@ test("a real Shift+= and the keypad + both zoom in", { tags: ["native"] }, async
   await app.press("NumpadAdd");
   await expect.poll(async () => (await app.readout()).inspection?.zoom ?? 0).toBeCloseTo(1.728, 6);
 });
+
+// S04, migrated from the t36 Python port lane (t36_scenario_bodies.py
+// check_s04_deactivation): deactivation separates input from content -
+// a figure's plain click opens the viewer; board keys (G, gg) do
+// nothing to the board beneath while it is open; Escape closes it and
+// adds no trail entry; the board is still loaded. (The lane's zoom
+// steps were the old quarter ladder; the viewer's own keys are pinned
+// above.)
+test("S04 the open viewer takes every key; Escape closes it with the trail unchanged", { tags: ["native"] }, async ({ app, tracker }) => {
+  await openLocation(app, spec(tracker, `${tracker.tasks.landing}@r2`));
+  await expect.poll(async () => (await app.readout()).render.some((entry) => entry.kind === "figure" && entry.status === "ok")).toBe(true);
+  await app.press("Escape");
+  const figure = ((await app.readout()).content?.parts ?? []).find((part) => part.kind === "figure")!.part;
+  await app.clickPart(figure);
+  await expect.poll(async () => (await app.readout()).inspection?.part ?? null).toBe(figure);
+  const before = await app.readout();
+  await app.press("G");
+  await app.press("g", "g");
+  // a hold: board keys must leave the board beneath where it was
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const beneath = await app.readout();
+  expect(beneath.viewport.top).toBe(before.viewport.top);
+  expect(beneath.inspection?.part).toBe(figure);
+  await app.press("Escape");
+  await expect.poll(async () => (await app.readout()).inspection).toBeNull();
+  const closed = await app.readout();
+  expect(closed.trail).toEqual(before.trail);
+  expect(closed.board.status).toBe("loaded");
+});

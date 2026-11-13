@@ -78,6 +78,17 @@ export interface AppDriver {
   /** How a rendered part looks: its computed background and text
    * colour, or null when not rendered. */
   partLook(part: string): Promise<{ background: string; color: string } | null>;
+  /** A rendered part's box in viewport coordinates, or null when it is
+   * not rendered or has no size (hidden inside a folded group). */
+  partBox(part: string): Promise<Box | null>;
+  /** The open act menu's act keys, in its order; [] when none is open. */
+  menuActs(): Promise<string[]>;
+  /** A real click on the open act menu's item for an act key. */
+  clickMenuAct(key: string): Promise<void>;
+  /** Quit the app and launch it again on the SAME data directory (the
+   * launch restore's journey, S20). Native only: the browser driver
+   * has no app process to relaunch and refuses. */
+  relaunch(): Promise<void>;
   /** A real mouse drag from a control's center by (dx, dy). */
   drag(control: string, dx: number, dy: number): Promise<void>;
   /** A real wheel notch over a control (deltaY < 0 is up). The native

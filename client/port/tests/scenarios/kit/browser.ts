@@ -15,6 +15,7 @@ import { trackerDoor } from "./tracker-wire.ts";
 declare module "vitest/browser" {
   interface LocatorSelectors {
     getByPart(part: string): Locator;
+    getByMenuAct(key: string): Locator;
   }
 }
 
@@ -23,6 +24,10 @@ declare module "vitest/browser" {
 locators.extend({
   getByPart(part: string) {
     return `css=[data-port-part=${JSON.stringify(part)}]`;
+  },
+  // an open act menu's item, by its act key
+  getByMenuAct(key: string) {
+    return `css=[data-port-menu-act=${JSON.stringify(key)}]`;
   },
 });
 
@@ -103,6 +108,22 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
     async activeMatch() {
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+    },
+    async partBox(part) {
+      const element = portWindow().document.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
+      if (element === null) return null;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return null;
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    },
+    async menuActs() {
+      return [...portWindow().document.querySelectorAll("[data-port-menu-act]")].map((element) => element.getAttribute("data-port-menu-act") ?? "");
+    },
+    async clickMenuAct(key) {
+      await inside.getByMenuAct(key).click();
+    },
+    async relaunch() {
+      throw new Error("relaunch is native only: the browser driver has no app process (tag the scenario multi-window)");
     },
     async pointAt(part) {
       await inside.getByPart(part).hover();

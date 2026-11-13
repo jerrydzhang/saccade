@@ -77,12 +77,14 @@ async function waitListening(port: number, driver: ChildProcess, log: string): P
     .toBe(true);
 }
 
-async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => Promise<void> }> {
+// a launch on `reuse` (an earlier launch's home) keeps that app's data
+// directory: the relaunch journey (S20)
+async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver; close: () => Promise<void>; home: string }> {
   const env = pinned();
-  const home = mkdtempSync(join(runRoot, "app-"));
+  const home = reuse ?? mkdtempSync(join(runRoot, "app-"));
   const xdg: Record<string, string> = {};
   for (const [name, dir] of [["XDG_DATA_HOME", "data"], ["XDG_CONFIG_HOME", "config"], ["XDG_CACHE_HOME", "cache"], ["XDG_STATE_HOME", "state"]] as const) {
-    mkdirSync(join(home, dir));
+    mkdirSync(join(home, dir), { recursive: true });
     xdg[name] = join(home, dir);
   }
   const port = await freePort();
@@ -168,7 +170,9 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       const element = browser.$(`[data-port-part=${JSON.stringify(part)}]`);
       // WebdriverIO's click offsets are from the element's center
       const { height } = await element.getSize();
-      const y = options?.at === "header" ? -height / 2 + Math.min(6, height / 4) : 0;
+      // WebDriver takes integer offsets: a fractional height made the
+      // header offset fractional and the click refused
+      const y = options?.at === "header" ? Math.round(-height / 2 + Math.min(6, height / 4)) : 0;
       await element.click({ button: options?.button ?? "left", x: 0, y });
     },
     async shows(id) {
@@ -194,6 +198,25 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
     async activeMatch() {
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
+    },
+    async partBox(part) {
+      return browser.execute((path: string) => {
+        const element = document.querySelector(`[data-port-part=${JSON.stringify(path)}]`);
+        if (element === null) return null;
+        const rect = element.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return null;
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      }, part);
+    },
+    async menuActs() {
+      return browser.execute(() =>
+        [...document.querySelectorAll("[data-port-menu-act]")].map((element) => element.getAttribute("data-port-menu-act") ?? ""));
+    },
+    async clickMenuAct(key) {
+      await browser.$(`[data-port-menu-act=${JSON.stringify(key)}]`).click();
+    },
+    async relaunch() {
+      throw new Error("relaunch is the fixture's (kit/native.ts test)");
     },
     async pointAt(part) {
       const box = await browser.execute((path: string) => {
@@ -287,6 +310,7 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
     .toBe("saccade-app");
   return {
     app,
+    home,
     close: async () => {
       try {
         await browser.deleteSession();
@@ -305,11 +329,26 @@ const runRoot = (): string =>
 export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
   // eslint-disable-next-line no-empty-pattern
   app: async ({}, use) => {
-    const { app, close } = await launch(runRoot());
+    const root = runRoot();
+    let current = await launch(root);
+    // the test holds a delegate, so relaunch can swap the session (its
+    // own driver, stopped by its own handle) under the same app object
+    const app = new Proxy({} as AppDriver, {
+      get(_target, key: string) {
+        if (key === "relaunch") {
+          return async () => {
+            const home = current.home;
+            await current.close();
+            current = await launch(root, home);
+          };
+        }
+        return (current.app as unknown as Record<string, unknown>)[key];
+      },
+    });
     try {
       await use(app);
     } finally {
-      await close();
+      await current.close();
     }
   },
   // eslint-disable-next-line no-empty-pattern
