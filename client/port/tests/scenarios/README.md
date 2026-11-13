@@ -148,7 +148,6 @@ Inside the sandbox there is no `/etc/hosts` (the config binds vite to
 runner config loader and points vite's cache at the run root).
 
 Native holds real-window scenarios only: S18 (window birth, delivery landing
-in the other webview, the link). To add later: no focus steal on window birth
-(needs the compositor's focus fact), launch restore across a relaunch on the
+in the other webview, the link). To add later: launch restore across a relaunch on the
 same data dir (S20: a fixture that relaunches on one XDG root), and an `i`
 delivery into an already-live receiver that has scrolled away.

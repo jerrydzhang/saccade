@@ -1,13 +1,17 @@
 //! The suite shell's window acts (t-14 "The suite"): one app, many
 //! first-class windows, the window manager owning all layout. The
 //! shell creates windows (`w`, the ask-once answer's new-window act,
-//! and resuming a detached window state here), focuses one only when the
-//! human asks (the window jump, through the platform's activation
-//! request), broadcasts the window jump's labels to every suite
-//! window, and detaches a closing window's state - closing
-//! detaches, the state stays (t-24@r20). Placement is never set: a
-//! new window gets whatever the window manager gives, and a new
-//! window never asks for focus.
+//! and resuming a detached window state here), focuses one when the
+//! human asks (the window jump) and when the human opens something
+//! through the link (o, i, w, the task row's Enter: the receiver is
+//! focused, human ruling t-36 m-547, reversing t-14's "a new window
+//! never asks for focus" for those acts), always through the
+//! platform's activation request (focus_suite_window), broadcasts the
+//! window jump's labels to every suite window, and detaches a closing
+//! window's state - closing detaches, the state stays (t-24@r20).
+//! Placement is never set: a new window gets whatever the window
+//! manager gives. A window created for any other reason (the launch
+//! restore) does not take focus when mapped.
 
 use std::thread;
 use std::time::Duration;
@@ -132,7 +136,8 @@ pub fn suite_windows(
 }
 
 /// Open a suite window: the window manager gives it what it gives,
-/// focus is never requested, and the state it should resume - when
+/// it does not take focus on map (the frontend's elsewhere acts then
+/// request focus for it, m-547), and the state it should resume - when
 /// the caller names one - is pre-seeded so the new window's bootstrap
 /// finds the binding and applies the state.
 #[tauri::command]
@@ -161,7 +166,7 @@ pub fn open_suite_window(
         // (clientHeight == scrollHeight) - the first-use verdict's
         // defect 1, where j/k and paging were dead in every window
         // the WM had not yet activated. The size forces the layout
-        // constraint at creation; focus is still never requested.
+        // constraint at creation; the window does not take focus on map.
         .inner_size(1024.0, 768.0)
         .focused(false)
         .build()
@@ -176,9 +181,10 @@ pub fn open_suite_window(
             // false, and tao 0.37.2 restores it only on the toplevel's
             // FIRST draw - which on niri (Wayland) never came: the
             // compositor showed the window activated and GTK dropped
-            // every key (m-537/538). "Never steal focus" is focus on
-            // map, not accepting focus: refuse the first, allow the
-            // second, now. tao's late draw hook only sets true again.
+            // every key (m-537/538). Not taking focus on map is not
+            // refusing focus: refuse the first, allow the second, now
+            // (the elsewhere acts request focus explicitly, m-547).
+            // tao's late draw hook only sets true again.
             {
                 use gtk::prelude::GtkWindowExt;
                 let gtk_window = window.gtk_window()?;

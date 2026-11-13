@@ -547,6 +547,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
   }
 
+  // Opening through the link FOCUSES the receiver (human ruling m-547
+  // (3), reversing t-14's "a new window never asks for focus" for the
+  // elsewhere acts): the platform's activation request, the window
+  // jump's own door. A refused request is a note, never a failed open.
+  async function focusReceiver(label: string): Promise<void> {
+    try {
+      await tauriInvoke()("focus_suite_window", { label });
+    } catch (error) {
+      note = `the receiver ${label} could not be focused: ${String(error).slice(0, 80)}`;
+      notifyStrip();
+    }
+  }
+
   async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
     if (windowStore === null || windowStateId === null) return;
     const invoke = tauriInvoke();
@@ -560,6 +573,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // linked-delivery hole)
     await windowStore.create(fresh, { location: spec });
     const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
+    await focusReceiver(label);
     if (becomeLink) {
       // the store refuses links between windows not both attached on
       // this device, and the receiver attaches when ITS boot binds -
@@ -614,6 +628,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const decision = elsewhereDecision(act, { linkLabel, windows });
     if (decision.kind === "deliver") {
       await invoke("open_in_window", { label: decision.label, location: spec });
+      await focusReceiver(decision.label);
       return;
     }
     if (decision.kind === "new-window") {
@@ -651,6 +666,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
       return;
     }
     await invoke("open_in_window", { label: match.window, location: asking.spec });
+    // the space-l link ask sets a link and opens nothing ("this window"
+    // is its spec): focus moves only for an open
+    if (asking.spec !== "this window") await focusReceiver(match.window);
     if (asking.act === "link" && windowStore !== null && windowStateId !== null) {
       const windows = await suiteWindows();
       const target = windows.find((entry) => entry.label === match.window);
