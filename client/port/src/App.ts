@@ -47,7 +47,7 @@ import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { SEQUENCE_TIMEOUT_MS } from "./lib/input/key-matcher.ts";
 import { whichKeyTunables } from "./lib/input/which-key.ts";
-import { isPinnedChord, windowContext } from "./lib/input/contexts.ts";
+import { isPinnedChord, MODIFIER_KEYS, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import {
   assignChips,
@@ -161,6 +161,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       instruments.tasks = instrument;
       injectPorts();
       unsubscribeTasksFrame = subscribeSurface(instrument, "tasks");
+      watchSelect("tasks");
       return instrument;
     }
     const registration = registerInstrument(boardInstrument());
@@ -996,6 +997,28 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   // -- the key routing seam: inspection (modal), then the window
   // context, then the active buffer ---
+  // the live select views (the trace's labels and typed buffer while
+  // a select session holds the keys)
+  const selectViews: Partial<Record<Surface, import("./lib/select/session.ts").SelectSessionView | null>> = {};
+  function watchSelect(surface: Surface): void {
+    const presentation = instruments[surface]?.presentation as
+      | { subscribeSelect?: (observer: (view: import("./lib/select/session.ts").SelectSessionView | null) => void) => () => void }
+      | undefined;
+    presentation?.subscribeSelect?.((view) => {
+      selectViews[surface] = view;
+    });
+  }
+  watchSelect("board");
+  function selectFacts(): Record<string, string> {
+    const view = selectViews[activeSurface];
+    if (view === null || view === undefined) return {};
+    return {
+      "select.labels": view.labels.slice(0, 40).map((entry) => `${entry.label}=${entry.part}`).join(",") +
+        (view.labels.length > 40 ? `,+${view.labels.length - 40}` : ""),
+      "select.typed": `${view.pendingLabel}|${view.query}`,
+    };
+  }
+
   // the key trace (SACCADE_KEY_TRACE, lib/input/key-trace.ts): off
   // unless the shell says so; it reads, never routes
   const keyTrace = createKeyTrace({
@@ -1007,6 +1030,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         "buf.active": state.active,
         "buf.ctx": `${state.context}/${state.kind ?? "none"}`,
         "buf.pending": state.pending.map((stroke) => stroke.key).join(","),
+        ...selectFacts(),
         "win.pending": (windowHost.pendingView()?.prefix ?? []).map((stroke) => stroke.key).join(","),
         picker: picker.snapshot().open,
         ask: ask !== null,
@@ -1032,6 +1056,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
   ): void => {
     if (event.defaultPrevented) {
       trace?.set("route", "already-prevented");
+      return;
+    }
+    // a bare modifier is never a command: it passes untouched, before
+    // any surface (the inspection's modal consume included) sees it
+    if (MODIFIER_KEYS.has(event.key)) {
+      trace?.set("route", "modifier");
       return;
     }
     // the inspection surface owns every stroke while it is open: its

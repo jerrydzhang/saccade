@@ -52,6 +52,13 @@ export const PINNED_CHORDS: readonly { key: string; ctrl: boolean }[] = [
   { key: "u", ctrl: true },
 ];
 
+// The modifier keys themselves: a bare press is never a command and
+// never consumed (m-536: the trace showed key=Super consumed). The
+// seam passes them through before any routing.
+export const MODIFIER_KEYS: ReadonlySet<string> = new Set([
+  "Shift", "Control", "Alt", "AltGraph", "Meta", "Super", "Hyper", "OS", "CapsLock", "NumLock", "Fn", "FnLock",
+]);
+
 export function isPinnedChord(stroke: {
   key: string;
   ctrl: boolean;

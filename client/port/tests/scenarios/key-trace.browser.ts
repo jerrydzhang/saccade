@@ -37,6 +37,37 @@ test("with the trace on, j sends a key line naming the route and the scroll it m
   expect(Number(later?.[1])).toBeGreaterThan(before);
 });
 
+test("a bare modifier key is never consumed (m-536: key=Super disposition=consume)", async ({ bridged, tracker }) => {
+  const { app, shell } = await bridged({ keyTrace: true });
+  await openLocation(app, spec(tracker, tracker.tasks.landing));
+  await app.press("Escape");
+  for (const modifier of ["Shift", "Control", "Alt", "Meta"]) {
+    await app.press(modifier);
+    const line = (entry: string): boolean => new RegExp(`^key #\\d+ .* key=${modifier} `).test(entry);
+    await expect.poll(() => traceLines(shell).filter(line).length).toBeGreaterThan(0);
+    expect(traceLines(shell).find(line)).toContain("route=modifier");
+    expect(traceLines(shell).find(line)).toContain("preventedAfter=0");
+  }
+});
+
+test("in select mode the key line carries the labels and the typed buffer", async ({ bridged, tracker }) => {
+  const { app, shell } = await bridged({ keyTrace: true });
+  await openLocation(app, spec(tracker, tracker.tasks.landing));
+  await app.press("Escape");
+  await app.press("s");
+  await expect.poll(async () => (await app.labels()).length).toBeGreaterThan(0);
+  const first = (await app.labels())[0]!;
+  // the picker's typing sent digits too: only lines after this point
+  const line = (entry: string): boolean => /^key #\d+ .* key=1 /.test(entry);
+  const earlier = traceLines(shell).filter(line).length;
+  await app.press("1");
+  await expect.poll(() => traceLines(shell).filter(line).length).toBe(earlier + 1);
+  const text = traceLines(shell).filter(line).at(-1)!;
+  expect(text).toContain("buf.ctx=captured/commands");
+  expect(text).toContain(`${first.label}=${first.part}`);
+  expect(text).toMatch(/select\.typed=/);
+});
+
 test("with the trace off, no key line is sent", async ({ bridged, tracker }) => {
   const { app, shell } = await bridged();
   await openLocation(app, spec(tracker, tracker.tasks.landing));
