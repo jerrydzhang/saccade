@@ -3,10 +3,11 @@
 // labels are assigned to the visible targets and typing a label
 // selects its target (the prototype's hintKey, inst16.html:106; the
 // text narrowing the staging carried is gone, human ruling m-541).
-// Case-fold rule (b8240b5): a typed letter naming no label in its own
-// case tries the folded case. Two simultaneous namespaces: lowercase
-// on text targets, uppercase on everything else (the app's accepted
-// shape; the prototype paints one uppercase namespace per session).
+// ONE namespace (human ruling m-545, the prototype's labelsFor,
+// inst16.html:99-100): the home-row letters in their order, painted
+// uppercase whatever the target's kind; typing is case-insensitive.
+// Case no longer tells targets apart (it made l and I ambiguous); how
+// a label shows its target's kind is open for the design pass.
 
 export type TargetKind =
   | "text"
@@ -20,14 +21,13 @@ export type TargetKind =
   | "control"
   | "task";
 
-/** Whether a target carries prose: text targets narrow by their text
- * and carry lowercase labels; everything else carries uppercase ones. */
+/** Whether a target carries prose (text and annotations). */
 export function isTextKind(kind: TargetKind): boolean {
   return kind === "text" || kind === "annotation";
 }
 
-const LOWER = "abcdefghijklmnopqrstuvwxyz".split("");
-const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+/** The prototype's label letters, in its order (inst16.html:99). */
+const LETTERS = "ASDFGHJKLQWERTYUIOPZXCVBNM".split("");
 
 /** Two-character continuation, from the same letters (labelsFor's
  * second pool, inst16.html:101). */
@@ -41,26 +41,14 @@ function combos(pool: string[]): string[] {
   return out;
 }
 
-/** The labels for `count` targets, per namespace: up to 26 targets
- * take single letters; more take two-letter labels, ALL of them
+/** The labels for `kinds.length` targets: up to 26 take single
+ * letters in LETTERS order; more take two-letter pairs, ALL of them
  * (inst16.html:100 labelsFor), so no label prefixes another and every
  * one completes when typed. Stable: target order in the document is
  * the label order. */
-export function assignLabels(kinds: TargetKind[]): string[] {
-  const textTargets = kinds.map((kind, index) => (isTextKind(kind) ? index : -1)).filter((index) => index >= 0);
-  const otherTargets = kinds.map((kind, index) => (isTextKind(kind) ? -1 : index)).filter((index) => index >= 0);
-  const labels: string[] = new Array(kinds.length).fill("");
-  const pool = (letters: string[], count: number): string[] =>
-    count <= letters.length ? letters : combos(letters);
-  const textPool = pool(LOWER, textTargets.length);
-  const otherPool = pool(UPPER, otherTargets.length);
-  textTargets.forEach((index, position) => {
-    labels[index] = textPool[position] ?? "";
-  });
-  otherTargets.forEach((index, position) => {
-    labels[index] = otherPool[position] ?? "";
-  });
-  return labels;
+export function assignLabels(kinds: readonly TargetKind[]): string[] {
+  const pool = kinds.length <= LETTERS.length ? LETTERS : combos(LETTERS);
+  return kinds.map((_, index) => pool[index] ?? "");
 }
 
 /** The selection's typed state: the pending label prefix. */
@@ -79,9 +67,8 @@ export function startNarrow(count: number): NarrowState {
  * (inst16.html:106), human ruling m-541: letters match LABELS only -
  * the pending prefix filters the labels, one exact match selects its
  * target, and ZERO matches ends the session (`exit`). There is no text
- * narrowing (find, /, is the text search). Case-fold rule (no label
- * ever needs Shift): a letter naming no label in its own case tries
- * the other case. The caller ignores non-letters before calling. */
+ * narrowing (find, /, is the text search). Typing is case-insensitive
+ * (no label ever needs Shift). The caller ignores non-letters. */
 export function narrowStep(
   state: NarrowState,
   labels: string[],
@@ -91,13 +78,10 @@ export function narrowStep(
     state.alive.filter(
       (index) => labels[index] !== undefined && labels[index] !== "" && labels[index].startsWith(candidate),
     );
-  let pending = state.pendingLabel + typed;
-  let alive = matching(pending);
-  if (alive.length === 0) {
-    const flipped = typed === typed.toLowerCase() ? typed.toUpperCase() : typed.toLowerCase();
-    pending = state.pendingLabel + flipped;
-    alive = matching(pending);
-  }
+  // case-insensitive: every label is uppercase (hintKey folds the
+  // typed letter to the namespace's case)
+  const pending = state.pendingLabel + typed.toUpperCase();
+  const alive = matching(pending);
   if (alive.length === 0) return { alive: [], pendingLabel: "", selected: null, exit: true };
   const first = alive[0];
   if (alive.length === 1 && first !== undefined && labels[first] === pending) {

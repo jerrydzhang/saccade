@@ -64,7 +64,8 @@ test("targets come from the model, nested included, identity is the part path", 
 });
 
 test("enter captures and installs the session; exact-single selects (case-folded) and restores", () => {
-  // two non-text targets: labels 'A' then 'B' (the other namespace)
+  // two targets: labels 'A' then 'S' (one namespace, the prototype's
+  // home-row order, inst16.html:100)
   const targets: SelectableTarget[] = [
     { part: "/content/0", kind: "group", text: "the group" },
     { part: "/content/1", kind: "figure", text: "a figure" },
@@ -78,14 +79,14 @@ test("enter captures and installs the session; exact-single selects (case-folded
     view?.labels.map((l) => [l.part, l.label]),
     [
       ["/content/0", "A"],
-      ["/content/1", "B"],
+      ["/content/1", "S"],
     ],
   );
   const active = context();
   assert.ok(active !== null && active.onUnmatched !== undefined, "the session context installed");
-  // typing 'b' names no label in its own case and folds to 'B' - the
-  // case-fold rule selects the second target (no label ever needs Shift)
-  const selection = active.onUnmatched?.(key("b"));
+  // typing is case-insensitive: 's' selects the label painted 'S'
+  // (no label ever needs Shift)
+  const selection = active.onUnmatched?.(key("s"));
   assert.equal(selection?.kind, "consume");
   assert.deepEqual(events, ["capture", "release", "restore", "selected:/content/1"]);
   assert.equal(session.view(), null, "selection exits the session");
@@ -100,7 +101,7 @@ test("invisible targets get no labels: existence is never visibility", () => {
   const { session, context, events } = harness(targets, (part) => visible.has(part));
   session.enter();
   const view = session.view();
-  assert.deepEqual(view?.labels.map((l) => l.label), ["a"], "only the visible target is labeled");
+  assert.deepEqual(view?.labels.map((l) => l.label), ["A"], "only the visible target is labeled");
   // the invisible group is never labeled; 'z' names no label and
   // narrows no text: ZERO matches left, so the stroke is consumed and
   // the session EXITS (the prototype's hintKey, inst16.html:106; the
@@ -129,9 +130,13 @@ test("enter is a no-op with nothing visible; escape exits without selecting", ()
   assert.deepEqual(open.events, ["capture", "release", "restore"]);
 });
 
-test("labels: two namespaces, stable order, single letters first", () => {
-  const labels = assignLabels(["text", "group", "text", "figure"]);
-  assert.deepEqual(labels, ["a", "A", "b", "B"]);
+test("labels: ONE namespace in the prototype's home-row order, painted uppercase (human ruling m-545)", () => {
+  // inst16.html:99-100: LETTERS = ASDFGHJKLQWERTYUIOPZXCVBNM, single
+  // letters up to 26 targets whatever their kind, two-letter pairs past
+  assert.deepEqual(assignLabels(["text", "group", "text", "figure"]), ["A", "S", "D", "F"]);
+  const many = assignLabels(Array.from({ length: 27 }, () => "text" as const));
+  assert.deepEqual(many.slice(0, 4), ["AA", "AS", "AD", "AF"]);
+  assert.ok(many.every((label) => label === label.toUpperCase()));
 });
 
 test("labels are prefix-free past 26 targets: every label is reachable by typing it", async () => {
@@ -168,7 +173,7 @@ test("m-541: letters match labels only - a letter only text would match ends the
   ];
   const { session, context, events } = harness(targets, () => true);
   session.enter();
-  assert.deepEqual(session.view()?.labels.map((l) => l.label), ["a", "b"]);
+  assert.deepEqual(session.view()?.labels.map((l) => l.label), ["A", "S"]);
   // 'p' names no label (it is in both texts): zero matches, exit
   const step = context()?.onUnmatched?.(key("p"));
   assert.equal(step?.kind, "consume");
@@ -186,13 +191,14 @@ test("m-541: the typed prefix filters the painted labels; the next letter select
   session.enter();
   const all = session.view()!.labels;
   assert.equal(all.length, 30);
-  context()?.onUnmatched?.(key("b"));
+  // case-insensitive: a lowercase 's' extends the prefix 'S'
+  context()?.onUnmatched?.(key("s"));
   const view = session.view()!;
-  assert.equal(view.pendingLabel, "b");
-  assert.ok(view.labels.length > 0 && view.labels.every((l) => l.label.startsWith("b")), "only b- labels stay painted");
+  assert.equal(view.pendingLabel, "S");
+  assert.ok(view.labels.length > 0 && view.labels.every((l) => l.label.startsWith("S")), "only S- labels stay painted");
   assert.ok(view.labels.length < all.length);
   const target = view.labels[0]!;
-  context()?.onUnmatched?.(key(target.label[1]!));
+  context()?.onUnmatched?.(key(target.label[1]!.toLowerCase()));
   assert.ok(events.includes(`selected:${target.part}`));
   assert.equal(session.view(), null);
 });

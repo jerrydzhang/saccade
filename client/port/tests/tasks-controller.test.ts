@@ -246,8 +246,8 @@ test("label selection lands on the row and opens its act menu", async (t) => {
   // labels paint while the session is active (it exits on selection)
   const view = h.selectView() as { active: boolean; labels: { part: string; label: string }[] };
   assert.equal(view.active, true);
-  // task rows are non-prose: uppercase labels in document order
-  assert.deepEqual(view.labels.map((entry) => entry.label), ["A", "B"]);
+  // one namespace, the prototype's home-row order (m-545)
+  assert.deepEqual(view.labels.map((entry) => entry.label), ["A", "S"]);
   assert.equal(h.press("a"), "consume");
   assert.equal(h.attachment.presentation.getSelection(), "t-0");
   assert.equal((h.selectView() as { active: boolean } | null), null, "exact-single selects and exits");
