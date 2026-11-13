@@ -32,12 +32,17 @@ type PortWindow = Window & { __saccadePort?: { readout(): PortObservation } };
 // brace and bracket characters doubled, and an uppercase letter typed
 // as a person types it - with Shift held (the keymap binds N as
 // shift+n)
+const US_SHIFTED = new Set([..."~!@#$%^&*()_+{}|:\"<>?"]);
+
 function keySyntax(key: string): string {
   const chord = /^Ctrl-(.)$/.exec(key);
   if (chord) return `{Control>}${chord[1]}{/Control}`;
   if (key.length > 1) return `{${key}}`;
   if (key === "{" || key === "[") return key + key;
   if (/^[A-Z]$/.test(key)) return `{Shift>}${key}{/Shift}`;
+  // a US-layout shifted symbol arrives with Shift held, as a person
+  // types it (m-552: a bare "+" without Shift is no real stroke)
+  if (US_SHIFTED.has(key)) return `{Shift>}${key === "{" ? "{{" : key}{/Shift}`;
   return key;
 }
 

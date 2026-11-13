@@ -48,16 +48,23 @@ export function sequence(first: StrokePattern, ...rest: StrokePattern[]): KeySeq
   return [first, ...rest];
 }
 
-// Exact field equality: a stroke matches a pattern when the key and
-// every modifier flag are equal. Modifier normalization values are
-// explicitly draft-open (the IME/native-editing boundary set, grouped
-// open): the matcher invents none; the host normalizes KeyboardEvents
-// before calling.
+// Field equality: a stroke matches a pattern when the key and every
+// modifier flag are equal, except Shift on a printable character
+// (below). Other modifier normalization stays draft-open (the
+// IME/native-editing boundary set, grouped open).
+//
+// SHIFT AND PRINTABLE CHARACTERS (m-552, the class behind N and '+'): a
+// single printable character already encodes Shift - '+' is Shift+= on
+// a US layout and plain on the keypad, '?' is Shift+/, 'N' is Shift+n -
+// so for those the Shift flag is not compared: the character decides,
+// letters by their case. Named keys (Enter, Escape, ArrowDown) keep Shift
+// exact, and Ctrl, Alt and Meta are always exact.
 export function strokeMatches(pattern: StrokePattern, stroke: KeyInput): boolean {
+  const printable = [...pattern.key].length === 1;
   return (
     pattern.key === stroke.key &&
     pattern.ctrl === stroke.ctrl &&
-    pattern.shift === stroke.shift &&
+    (printable || pattern.shift === stroke.shift) &&
     pattern.alt === stroke.alt &&
     pattern.meta === stroke.meta
   );

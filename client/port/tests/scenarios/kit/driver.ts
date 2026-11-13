@@ -59,9 +59,10 @@ export type FindMark = { part: string | null; text: string; active: boolean };
 export interface AppDriver {
   /** The readout of a window: the focused one by default. */
   readout(window?: string): Promise<PortObservation>;
-  /** Real key presses in order. Names: one character ("n", "/", " "),
-   * a named key ("Escape", "Enter", "Backspace", "ArrowDown"), or a
-   * Ctrl chord ("Ctrl-f"). */
+  /** Real key presses in order. Names: one character ("n", "/", " ";
+   * a US-layout shifted symbol such as "+" or "?" arrives with Shift
+   * held, as a person types it), a named key ("Escape", "Enter",
+   * "Backspace", "ArrowDown", "NumpadAdd"), or a Ctrl chord ("Ctrl-f"). */
   press(...keys: string[]): Promise<void>;
   /** Real typing into whatever holds focus, character by character. */
   type(text: string): Promise<void>;
@@ -122,7 +123,7 @@ export interface AppDriver {
  * matcher's live state, the observable the which-key, help and timeout
  * scenarios read. Strokes and keys use the port's own help labels
  * (src/lib/input/input-context.ts formatStroke/formatSequence: "spc",
- * "g g", "Ctrl-f", "Shift-G"). */
+ * "g g", "Ctrl-f", "G"). */
 export type InputView = {
   /** The pending strokes of an unfinished sequence, or [] */
   pending: string[];

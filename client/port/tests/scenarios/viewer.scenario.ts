@@ -135,3 +135,15 @@ test("h j k l pan the view by the named step; the board beneath never scrolls", 
   await app.press("=");
   await expect.poll(pan).toEqual([0, 0]);
 });
+
+// m-552: zoom in failed for the human: a real "+" is Shift+= and the
+// binding demanded no Shift. The driver now presses "+" as a person
+// does (Shift held); the keypad's + arrives without Shift; both zoom in.
+test("a real Shift+= and the keypad + both zoom in", { tags: ["native"] }, async ({ app, tracker }) => {
+  await viewerBoard(app, tracker);
+  await opened(app, "/content/0");
+  await app.press("+");
+  await expect.poll(async () => (await app.readout()).inspection?.zoom ?? 0).toBeCloseTo(1.44, 6);
+  await app.press("NumpadAdd");
+  await expect.poll(async () => (await app.readout()).inspection?.zoom ?? 0).toBeCloseTo(1.728, 6);
+});

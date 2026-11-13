@@ -228,3 +228,22 @@ test("the picker controller: submit goes through the one open funnel, then close
   picker.submit("   ");
   assert.deepEqual(opened, ["host:8811/repo/t-1"]);
 });
+
+test("m-552: a printable character carries its own Shift; letters keep their case; ctrl/alt/meta stay exact", async () => {
+  const { strokeMatches, key: plain } = await import("../src/lib/input/input-context.ts");
+  const at = (k: string, over: Partial<KeyInput> = {}): KeyInput => ({ key: k, ctrl: false, shift: false, alt: false, meta: false, ...over });
+  // US Shift+= is "+" with Shift held; the keypad's + is "+" without it
+  assert.ok(strokeMatches(plain("+"), at("+", { shift: true })), "Shift+= is +");
+  assert.ok(strokeMatches(plain("+"), at("+")), "keypad + is +");
+  assert.ok(strokeMatches(plain("?"), at("?", { shift: true })), "Shift+/ is ?");
+  // letters: the character's case carries Shift
+  assert.ok(strokeMatches(plain("N"), at("N", { shift: true })));
+  assert.ok(!strokeMatches(plain("N"), at("n")), "N is not n");
+  assert.ok(!strokeMatches(plain("n"), at("N", { shift: true })), "n is not N");
+  assert.ok(!strokeMatches(plain("g"), at("G", { shift: true })), "g is not G");
+  // modifiers other than Shift stay exact
+  assert.ok(!strokeMatches(plain("+"), at("+", { ctrl: true })));
+  assert.ok(!strokeMatches(plain("o"), at("o", { alt: true })));
+  // a named key keeps Shift exact (Shift+Enter is not Enter)
+  assert.ok(!strokeMatches(plain("Enter"), at("Enter", { shift: true })));
+});

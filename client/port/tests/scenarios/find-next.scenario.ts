@@ -31,10 +31,9 @@ test("n steps the committed search's active match (readout)", async ({ app, trac
   await expect.poll(async () => (await app.readout()).find.active).toBe((before + 1) % 3);
 });
 
-// BASE DEFECT, expected to fail: src/lib/input/contexts.ts binds
-// find-prev as shift("n"), but a real Shift+n arrives as key "N" and
-// the matcher is exact (src/lib/input/input-context.ts strokeMatches),
-// so N never fires on real input (G is bound as shift("G") and works).
+// N is the character N (a real Shift+n): the binding names the
+// character, whose case carries Shift (input-context.ts strokeMatches,
+// m-552); it once named shift("n") and never fired on real input.
 test("N steps the committed search back", async ({ app, tracker }) => {
   const before = await committedSearch(app, tracker);
   await app.press("n");

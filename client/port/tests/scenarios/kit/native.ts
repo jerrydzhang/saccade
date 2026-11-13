@@ -30,13 +30,18 @@ const NAMED: Record<string, string> = {
   ArrowUp: Key.ArrowUp,
   ArrowLeft: Key.ArrowLeft,
   ArrowRight: Key.ArrowRight,
+  NumpadAdd: Key.Add,
 };
 
 // shifted symbols ride explicit Shift chords on their US-layout base
 // key: on this WebKitWebDriver stack a bare shifted codepoint loses
 // its shift after a pointer action (client/harness/t36_port.py
 // type_text records the evidence); uppercase letters likewise
-const CHORDS: Record<string, string> = { ":": ";", "@": "2" };
+const CHORDS: Record<string, string> = {
+  "~": "`", "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8",
+  "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'",
+  "<": ",", ">": ".", "?": "/",
+};
 
 type Browser = Awaited<ReturnType<typeof remote>>;
 

@@ -20,7 +20,7 @@ test("? lists the active context's whole command table", async ({ app, tracker }
   const keys = entries.map((entry) => entry.keys);
   // the window table (src/lib/input/contexts.ts windowContext) and the
   // board reading table (boardReadingContext), by their bound keys
-  for (const bound of ["spc spc", "Ctrl-o", "Ctrl-i", "j", "k", "g g", "Shift-G", "/", "n", "Shift-N", "s"]) {
+  for (const bound of ["spc spc", "Ctrl-o", "Ctrl-i", "j", "k", "g g", "G", "/", "n", "N", "s"]) {
     expect(keys).toContain(bound);
   }
   for (const entry of entries) {

@@ -8,7 +8,6 @@ import {
   ctrl,
   key,
   sequence,
-  shift,
   type InputContext,
 } from "./input-context.ts";
 import { validateNoCollisions } from "./key-matcher.ts";
@@ -117,10 +116,9 @@ export function windowContext(actions: WindowActions): InputContext {
         label: "show the keys",
         run: () => actions.showHelp(),
       },
-      // a real keyboard's ? is Shift+slash (key "?", shift set); a
-      // synthesized one may carry either shape - both spellings fire
-      // the same action (alternatives for one action)
-      keys: [sequence(key("?")), sequence(shift("?"))],
+      // the character carries its Shift (input-context.ts
+      // strokeMatches, m-552): one spelling for every layout
+      keys: [sequence(key("?"))],
     },
     {
       action: {
@@ -334,7 +332,7 @@ export function tasksReadingContext(actions: TasksReadingActions): InputContext 
         label: "scroll to the bottom",
         run: () => actions.scrollToBottom(),
       },
-      keys: [sequence(shift("G"))],
+      keys: [sequence(key("G"))],
     },
     {
       action: {
@@ -381,7 +379,7 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         label: "scroll to the bottom",
         run: () => actions.scrollToBottom(),
       },
-      keys: [sequence(shift("G"))],
+      keys: [sequence(key("G"))],
     },
     {
       action: {
@@ -445,9 +443,8 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         label: "previous match of the committed search",
         run: () => actions.prevMatch(),
       },
-      // a real Shift+n arrives as key "N" with shift set (G's own
-      // lesson, recorded): the binding names the arriving key
-      keys: [sequence(shift("N"))],
+      // N is the character (its case carries Shift, m-552)
+      keys: [sequence(key("N"))],
     },
     {
       action: {
