@@ -121,6 +121,30 @@ export function actsFor(
     }
     return acts;
   }
+  if (target.kind === "diagram" && target.part !== null) {
+    // the prototype's diagram is a figure-kind target (inst16.html:224,
+    // :47): x Enlarge first (a plain click enlarges); y copies the
+    // citation of the block it sits in (a diagram has no grammar path
+    // of its own)
+    const ports = deps.referencePorts();
+    if (ports === null) return [];
+    const part = target.part;
+    const block = part.replace(/\/diagram\/\d+$/, "");
+    const citation = deps.partCitation(block);
+    const acts: MenuAct[] = [
+      {
+        key: "x",
+        action: { id: "diagram.enlarge", label: "enlarge", run: () => ports.figureEnlarge?.(part) },
+      },
+    ];
+    if (citation !== null) {
+      acts.push({
+        key: "y",
+        action: { id: "diagram.copy-citation", label: "copy the block's citation", run: () => ports.copy(citation) },
+      });
+    }
+    return acts;
+  }
   if (target.kind === "figure" && target.part !== null) {
     // the prototype's figure kind (inst16 :47): 'x' Enlarge FIRST -
     // a plain click enlarges - then 'a' Annotate and the OPEN/copy

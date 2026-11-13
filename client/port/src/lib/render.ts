@@ -17,6 +17,7 @@ import type { Root, RootContent, PhrasingContent } from "mdast";
 import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./markdown.ts";
 import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
+import { diagramPart } from "./board/targets.ts";
 
 /** The history diff's painted change mark on a block. The history mode
  * paints it; until that slice lands, blocks carry no mark. */
@@ -54,6 +55,11 @@ export function authoredMathOf(
 }
 
 type Attrs = Record<string, string | boolean | undefined>;
+
+/** Per render (one hooks object), the diagrams seen in each block. */
+const diagramCounts = new WeakMap<RenderHooks, Map<string, number>>();
+
+
 
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -466,10 +472,19 @@ function renderNode(
       if (node.lang === "mermaid") {
         const range = pos;
         const id = unitIdAt(hooks, range?.start.offset);
+        // each diagram is its own part, <block>/diagram/<n> in document
+        // order - the same order lib/board/targets.ts walks the parse
+        // (the prototype's diagrams are targets, inst16.html:224)
+        const seen = diagramCounts.get(hooks) ?? new Map<string, number>();
+        diagramCounts.set(hooks, seen);
+        const ordinal = seen.get(blockId) ?? 0;
+        seen.set(blockId, ordinal + 1);
         return el(
           "div",
           {
             class: "mermaid-block",
+            "data-port-part": diagramPart(blockId, ordinal),
+            "data-port-kind": "diagram",
             "data-copy-unit": "mermaid",
             ...(id ? { "data-unit-id": id } : {}),
             "data-unit-source": node.value,

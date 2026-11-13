@@ -82,8 +82,10 @@ Every module is a test-infrastructure module; each line says why it exists.
   scenarios and helpers are driver-blind.
 - `kit/helpers.ts`: the shared journeys (open the picker, open a location,
   wait for it, find), written once against `AppDriver`.
-- `kit/browser.ts`: the browser driver. The port's own `index.html`, served
-  by vitest's vite server, in a fresh iframe per test (a fresh window, so no
+- `kit/browser.ts`: the browser driver. The port's app, served by vitest's
+  vite server from `kit/app.html` (the port's `index.html` plus one line
+  lending the test page's runner, which vitest's rewritten dynamic imports
+  need, or mermaid and mathjax never load), in a fresh iframe per test (a fresh window, so no
   listener or state crosses tests); input is vitest's Playwright `userEvent`.
   Needed because vitest isolates per file, not per test, and the app's window
   listeners do not detach.

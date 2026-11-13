@@ -202,3 +202,21 @@ test("m-541: the typed prefix filters the painted labels; the next letter select
   assert.ok(events.includes(`selected:${target.part}`));
   assert.equal(session.view(), null);
 });
+
+test("m-545: every mermaid fence in a block is a diagram target of its own, in document order", () => {
+  const board = {
+    content: [
+      { kind: "text", markdown: "before\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\nbetween\n\n```mermaid\nflowchart LR\n  c --> d\n```\n", pos: { start: { line: 1 }, end: { line: 9 } } },
+      { kind: "text", markdown: "```js\nnot a diagram\n```\n", pos: { start: { line: 10 }, end: { line: 12 } } },
+    ],
+  } as unknown as Board;
+  assert.deepEqual(
+    boardTargetsOf(board).map((t) => [t.part, t.kind]),
+    [
+      ["/content/0", "text"],
+      ["/content/0/diagram/0", "diagram"],
+      ["/content/0/diagram/1", "diagram"],
+      ["/content/1", "text"],
+    ],
+  );
+});

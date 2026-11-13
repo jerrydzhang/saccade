@@ -386,6 +386,22 @@ export function createPortWindow(windowId = "main"): PortWindow {
       partElement instanceof HTMLElement && partElement.classList.contains("block-figure")
         ? partElement
         : (partElement?.querySelector(".block-figure") ?? null);
+    // a rendered diagram (its own part, data-port-kind diagram): the
+    // shown SVG, enlarged as an image
+    if (partElement instanceof HTMLElement && partElement.getAttribute("data-port-kind") === "diagram") {
+      const svg = partElement.querySelector("svg");
+      if (svg === null) {
+        note = `the diagram at ${part} is not rendered (nothing to enlarge)`;
+        notifyStrip();
+        return;
+      }
+      const markup = new XMLSerializer().serializeToString(svg);
+      const src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(markup)))}`;
+      inspection = { part, src, caption: "diagram", zoom: inspectionZoomReset() };
+      notifyInspection();
+      notifyStrip();
+      return;
+    }
     const img = (element?.querySelector("img.figure-img") as HTMLImageElement | null) ?? null;
     const text = element?.querySelector("pre.figure-text")?.textContent ?? null;
     if (element === null || (img === null && text === null)) {

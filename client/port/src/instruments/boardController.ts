@@ -131,7 +131,7 @@ export interface BoardUI extends HydrationHost {
   referencePrimaryClick(part: string): void;
   /** A plain click on a figure runs its first act (enlarge) through
    * the shared menu path. */
-  figurePrimaryClick(part: string): void;
+  figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
   /** The window services the reference acts ride (the one open
    * funnel and the copy observation); injected by the window, and no
    * reference act is offered before then. */
@@ -283,7 +283,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       boardMenu.session.primaryClick({ kind: "reference", label, part });
       notifyMenu();
     },
-    figurePrimaryClick(part: string) {
+    figurePrimaryClick(part: string, kind: "figure" | "diagram" = "figure") {
       // the figure's own target kind; the primary act is enlarge
       // (actsFor's figure branch), run through the SAME session path
       // every invocation uses
@@ -295,7 +295,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         match !== null && frame.board !== null && frame.board.task.length > 0
           ? `${frame.board.task}@r${match[1]}:${part}`
           : part;
-      boardMenu.session.primaryClick({ kind: "figure", label: citation ?? part, part });
+      boardMenu.session.primaryClick({ kind, label: citation ?? part, part });
       notifyMenu();
     },
     setReferencePorts(ports) {

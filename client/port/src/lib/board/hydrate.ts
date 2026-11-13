@@ -44,7 +44,8 @@ export interface HydrationHost {
   referencePrimaryClick(part: string): void;
   /** A plain click on the figure whose part is `part` (the primary
    * act, scenario 4's enlarge). */
-  figurePrimaryClick(part: string): void;
+  /** A plain click on a figure or a rendered diagram: its first act. */
+  figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
 }
 
 export async function hydrate(
@@ -64,7 +65,7 @@ export async function hydrate(
 
   const mermaidPending = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="mermaid"]'));
   for (const div of mermaidPending) {
-    await hydrateMermaid(div, collected);
+    await hydrateMermaid(div, collected, host);
     if (stale()) return collected;
   }
 
@@ -191,7 +192,7 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   outcomes.push({ kind: "math", status: "ok", message: "", line });
 }
 
-async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {
+async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[], host: HydrationHost): Promise<void> {
   const source = div.dataset.unitSource ?? "";
   const line = div.dataset.line ? Number(div.dataset.line) : undefined;
   const result = await renderMermaid(source);
@@ -230,6 +231,20 @@ async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[]): Prom
   }
   const caption = el("p", { class: "diagram-caption" }, "diagram - click to expand, source preserved");
   div.append(figure, caption);
+  // a plain click runs the diagram's first act, enlarge (the prototype's
+  // primary on a figure-kind target); the right-gesture guard as figures
+  const part = div.getAttribute("data-port-part");
+  if (part !== null) {
+    let contextmenuAt = 0;
+    div.addEventListener("contextmenu", () => {
+      contextmenuAt = performance.now();
+    });
+    div.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (performance.now() - contextmenuAt < 250) return;
+      host.figurePrimaryClick(part, "diagram");
+    });
+  }
   outcomes.push({ kind: "mermaid", status: "ok", message: "", line });
 }
 

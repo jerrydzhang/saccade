@@ -1,5 +1,6 @@
-// The browser driver: the port's own index.html, served by this vite
-// config, in a fresh iframe per test (a fresh window object, so no
+// The browser driver: the port's app (kit/app.html, the port's own
+// index.html plus the runner loan its dynamic imports need), served by
+// this vite config, in a fresh iframe per test (a fresh window object, so no
 // listener or state survives between tests), driven by vitest browser
 // mode's real Playwright input in WebKit. There is no Tauri bridge
 // here: the port starts empty and reaches the tracker through the
@@ -165,7 +166,7 @@ export const test = base.extend<{
 }>({
   // eslint-disable-next-line no-empty-pattern
   app: async ({}, use) => {
-    const { app, close } = await launch("/index.html");
+    const { app, close } = await launch("/tests/scenarios/kit/app.html");
     await use(app);
     close();
   },

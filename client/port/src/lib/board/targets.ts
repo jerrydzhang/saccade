@@ -4,6 +4,13 @@
 
 import type { Board } from "./model.ts";
 import type { TargetKind } from "../select/label-select.ts";
+import { parseMarkdown } from "../markdown.ts";
+
+/** A diagram's part path: its block's part plus its ordinal there (the
+ * renderer stamps the same path on the rendered diagram). */
+export function diagramPart(blockPart: string, ordinal: number): string {
+  return `${blockPart}/diagram/${ordinal}`;
+}
 
 export type BoardTargetKind = "text" | "annotation" | "figure" | "group" | "incorporation" | "unknown";
 
@@ -68,6 +75,13 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
           ? { ...base, source: { task: block.source.task, revision: block.source.revision, select: block.source.select } }
           : base,
       );
+      // every rendered diagram in a block's markdown is a target of its
+      // own (the prototype's mermaid figure kind, inst16.html:224)
+      if (block.kind === "text" || block.kind === "annotation") {
+        parseMarkdown(block.markdown, 0, 1).mermaidFences.forEach((_, ordinal) => {
+          out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram" });
+        });
+      }
       if (block.kind === "group" || block.kind === "incorporation") {
         walk(block.content, part);
       }
