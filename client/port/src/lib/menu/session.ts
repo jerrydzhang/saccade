@@ -78,7 +78,7 @@ export type MenuActs = (target: MenuTarget) => readonly MenuAct[];
 
 export type MenuEvent =
   | Readonly<{ kind: "open"; target: MenuTarget; at: Readonly<{ x: number; y: number }> | null }>
-  | Readonly<{ kind: "close"; reason: "act" | "escape" | "outside-click" | "reopen" }>
+  | Readonly<{ kind: "close"; reason: "act" | "escape" | "outside-click" | "scroll" | "reopen" }>
   | Readonly<{ kind: "act"; index: number; actionId: string }>;
 
 export type MenuKeyOutcome =
@@ -114,6 +114,11 @@ export type MenuSession = Readonly<{
   primaryClick(target: MenuTarget): MenuKeyOutcome;
   /** A pointer-down outside the menu dismisses without acting (:517). */
   outsidePointerDown(): void;
+  /** A wheel scroll outside the menu dismisses without acting: the
+   * menu is anchored to a point the scroll carries away (the human's
+   * report on the native app; the prototype's page never scrolled
+   * under a menu). */
+  scrolledAway(): void;
   /** The host's callback: runs on every close so selection state
    * follows (closeMenu :68; the app's onClose contract,
    * menu.ts@b8240b5 "the caller's onClose runs on every close"). */
@@ -127,7 +132,7 @@ export function createMenuSession(actsFor: MenuActs): MenuSession {
   const events: MenuEvent[] = [];
   let closeCallback: (() => void) | null = null;
 
-  function close(reason: "act" | "escape" | "outside-click" | "reopen"): void {
+  function close(reason: "act" | "escape" | "outside-click" | "scroll" | "reopen"): void {
     if (!open) return;
     open = false;
     current = null;
@@ -199,6 +204,7 @@ export function createMenuSession(actsFor: MenuActs): MenuSession {
       return { kind: "act", index: 0, action: entry.action };
     },
     outsidePointerDown: () => close("outside-click"),
+    scrolledAway: () => close("scroll"),
     onClose: (callback: () => void) => {
       closeCallback = callback;
     },

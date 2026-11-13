@@ -11,6 +11,7 @@ at the generation boundary. -->
   import { paintMarks } from "../lib/find/marks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
 import { placeMenuInStage } from "../lib/menu/geometry.ts";
+import { bindMenuDismissal } from "../lib/menu/dismiss.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
   import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
@@ -106,6 +107,14 @@ import { placeMenuInStage } from "../lib/menu/geometry.ts";
 
   let menuElement: HTMLElement | null = $state(null);
   let menuAt = $state({ x: 4, y: 4 });
+
+  // An open menu closes on a pointer-down or a wheel outside it
+  // (lib/menu/dismiss.ts); bound only while the menu is painted.
+  $effect(() => {
+    const element = menuElement;
+    if (element === null) return;
+    return bindMenuDismissal(element, controller.menuSession());
+  });
 
   $effect(() => {
     if (menu === null) return;

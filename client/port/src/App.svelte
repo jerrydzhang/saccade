@@ -144,7 +144,7 @@ from the registry's reviewed erasure boundary. -->
     />
   {/if}
   <div class="port-main">
-  <main class="port-content" bind:this={scroller}>
+  <main class="port-content" data-port-control="content" bind:this={scroller}>
     {#if frame !== null && frame.kind === "alive"}
       {#if frame.content.kind === "available"}
         {@const pair = frame.content.value}
