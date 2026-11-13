@@ -71,6 +71,9 @@ export interface Viewport {
   metrics(): Readonly<{ position: Point; width: number; height: number }>;
   scrollLines(amount: number): void;
   scrollPage(direction: -1 | 1, extent: "half" | "full"): void;
+  /** Scroll a FRACTION of the client height (the prototype's paging
+   * steps: ^f/^b 0.9, ^d/^u and d/u 0.5 - inst16 :495/:505). */
+  scrollFraction(direction: -1 | 1, fraction: number): void;
   start(): void;
   end(): void;
   reveal(bounds: Bounds): void;

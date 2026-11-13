@@ -98,6 +98,21 @@ export type PortObservation = {
   /** The board surface's follow state (the S15 diagnosis): whether
    * the follow-current poll is armed and for which task. */
   follow: Readonly<{ armed: boolean; task: number | null; address: string | null; requests: readonly string[] }> | null;
+  /** The input surface (batch 3's contract): the pending strokes,
+   * the which-key popup's content while shown, and the NAMED
+   * tunables (read by the scenarios, never pinned there). */
+  input: Readonly<{
+    pending: readonly string[];
+    whichKey: Readonly<{
+      prefix: string;
+      entries: readonly { keys: string; label: string; actionId: string }[];
+    }> | null;
+    tunables: Readonly<{
+      whichKeyDelayMs: number;
+      whichKeySuspendsTimeout: boolean;
+      sequenceTimeoutMs: number;
+    }>;
+  }>;
   /** The tasks surface's shown page (the pipeline): the rows with
    * their tasks and links, the label selection, and the groups'
    * titles. Null on every other surface. */
@@ -269,6 +284,7 @@ export function buildReadout(
     copy: PortObservation["copy"];
     inspection: PortObservation["inspection"];
     follow: PortObservation["follow"];
+    input: PortObservation["input"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -299,6 +315,7 @@ export function buildReadout(
     copy: input.copy,
     inspection: input.inspection,
     follow: input.follow,
+    input: input.input,
     tasks: input.surface === "tasks"
       ? tasksViewOf(tasksFrame, input.state)
       : null,

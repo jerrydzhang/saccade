@@ -45,6 +45,8 @@ import {
 import { tauriInvoke } from "./lib/sources.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
+import { SEQUENCE_TIMEOUT_MS } from "./lib/input/key-matcher.ts";
+import { whichKeyTunables } from "./lib/input/which-key.ts";
 import { isPinnedWindowChord, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import {
@@ -146,8 +148,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
         viewport,
         diagnostics,
         buffers,
+        expirySuspended: () => whichKey !== null,
       });
       instrument.activate();
+      instrument.subscribeInputPending(() => {
+        const view = livePending();
+        whichKeyPending = view !== null;
+        whichKey = view === null ? null : view;
+        notifyWhichKey();
+      });
       instruments.tasks = instrument;
       injectPorts();
       unsubscribeTasksFrame = subscribeSurface(instrument, "tasks");
@@ -159,8 +168,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
       viewport,
       diagnostics,
       buffers,
+      expirySuspended: () => whichKey !== null,
     });
     instrument.activate();
+      instrument.subscribeInputPending(() => {
+        const view = livePending();
+        whichKeyPending = view !== null;
+        whichKey = view === null ? null : view;
+        notifyWhichKey();
+      });
     instruments.board = instrument;
     return instrument;
   }
@@ -697,6 +713,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
         helpOpen = false;
         notifyWhichKey();
       },
+      enterFind: () => {
+        if (activeSurface === "board" && instruments.board !== undefined) {
+          (instruments.board.presentation as BoardUI).enterFind();
+        }
+      },
       linkByLabels: () => {
         void beginLinkAsk();
       },
@@ -718,8 +739,20 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // the popup's own clock: the delay after the prefix began; the
   // expiry suspension reads whichKey !== null
   let whichKeyDelayTimer: number | null = null;
+  // the routed pending: the ACTIVE INSTRUMENT's first (its reading
+  // context owns the board keys), the window's when the instrument
+  // holds none - the which-key property holds at every level
+  function livePending(): import("./lib/input/key-matcher.ts").WhichKeyView | null {
+    const instrument = instruments[activeSurface];
+    if (instrument !== undefined) {
+      const view = instrument.inputPending();
+      if (view !== null) return view;
+    }
+    return windowHost.pendingView();
+  }
+
   windowHost.subscribePending(() => {
-    const view = windowHost.pendingView();
+    const view = livePending();
     whichKeyPending = view !== null;
     if (view === null) {
       whichKey = null;
@@ -734,7 +767,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         const wait = Math.max(0, WHICH_KEY_DELAY_MS - elapsed);
         whichKeyDelayTimer = setTimeout(() => {
           whichKeyDelayTimer = null;
-          const live = windowHost.pendingView();
+          const live = livePending();
           if (live !== null) whichKey = live;
           notifyWhichKey();
         }, wait) as unknown as number;
@@ -815,6 +848,64 @@ export function createPortWindow(windowId = "main"): PortWindow {
       status = "destroyed";
     }
     return { location, status, jumpChip: doors.jumpChip, note, link: linkLabel };
+  }
+
+  /** The readout's input field (batch 3's contract): the pending
+   * strokes in help labels, the popup's content while shown, and
+   * the NAMED tunables. v1 reads the WINDOW host's pending; the
+   * instrument chain (g's continuations) extends this when the
+   * instruments expose their views. */
+  function inputView(): Readonly<{
+    pending: readonly string[];
+    whichKey: Readonly<{
+      prefix: string;
+      entries: readonly { keys: string; label: string; actionId: string }[];
+    }> | null;
+    tunables: Readonly<{
+      whichKeyDelayMs: number;
+      whichKeySuspendsTimeout: boolean;
+      sequenceTimeoutMs: number;
+    }>;
+  }> {
+    const pendingView = livePending();
+    const pending = pendingView === null
+      ? []
+      : pendingView.prefix.map((stroke) =>
+          [
+            stroke.ctrl ? "Ctrl-" : "",
+            stroke.alt ? "Alt-" : "",
+            stroke.meta ? "Meta-" : "",
+            stroke.key === " " ? "spc" : stroke.key,
+          ].join(""),
+        );
+    let popup: ReturnType<typeof inputView>["whichKey"] = null;
+    if (helpOpen) {
+      // the help surface IS the which-key view over the empty prefix:
+      // the UNION of the routed tables - the window's commands and
+      // the active instrument's own
+      const merged: { keys: string; label: string; actionId: string }[] = [
+        ...windowHost.allView().entries,
+      ];
+      const instrument = instruments[activeSurface];
+      if (instrument !== undefined) merged.push(...instrument.inputAll().entries);
+      popup = { prefix: "", entries: merged };
+    } else if (whichKey !== null) {
+      popup = {
+        prefix: whichKey.prefix
+          .map((stroke) => (stroke.key === " " ? "spc" : stroke.key))
+          .join(" "),
+        entries: whichKey.entries,
+      };
+    }
+    return {
+      pending,
+      whichKey: popup,
+      tunables: {
+        whichKeyDelayMs: whichKeyTunables.delayMs,
+        whichKeySuspendsTimeout: whichKeyTunables.suspendsTimeout,
+        sequenceTimeoutMs: SEQUENCE_TIMEOUT_MS,
+      },
+    };
   }
 
   function notifyStrip(): void {
@@ -915,6 +1006,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
       const resolution = inspectionHost.stroke(stroke);
       inspectionHost.apply(resolution);
+      event.preventDefault();
+      return;
+    }
+    // the help surface is a modal too: every stroke closes it (the
+    // inspection's own-deactivation semantics), so the reading
+    // context's Escape-clears-search keeps its stroke when no help
+    // is open
+    if (helpOpen) {
+      helpOpen = false;
+      notifyWhichKey();
       event.preventDefault();
       return;
     }
@@ -1069,6 +1170,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         activeSurface === "board" && instruments.board !== undefined
           ? ((instruments.board.presentation as BoardUI | null)?.followState() ?? null)
           : null,
+      input: inputView(),
     });
   }
 
@@ -1109,7 +1211,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
     closePicker: () => picker.close(),
     pickerContext: () => pickerContextValue,
     whichKeyView: () => (whichKey !== null ? { pending: whichKeyPending, view: whichKey } : null),
-    helpView: () => (helpOpen ? windowHost.allView() : null),
+    helpView: () => {
+      if (!helpOpen) return null;
+      const instrument = instruments[activeSurface];
+      const view = instrument !== undefined ? instrument.inputAll() : null;
+      if (view !== null && view.entries.length > 0) return view;
+      return windowHost.allView();
+    },
     subscribeWhichKey(observer) {
       whichKeyObservers.add(observer);
       observer(whichKey, helpOpen);

@@ -100,6 +100,11 @@ export interface HostBuffer<T extends object> {
   readonly id: string;
   readonly viewport: Viewport;
   readonly places: ReturnPlaces;
+  /** The which-key chain (r110): this buffer's reading matcher's
+   * pending views and their change notification. */
+  inputPending(): import("../lib/input/key-matcher.ts").WhichKeyView | null;
+  inputAll(): import("../lib/input/key-matcher.ts").WhichKeyView;
+  subscribeInputPending(observer: () => void): () => void;
   snapshot(): BufferState<ContentFrame<T>>;
   subscribe(observer: (state: BufferState<ContentFrame<T>>) => void): Unsubscribe;
   activate(): boolean;
@@ -116,6 +121,9 @@ export type BufferBuild<T extends object, UI extends object, A extends AnchorDat
   viewport: Viewport;
   diagnostics: BufferDiagnostics;
   connect: (buffer: BufferAccess<T>) => InstrumentAttachment<UI, A>;
+  /** The which-key suspension probe (optional; the App's popup
+   * state), handed to every reading matcher this buffer installs. */
+  expirySuspended?: () => boolean;
 }>;
 export type BuiltBuffer<T extends object, UI extends object> = Readonly<{
   host: HostBuffer<T>;
@@ -164,7 +172,7 @@ export function mapBufferState<X extends object, Y extends object>(
 // The scroll-line stand-in (r49 tunable default): the VALUE changes
 // mechanically when the prototype's feel is measured; the meaning of
 // the default is a ratified matter, not a per-call-site guess.
-const SCROLL_LINE_PX = 40;
+const SCROLL_LINE_PX = 60;  // the prototype's line height (inst16 :504)
 
 export interface SliceBufferViewport extends Viewport {
   // The window's presentation attaches its scroller element; before
@@ -207,6 +215,10 @@ export function createViewport(): SliceBufferViewport {
       if (element === null) return;
       const share = extent === "half" ? 0.5 : 1;
       element.scrollTop += direction * element.clientHeight * share;
+    },
+    scrollFraction(direction, fraction) {
+      if (element === null) return;
+      element.scrollTop += direction * element.clientHeight * fraction;
     },
     start() {
       if (element !== null) element.scrollTop = 0;
@@ -311,7 +323,42 @@ export class SliceBufferHost<
   // handoff (scenario 10: a partial sequence never survives one).
   private installReading(context: InputContext | null): void {
     if (this.inputHost !== null) this.inputHost.dispose();
-    this.inputHost = context === null ? null : createHostMatcher(context);
+    this.inputHost =
+      context === null
+        ? null
+        : createHostMatcher(context, {
+            // the which-key suspension (the r110 tunable) rides the
+            // environment's probe - the App's popup state
+            ...(this.build.expirySuspended !== undefined
+              ? { expirySuspended: this.build.expirySuspended }
+              : {}),
+          });
+    for (const observer of [...this.inputPendingObservers]) observer();
+  }
+
+  private readonly inputPendingObservers = new Set<() => void>();
+
+  /** The instrument's input pending (the which-key chain). */
+  inputPending(): import("../lib/input/key-matcher.ts").WhichKeyView | null {
+    return this.inputHost === null ? null : this.inputHost.pendingView();
+  }
+
+  inputAll(): import("../lib/input/key-matcher.ts").WhichKeyView {
+    return this.inputHost === null
+      ? { prefix: [], completions: [], entries: [] }
+      : this.inputHost.allView();
+  }
+
+  subscribeInputPending(observer: () => void): () => void {
+    this.inputPendingObservers.add(observer);
+    // the host's OWN pending notifications (prefix strokes, drains)
+    // flow through too - the observers hear both context changes and
+    // pending changes
+    const off = this.inputHost?.subscribePending(observer);
+    return () => {
+      this.inputPendingObservers.delete(observer);
+      off?.();
+    };
   }
   private leases: Set<InputLeaseImpl> = new Set();
   private readonly framePresentations = new WeakMap<ContentFrame<T>, TargetPresentations>();

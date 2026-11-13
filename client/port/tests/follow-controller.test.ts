@@ -49,6 +49,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
     viewport: {
       metrics: () => ({ position: { left: 0, top: 0 }, width: 100, height: 100 }),
       scrollLines() {}, scrollPage() {}, start() {}, end() {}, reveal() {}, moveTo() {},
+ scrollFraction: () => {},
     },
     diagnostics: { report: () => "", unexpected: () => "" },
     connect(buffer) { attachment = connectBoard(buffer); return attachment; },

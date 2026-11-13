@@ -340,6 +340,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   const reading: InputContext = tasksReadingContext({
     scrollDown: () => buffer.viewport.scrollLines(1),
     scrollUp: () => buffer.viewport.scrollLines(-1),
+    scrollFraction: (direction, fraction) => buffer.viewport.scrollFraction(direction, fraction),
     scrollToTop: () => buffer.viewport.start(),
     scrollToBottom: () => buffer.viewport.end(),
     enterSelect: () => selectSession.enter(),

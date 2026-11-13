@@ -60,6 +60,7 @@ test("the readout carries the inspection while open, null when closed", () => {
     viewport: { left: 0, top: 0, width: 0, height: 0 },
     copy: null,
     follow: null,
+    input: { pending: [], whichKey: null, tunables: { whichKeyDelayMs: 400, whichKeySuspendsTimeout: true, sequenceTimeoutMs: 1000 } },
   };
   assert.equal(buildReadout({ ...base, inspection: null }).inspection, null);
   const open = buildReadout({ ...base, inspection: { part: "/content/0", zoom: 1.5 } });

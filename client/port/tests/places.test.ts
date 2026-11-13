@@ -47,6 +47,7 @@ function buildFake(behaviour: {
     metrics: () => ({ position, width: 100, height: 100 }),
     scrollLines: () => {},
     scrollPage: () => {},
+    scrollFraction: () => {},
     start: () => {},
     end: () => {},
     reveal: (bounds) => {

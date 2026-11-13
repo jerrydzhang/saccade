@@ -106,6 +106,9 @@ export interface BoardUI extends HydrationHost {
   getSelection(): BoardTarget | null;
   /** The menu's live view; null when closed. */
   subscribeMenu(observer: (view: MenuView | null) => void): () => void;
+  /** Enter find from the window command (space-/): the same entry
+   * the reading context's bare / runs. */
+  enterFind(): void;
   /** The follow state as information (the S15 diagnosis): the
    * followed address and whether the poll is armed. */
   followState(): {
@@ -313,6 +316,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     getSelection() {
       return selection;
+    },
+    enterFind() {
+      if (scope.frame().board != null) find.enter();
     },
     followState() {
       return {
@@ -581,6 +587,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     scrollToBottom: () => buffer.viewport.end(),
     scrollDown: () => buffer.viewport.scrollLines(1),
     scrollUp: () => buffer.viewport.scrollLines(-1),
+    scrollFraction: (direction, fraction) => buffer.viewport.scrollFraction(direction, fraction),
     enterSelect: () => selectSession.enter(),
     enterFind: () => {
       if (displayedData()?.board != null) find.enter();

@@ -23,6 +23,9 @@ export interface WindowActions {
   pickerIsOpen(): boolean;
   trailBack(): boolean;
   trailForward(): boolean;
+  /** space-/: find in the active board (the leader's find command;
+   * the bare-/ reading binding stays). */
+  enterFind(): void;
   /** space-l: the link act - labels over windows, a key sets the
    * link (the prototype's D1 modal shape). */
   linkByLabels(): void;
@@ -73,6 +76,14 @@ export function windowContext(actions: WindowActions): InputContext {
     },
     {
       action: {
+        id: "window.find",
+        label: "find in this board",
+        run: () => actions.enterFind(),
+      },
+      keys: [sequence(key(" "), key("/"))],
+    },
+    {
+      action: {
         id: "window.link",
         label: "link to a window (labels)",
         run: () => actions.linkByLabels(),
@@ -93,9 +104,10 @@ export function windowContext(actions: WindowActions): InputContext {
         label: "show the keys",
         run: () => actions.showHelp(),
       },
-      // a real ? arrives as Shift+slash -> key "?" with shift set
-      // (G's and N's lesson): the binding names the arriving stroke
-      keys: [sequence(shift("?"))],
+      // a real keyboard's ? is Shift+slash (key "?", shift set); a
+      // synthesized one may carry either shape - both spellings fire
+      // the same action (alternatives for one action)
+      keys: [sequence(key("?")), sequence(shift("?"))],
     },
     {
       action: {
@@ -181,6 +193,9 @@ export interface ReadingActions {
   scrollToBottom(): void;
   scrollDown(): void;
   scrollUp(): void;
+  /** The prototype's paging steps (inst16 :495/:505): d/u half the
+   * client height, Ctrl-f/b 0.9, Ctrl-d/u 0.5. */
+  scrollFraction(direction: -1 | 1, fraction: number): void;
   enterSelect(): void;
   enterFind(): void;
   /** n/N: step the committed search's matches (the r110 ruling);
@@ -202,11 +217,60 @@ export interface TasksReadingActions {
   scrollUp(): void;
   scrollToTop(): void;
   scrollToBottom(): void;
+  scrollFraction(direction: -1 | 1, fraction: number): void;
   enterSelect(): void;
 }
 
 export function tasksReadingContext(actions: TasksReadingActions): InputContext {
   const context = commandContext(() => [
+    {
+      action: {
+        id: "tasks.page-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(key("d"))],
+    },
+    {
+      action: {
+        id: "tasks.page-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(key("u"))],
+    },
+    {
+      action: {
+        id: "tasks.page-mostly-down",
+        label: "page down most of the view",
+        run: () => actions.scrollFraction(1, 0.9),
+      },
+      keys: [sequence(ctrl("f"))],
+    },
+    {
+      action: {
+        id: "tasks.page-mostly-up",
+        label: "page up most of the view",
+        run: () => actions.scrollFraction(-1, 0.9),
+      },
+      keys: [sequence(ctrl("b"))],
+    },
+    {
+      action: {
+        id: "tasks.page-ctrl-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(ctrl("d"))],
+    },
+    {
+      action: {
+        id: "tasks.page-ctrl-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(ctrl("u"))],
+    },
     {
       action: {
         id: "tasks.scroll-down",
@@ -285,6 +349,54 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         run: () => actions.scrollToBottom(),
       },
       keys: [sequence(shift("G"))],
+    },
+    {
+      action: {
+        id: "board.page-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(key("d"))],
+    },
+    {
+      action: {
+        id: "board.page-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(key("u"))],
+    },
+    {
+      action: {
+        id: "board.page-mostly-down",
+        label: "page down most of the view",
+        run: () => actions.scrollFraction(1, 0.9),
+      },
+      keys: [sequence(ctrl("f"))],
+    },
+    {
+      action: {
+        id: "board.page-mostly-up",
+        label: "page up most of the view",
+        run: () => actions.scrollFraction(-1, 0.9),
+      },
+      keys: [sequence(ctrl("b"))],
+    },
+    {
+      action: {
+        id: "board.page-ctrl-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(ctrl("d"))],
+    },
+    {
+      action: {
+        id: "board.page-ctrl-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(ctrl("u"))],
     },
     {
       action: {

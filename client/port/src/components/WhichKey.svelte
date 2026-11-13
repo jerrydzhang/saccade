@@ -14,7 +14,7 @@
   } = $props();
 </script>
 
-<div class="port-whichkey" data-port-whichkey="" role="listbox" aria-label="pending keys">
+<div class="port-whichkey" data-port-control="which-key" role="listbox" aria-label="pending keys">
   {#if title !== ""}
     <div class="port-whichkey-title">{title}</div>
   {/if}

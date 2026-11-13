@@ -127,7 +127,13 @@ export interface ContextMatcherWithTimeout extends ContextMatcher {
 export type WhichKeyView = Readonly<{
   prefix: readonly KeyInput[];
   completions: readonly { key: string; label: string }[];
+  /** The readout contract's shape (batch 3): every continuing
+   * command with its FULL sequence label and action id - the
+   * module's own projection, so help and which-key cannot drift. */
+  entries: readonly { keys: string; label: string; actionId: string }[];
 }>;
+
+import { continuations as whichKeyContinuations } from "./which-key.ts";
 
 function keyLabel(pattern: StrokePattern): string {
   const parts: string[] = [];
@@ -208,11 +214,19 @@ export function createMatcher(context: InputContext, options: MatcherOptions = {
 
     pendingView(): WhichKeyView | null {
       if (pending.length === 0) return null;
-      return { prefix: [...pending], completions: completionsFor(declaredOf(context), pending) };
+      return {
+        prefix: [...pending],
+        completions: completionsFor(declaredOf(context), pending),
+        entries: whichKeyContinuations(context, pending),
+      };
     },
 
     allView(): WhichKeyView {
-      return { prefix: [], completions: completionsFor(declaredOf(context), []) };
+      return {
+        prefix: [],
+        completions: completionsFor(declaredOf(context), []),
+        entries: whichKeyContinuations(context, []),
+      };
     },
 
     pendingSince(): number | null {

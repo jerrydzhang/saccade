@@ -46,7 +46,13 @@ function packComponent<P extends Record<string, unknown>>(
     props,
   };
 }
+import type { WhichKeyView } from "../input/key-matcher.ts";
+
 export type WindowEnvironment = Readonly<{
+  /** The which-key suspension probe (the r110 tunable): while true,
+   * the instrument's own matcher freezes its sequence expiry - the
+   * App supplies the popup's state. */
+  expirySuspended?: () => boolean;
   context: BufferContext;
   viewport: Viewport;
   diagnostics: BufferDiagnostics;
@@ -65,6 +71,12 @@ export interface RunningInstrument {
   activate(): boolean;
   deactivate(): void;
   handleKey(input: KeyInput): KeyDisposition;
+  /** The instrument's input pending (the which-key chain): the
+   * matcher's views and their change notification, or null views
+   * when no reading context is installed. */
+  inputPending(): WhichKeyView | null;
+  inputAll(): WhichKeyView;
+  subscribeInputPending(observer: () => void): () => void;
   destroy(): void;
   snapshot(): BufferState<RenderPair>;
   subscribe(observer: (state: BufferState<RenderPair>) => void): Unsubscribe;
@@ -84,6 +96,9 @@ export function registerInstrument<
         viewport: environment.viewport,
         diagnostics: environment.diagnostics,
         connect: definition.connect,
+        ...(environment.expirySuspended !== undefined
+          ? { expirySuspended: environment.expirySuspended }
+          : {}),
       });
       const project = (frame: Readonly<ContentFrame<T>>): RenderPair =>
         packComponent<InstrumentProps<T, UI>>(definition.Component, {
@@ -104,7 +119,10 @@ export function registerInstrument<
         subscribe: (observer) => built.host.subscribe(
           (state) => observer(mapBufferState(state, project)),
         ),
-      };
+          inputPending: () => built.host.inputPending(),
+    inputAll: () => built.host.inputAll(),
+    subscribeInputPending: (observer) => built.host.subscribeInputPending(observer),
+};
     },
   };
 }
