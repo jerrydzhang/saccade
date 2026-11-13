@@ -57,6 +57,10 @@ export type PortObservation = {
      * worker's base defect 1: the acts' bounded wait and the tests'
      * stopgap both read this instead of log lines). */
     bound: boolean;
+    /** GTK's own focus facts for this window (the shell's
+     * window_focus_state), refreshed in the background; null with
+     * no bridge or before the first answer (m-537). */
+    focus: Readonly<{ acceptsFocus: boolean; focusOnMap: boolean; active: boolean }> | null;
   }>;
   board: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
@@ -278,6 +282,7 @@ export function buildReadout(
     windowLabel: string | null;
     link: string | null;
     bound: boolean;
+    focus?: PortObservation["window"]["focus"];
     ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
     state: BufferState<RenderPair>;
     diagnostics: readonly DiagnosticEntryView[];
@@ -296,7 +301,7 @@ export function buildReadout(
   return {
     app: { name: "saccade-app-port", slice: 1 },
     surface: input.surface,
-    window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound },
+    window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound, focus: input.focus ?? null },
     board: {
       status: input.surface === "board" ? status : "empty",
       asked: frame && input.surface === "board" ? frame.asked : null,

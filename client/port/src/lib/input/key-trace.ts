@@ -92,9 +92,28 @@ export function createKeyTrace(probe: Probe): KeyTrace {
     };
   }
 
+  // GTK's own focus facts (the shell's window_focus_state), on the
+  // init line and on every focus/blur line: read, never inferred
+  async function gtkFocus(): Promise<Record<string, string | number | boolean | null>> {
+    try {
+      const state = (await tauriInvoke()("window_focus_state")) as {
+        accepts_focus: boolean;
+        focus_on_map: boolean;
+        is_active: boolean;
+      };
+      return { "gtk.acceptsFocus": state.accepts_focus, "gtk.focusOnMap": state.focus_on_map, "gtk.active": state.is_active };
+    } catch (error) {
+      return { "gtk.focus": `unavailable: ${String(error).slice(0, 60)}` };
+    }
+  }
+
   function install(): void {
     const element = probe.scroller();
     const style = element === null ? null : getComputedStyle(element);
+    void gtkFocus().then((gtk) => send(line("gtk", { at: "init", ...gtk })));
+    // and again later: tao restores accept-focus on the toplevel's
+    // first draw, if that draw ever comes
+    setTimeout(() => void gtkFocus().then((gtk) => send(line("gtk", { at: "init+2s", ...gtk }))), 2_000);
     send(
       line("init", {
         ua: navigator.userAgent,
@@ -110,7 +129,10 @@ export function createKeyTrace(probe: Probe): KeyTrace {
     // what the window itself goes through between keys: focus, and
     // every scroll of the scroller whoever caused it
     for (const name of ["focus", "blur"] as const) {
-      window.addEventListener(name, () => send(line(name, windowFacts())));
+      window.addEventListener(name, () => {
+        const facts = windowFacts();
+        void gtkFocus().then((gtk) => send(line(name, { ...facts, ...gtk })));
+      });
     }
     document.addEventListener("visibilitychange", () => send(line("visibility", windowFacts())));
     document.addEventListener(

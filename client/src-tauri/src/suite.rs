@@ -172,6 +172,19 @@ pub fn open_suite_window(
             // nothing can scroll - defect 1's shape). An explicit
             // resize after build forces the allocation now.
             window.set_size(tauri::LogicalSize::new(1024.0, 768.0))?;
+            // focused(false) builds the GTK window with accept_focus
+            // false, and tao 0.37.2 restores it only on the toplevel's
+            // FIRST draw - which on niri (Wayland) never came: the
+            // compositor showed the window activated and GTK dropped
+            // every key (m-537/538). "Never steal focus" is focus on
+            // map, not accepting focus: refuse the first, allow the
+            // second, now. tao's late draw hook only sets true again.
+            {
+                use gtk::prelude::GtkWindowExt;
+                let gtk_window = window.gtk_window()?;
+                gtk_window.set_focus_on_map(false);
+                gtk_window.set_accept_focus(true);
+            }
             Ok(window)
         })
         .map(|_| built_label)
@@ -179,6 +192,29 @@ pub fn open_suite_window(
             registry.take_binding(&label);
             format!("the window manager refused: {error}")
         })
+}
+
+/// GTK's own focus facts for the calling window (m-537/538): whether
+/// the toplevel accepts keyboard focus at all, whether it takes focus
+/// when mapped, and whether it is the active window now. Read from GTK
+/// directly - never inferred from focus events - because a window can
+/// be shown activated by the compositor while GTK drops its keys.
+#[derive(serde::Serialize)]
+pub struct FocusState {
+    pub accepts_focus: bool,
+    pub focus_on_map: bool,
+    pub is_active: bool,
+}
+
+#[tauri::command]
+pub fn window_focus_state(window: tauri::WebviewWindow) -> Result<FocusState, String> {
+    use gtk::prelude::GtkWindowExt;
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    Ok(FocusState {
+        accepts_focus: gtk_window.accepts_focus(),
+        focus_on_map: gtk_window.gets_focus_on_map(),
+        is_active: gtk_window.is_active(),
+    })
 }
 
 /// The window jump's focus move: the human asked, so the activation

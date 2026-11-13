@@ -124,6 +124,11 @@ export function installShell(world: ShellWorld): void {
       // (here: the call log carries them)
       case "key_trace":
         return world.keyTrace === true;
+      // suite.rs window_focus_state(window) -> FocusState { accepts_focus,
+      // focus_on_map, is_active }: GTK's facts; the mocked webview is the
+      // one focused window
+      case "window_focus_state":
+        return { accepts_focus: true, focus_on_map: true, is_active: true };
       // commands.rs machine_id() -> Option<String> (/etc/machine-id): no machine id here,
       // so no tracker is ever proven to be this machine
       case "machine_id":

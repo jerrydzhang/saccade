@@ -1238,13 +1238,43 @@ export function createPortWindow(windowId = "main"): PortWindow {
     console.log(`[port] observation: ${JSON.stringify(readout())}`);
   }
 
+  // GTK's focus facts for this window (m-537): refreshed in the
+  // background - at boot, on focus and blur, and on each readout -
+  // since the readout itself is synchronous
+  let focusState: PortObservation["window"]["focus"] = null;
+  let focusRefreshing = false;
+  function refreshFocusState(): void {
+    if (focusRefreshing) return;
+    let invoke: ReturnType<typeof tauriInvoke>;
+    try {
+      invoke = tauriInvoke();
+    } catch {
+      return;
+    }
+    focusRefreshing = true;
+    void invoke("window_focus_state")
+      .then((answer) => {
+        const state = answer as { accepts_focus: boolean; focus_on_map: boolean; is_active: boolean };
+        focusState = { acceptsFocus: state.accepts_focus, focusOnMap: state.focus_on_map, active: state.is_active };
+      })
+      .catch(() => {})
+      .finally(() => {
+        focusRefreshing = false;
+      });
+  }
+  refreshFocusState();
+  window.addEventListener("focus", refreshFocusState);
+  window.addEventListener("blur", refreshFocusState);
+
   function readout(): PortObservation {
+    refreshFocusState();
     const metrics = viewport.metrics();
     return buildReadout({
       surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
       bound: windowStore !== null && windowStateId !== null,
+      focus: focusState,
       ask: ask === null
         ? null
         : { act: ask.act, spec: ask.spec, chips: ask.chips },

@@ -65,6 +65,7 @@ pub fn run() {
             suite::broadcast_jump_labels,
             suite::broadcast_jump_labels_clear,
             suite::open_in_window,
+            suite::window_focus_state,
             session::last_session,
             board_validate::validate_board,
             look_config::look_config,
