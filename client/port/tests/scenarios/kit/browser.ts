@@ -6,7 +6,7 @@
 // here: the port starts empty and reaches the tracker through the
 // host a typed location carries.
 import { expect, test as base, inject } from "vitest";
-import { locators, page, userEvent, type Locator } from "vitest/browser";
+import { commands, locators, page, userEvent, type Locator } from "vitest/browser";
 
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
 import { SHELL_WORLD_KEY, type ShellCall, type ShellWindow, type ShellWorld } from "./shell-mock.ts";
@@ -98,6 +98,22 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
     async activeMatch() {
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
+    },
+    async drag(control, dx, dy) {
+      await (commands as unknown as { portDrag(c: string, x: number, y: number): Promise<void> }).portDrag(control, dx, dy);
+    },
+    async wheel(control, deltaY) {
+      await (commands as unknown as { portWheel(c: string, y: number): Promise<void> }).portWheel(control, deltaY);
+    },
+    async controlBox(control) {
+      const element = portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`);
+      if (element === null) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    },
+    async controlText(control) {
+      const element = portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`) as HTMLElement | null;
+      return element === null ? null : element.innerText;
     },
     async menuGeometry() {
       const window = portWindow();

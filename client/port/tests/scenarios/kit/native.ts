@@ -190,6 +190,36 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
     },
+    async drag(control, dx, dy) {
+      const box = await browser.execute((id: string) => {
+        const rect = document.querySelector(`[data-port-control=${JSON.stringify(id)}]`)!.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      }, control);
+      await browser
+        .action("pointer")
+        .move({ x: box.x, y: box.y, origin: "viewport" })
+        .down()
+        .move({ x: box.x + dx, y: box.y + dy, origin: "viewport", duration: 100 })
+        .up()
+        .perform();
+    },
+    async wheel() {
+      throw new Error("the native stack delivers no wheel events (WebKitWebDriver): wheel scenarios are browser-only");
+    },
+    async controlBox(control) {
+      return browser.execute((id: string) => {
+        const element = document.querySelector(`[data-port-control=${JSON.stringify(id)}]`);
+        if (element === null) return null;
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      }, control);
+    },
+    async controlText(control) {
+      return browser.execute((id: string) => {
+        const element = document.querySelector(`[data-port-control=${JSON.stringify(id)}]`) as HTMLElement | null;
+        return element === null ? null : element.innerText;
+      }, control);
+    },
     async menuGeometry() {
       return browser.execute(() => {
       const menu = document.querySelector("[data-port-menu]") as HTMLElement | null;

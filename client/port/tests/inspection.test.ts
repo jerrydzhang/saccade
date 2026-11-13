@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { ZOOM_MAX, ZOOM_MIN, zoomIn, zoomOut, zoomReset } from "../src/lib/figures/inspection.ts";
+import { ZOOM_MAX, ZOOM_MIN, zoomIn, zoomOut, zoomReset, zoomWheel } from "../src/lib/figures/inspection.ts";
 import { createHostMatcher } from "../src/lib/input/host.ts";
 import type { KeyInput } from "../src/lib/contracts/input.ts";
 import { inspectionContext } from "../src/lib/input/contexts.ts";
@@ -12,13 +12,20 @@ import { buildReadout } from "../src/lib/observation.ts";
 
 const stroke = (key: string): KeyInput => ({ key, ctrl: false, shift: false, alt: false, meta: false });
 
-test("the zoom ladder steps by quarters between half and five", () => {
-  assert.equal(zoomReset(), 1);
-  assert.equal(zoomIn(1), 1.25);
-  assert.equal(zoomOut(1.25), 1);
-  // the clamps hold: a step past the range keeps the value
-  assert.equal(zoomIn(ZOOM_MAX), ZOOM_MAX);
-  assert.equal(zoomOut(ZOOM_MIN), ZOOM_MIN);
+test("the zoom is the prototype's: start 1.2, x1.2 per + and -, x1.12 per wheel notch, 0.3 to 8", () => {
+  // inst16.html:396-400: z = 1.2; + - multiply by 1.2; the wheel by
+  // 1.12 per notch; = resets to 1.2 and the centre; clamped to 0.3-8.
+  // (The quarter-step "half to five" ladder this replaces was never
+  // the prototype's.)
+  assert.equal(zoomReset(), 1.2);
+  assert.ok(Math.abs(zoomIn(1.2) - 1.44) < 1e-9);
+  assert.ok(Math.abs(zoomOut(1.44) - 1.2) < 1e-9);
+  assert.ok(Math.abs(zoomWheel(1.2, -100) - 1.2 * 1.12) < 1e-9);
+  assert.ok(Math.abs(zoomWheel(1.2, 100) - 1.2 / 1.12) < 1e-9);
+  assert.equal(ZOOM_MIN, 0.3);
+  assert.equal(ZOOM_MAX, 8);
+  assert.equal(zoomIn(7.9), 8);
+  assert.equal(zoomOut(0.31), 0.3);
 });
 
 test("the inspection context: its own keys act, everything else is consumed inert", () => {
@@ -63,8 +70,8 @@ test("the readout carries the inspection while open, null when closed", () => {
     input: { pending: [], whichKey: null, tunables: { whichKeyDelayMs: 400, whichKeySuspendsTimeout: true, sequenceTimeoutMs: 1000 } },
   };
   assert.equal(buildReadout({ ...base, inspection: null }).inspection, null);
-  const open = buildReadout({ ...base, inspection: { part: "/content/0", zoom: 1.5 } });
-  assert.deepEqual(open.inspection, { part: "/content/0", zoom: 1.5 });
+  const open = buildReadout({ ...base, inspection: { part: "/content/0", zoom: 1.5, x: 10, y: -4 } });
+  assert.deepEqual(open.inspection, { part: "/content/0", zoom: 1.5, x: 10, y: -4 });
 });
 
 test("a figure shows by its file: images by extension, text as text, other bytes as binary", async () => {

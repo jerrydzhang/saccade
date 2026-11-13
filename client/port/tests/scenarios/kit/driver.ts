@@ -72,6 +72,16 @@ export interface AppDriver {
    * the part's top strip - a group's own hit area, where its center
    * would land on a child. */
   clickPart(part: string, options?: { button?: "left" | "right"; at?: "center" | "header" }): Promise<void>;
+  /** A real mouse drag from a control's center by (dx, dy). */
+  drag(control: string, dx: number, dy: number): Promise<void>;
+  /** A real wheel notch over a control (deltaY < 0 is up). The native
+   * stack delivers no wheel events (WebKitWebDriver), so the native
+   * driver refuses it: wheel scenarios are browser-only. */
+  wheel(control: string, deltaY: number): Promise<void>;
+  /** A rendered control's box in viewport coordinates, or null. */
+  controlBox(control: string): Promise<Box | null>;
+  /** A rendered control's visible text, or null. */
+  controlText(control: string): Promise<string | null>;
   /** Whether a port control is rendered now. */
   shows(control: string): Promise<boolean>;
   /** The window strip's fields as rendered (location, status, link). */

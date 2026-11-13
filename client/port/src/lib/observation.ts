@@ -105,7 +105,7 @@ export type PortObservation = {
   /** The figure inspection surface (S04): the inspected part and its
    * zoom while open, null when closed (the temporary surface adds no
    * trail entry; the board beneath keeps its updates). */
-  inspection: Readonly<{ part: string; zoom: number }> | null;
+  inspection: Readonly<{ part: string; zoom: number; x: number; y: number }> | null;
   /** The board surface's follow state (the S15 diagnosis): whether
    * the follow-current poll is armed and for which task. */
   follow: Readonly<{ armed: boolean; task: number | null; address: string | null; requests: readonly string[] }> | null;

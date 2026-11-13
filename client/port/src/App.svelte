@@ -30,6 +30,11 @@ from the registry's reviewed erasure boundary. -->
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
   let inspection = $state<import("./lib/figures/inspection.ts").InspectionState | null>(null);
+  // the viewer's drag (the prototype's lb.onmousedown origin) and the
+  // stage's layout size (a transform never changes offsetWidth)
+  let drag: { sx: number; sy: number } | null = null;
+  let stageWidth = $state(0);
+  let stageHeight = $state(0);
 
   onMount(() => {
     const windowPort = createPortWindow();
@@ -108,20 +113,6 @@ from the registry's reviewed erasure boundary. -->
       {strip?.link != null ? `-> ${strip.link}` : "unlinked"}
     </span>
   </header>
-  {#if inspection !== null}
-    <div class="port-inspection" data-port-control="inspection">
-      <figure class="port-inspection-figure">
-        {#if inspection.text !== undefined}
-          <pre class="port-inspection-text" style="transform: scale({inspection.zoom}); transform-origin: top left">{inspection.text}</pre>
-        {:else}
-          <img src={inspection.src} alt={inspection.caption || inspection.part} style="transform: scale({inspection.zoom})" />
-        {/if}
-        {#if inspection.caption}
-          <figcaption>{inspection.caption}</figcaption>
-        {/if}
-      </figure>
-    </div>
-  {/if}
   {#if ask !== null}
     <div class="port-picker">
       <input
@@ -152,6 +143,7 @@ from the registry's reviewed erasure boundary. -->
       close={() => port?.closePicker()}
     />
   {/if}
+  <div class="port-main">
   <main class="port-content" bind:this={scroller}>
     {#if frame !== null && frame.kind === "alive"}
       {#if frame.content.kind === "available"}
@@ -173,4 +165,47 @@ from the registry's reviewed erasure boundary. -->
       {/if}
     {/if}
   </main>
+  {#if inspection !== null}
+    <!-- the figure viewer: the prototype's lightbox (inst16.html:241,
+    393-401) - over the content area, the stage centred and transformed
+    by translate(x - w*z/2, y - h*z/2) scale(z); the wheel zooms, a drag
+    pans, the keys ride the inspection context (+ - = Escape) -->
+    <div
+      class="port-inspection"
+      data-port-control="inspection"
+      role="presentation"
+      onwheel={(event) => {
+        event.preventDefault();
+        port?.inspectionWheel(event.deltaY);
+      }}
+      onmousedown={(event) => {
+        if (inspection === null) return;
+        drag = { sx: event.clientX - inspection.x, sy: event.clientY - inspection.y };
+      }}
+      onmousemove={(event) => {
+        if (drag !== null) port?.inspectionPan(event.clientX - drag.sx, event.clientY - drag.sy);
+      }}
+      onmouseup={() => {
+        drag = null;
+      }}
+    >
+      <div
+        class="port-inspection-stage"
+        data-port-control="inspection-stage"
+        bind:offsetWidth={stageWidth}
+        bind:offsetHeight={stageHeight}
+        style="transform: translate({inspection.x - (stageWidth * inspection.zoom) / 2}px, {inspection.y - (stageHeight * inspection.zoom) / 2}px) scale({inspection.zoom})"
+      >
+        {#if inspection.svg !== undefined}
+          {@html inspection.svg}
+        {:else if inspection.text !== undefined}
+          <pre class="port-inspection-text">{inspection.text}</pre>
+        {:else}
+          <img src={inspection.src} alt={inspection.caption || inspection.part} draggable="false" />
+        {/if}
+      </div>
+      <div class="port-inspection-hint" data-port-control="inspection-hint">{"wheel or + - zoom \u00b7 = resets \u00b7 drag pans \u00b7 Esc closes"}</div>
+    </div>
+  {/if}
+  </div>
 </div>

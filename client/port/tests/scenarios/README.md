@@ -91,6 +91,9 @@ Every module is a test-infrastructure module; each line says why it exists.
   listeners do not detach.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.
+- `kit/pointer-commands.ts`: the browser project's real mouse drag and wheel
+  (vitest browser commands over Playwright's page.mouse), since userEvent has
+  no drag-by-offset or wheel.
 - `kit/shell-mock.ts` (with `shell-app.html`, `shell-entry.ts`,
   `shell-install.ts`): the browser's mocked native shell. Tauri's official
   `@tauri-apps/api/mocks` (mockIPC, mockWindows) answering each shell command

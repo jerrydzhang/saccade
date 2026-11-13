@@ -66,6 +66,7 @@ import {
   zoomIn as inspectionZoomIn,
   zoomOut as inspectionZoomOut,
   zoomReset as inspectionZoomReset,
+  zoomWheel as inspectionZoomWheel,
   type InspectionState,
 } from "./lib/figures/inspection.ts";
 import { inspectionContext } from "./lib/input/contexts.ts";
@@ -116,6 +117,10 @@ export interface PortWindow {
   cancelAsk(): void;
   subscribeAsk(observer: (state: AskState | null) => void): () => void;
   closeInspection(): void;
+  /** The viewer's pointer acts (the prototype's lightbox): a wheel
+   * notch zooms, a drag pans to an absolute offset. */
+  inspectionWheel(deltaY: number): void;
+  inspectionPan(x: number, y: number): void;
   subscribeInspection(observer: (state: InspectionState | null) => void): () => void;
   readout(): PortObservation;
 }
@@ -362,7 +367,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyStrip();
       },
       zoomReset: () => {
-        if (inspection !== null) inspection = { ...inspection, zoom: inspectionZoomReset() };
+        // = resets the zoom AND the pan (the prototype's reset)
+        if (inspection !== null) inspection = { ...inspection, zoom: inspectionZoomReset(), x: 0, y: 0 };
         notifyInspection();
         notifyStrip();
       },
@@ -373,6 +379,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
       },
     }),
   );
+
+  /** The shown diagram's SVG, cloned with an explicit size from its
+   * viewBox (the rendered one sizes itself to its column). */
+  function diagramSvg(svg: SVGSVGElement): string {
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    const box = svg.viewBox?.baseVal;
+    if (box !== undefined && box !== null && box.width > 0 && box.height > 0) {
+      clone.setAttribute("width", String(box.width));
+      clone.setAttribute("height", String(box.height));
+    }
+    clone.removeAttribute("style");
+    return new XMLSerializer().serializeToString(clone);
+  }
 
   function openInspection(part: string): void {
     // enlarge what is SHOWN: the displayed figure's own asset (the
@@ -395,9 +414,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyStrip();
         return;
       }
-      const markup = new XMLSerializer().serializeToString(svg);
-      const src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(markup)))}`;
-      inspection = { part, src, caption: "diagram", zoom: inspectionZoomReset() };
+      inspection = { part, src: "", svg: diagramSvg(svg), caption: "diagram", zoom: inspectionZoomReset(), x: 0, y: 0 };
       notifyInspection();
       notifyStrip();
       return;
@@ -412,8 +429,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const caption = element.querySelector("figcaption")?.textContent ?? "";
     inspection =
       img !== null
-        ? { part, src: img.src, caption, zoom: inspectionZoomReset() }
-        : { part, src: "", text: text ?? "", caption, zoom: inspectionZoomReset() };
+        ? { part, src: img.src, caption, zoom: inspectionZoomReset(), x: 0, y: 0 }
+        : { part, src: "", text: text ?? "", caption, zoom: inspectionZoomReset(), x: 0, y: 0 };
     notifyInspection();
     notifyStrip();
   }
@@ -1310,7 +1327,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
         height: metrics.height,
       },
       copy: lastCopy,
-      inspection: inspection === null ? null : { part: inspection.part, zoom: inspection.zoom },
+      inspection:
+        inspection === null
+          ? null
+          : { part: inspection.part, zoom: inspection.zoom, x: inspection.x, y: inspection.y },
       follow:
         activeSurface === "board" && instruments.board !== undefined
           ? ((instruments.board.presentation as BoardUI | null)?.followState() ?? null)
@@ -1398,6 +1418,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
       inspection = null;
       notifyInspection();
       notifyStrip();
+    },
+    inspectionWheel: (deltaY) => {
+      if (inspection === null) return;
+      inspection = { ...inspection, zoom: inspectionZoomWheel(inspection.zoom, deltaY) };
+      notifyInspection();
+    },
+    inspectionPan: (x, y) => {
+      if (inspection === null) return;
+      inspection = { ...inspection, x, y };
+      notifyInspection();
     },
     subscribeInspection(observer) {
       inspectionObservers.add(observer);
