@@ -40,7 +40,7 @@ port-test-pending:
 # defaults to the nix-built port app.
 port-test-native:
     cargo build -q -p saccade --bin sac
-    nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app-port)/bin/saccade-app-port}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite'
+    nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app)/bin/saccade-app}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite'
 
 typecheck:
     tracker/native/typecheck.sh

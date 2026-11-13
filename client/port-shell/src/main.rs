@@ -1,3 +1,3 @@
 fn main() {
-    saccade_app_port_lib::run()
+    saccade_app_lib::run()
 }

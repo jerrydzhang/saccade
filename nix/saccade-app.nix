@@ -1,10 +1,15 @@
-# The Saccade app's packaging: the frontend dist, its checks, and the
-# retained native Tauri app - one callPackage-able file whose
-# dependencies come from the pkgs it is called on. The flake's
-# overlays.default calls it against a consumer's own nixpkgs: the
-# packaged binary then shares the host's libglvnd/mesa stack and the
-# system /run/opengl-driver EGL vendors, where this flake's own pin
-# produces a foreign stack that aborts the app on a NixOS client.
+# The Saccade app's packaging: the frontend dist (client/port), the
+# native binary (the client/port-shell crate over the shared shell
+# library in client/src-tauri/src) and the tauri-driver the native
+# test project boots - one callPackage-able file taking every
+# dependency from the pkgs it is called on, so overlays.default can
+# build it against a consumer's own nixpkgs. (The port took the app's
+# name when the old frontend retired, t-36 m-554.)
+#
+# The npm build runs vite against the port tree's own vite config from
+# the client root's npm graph; the cargo build compiles the shared
+# shell through the port crate with its tauri conf embedding this
+# dist.
 {
   lib,
   stdenv,
@@ -22,31 +27,22 @@
   dbus,
   alsa-lib,
   # the repository root, passed in by every call site: the app's cargo
-  # tree spans client/src-tauri and the shared grammar crate, and a
-  # relative climb out of client/ would stay an unnormalized ".."
-  # path inside flake evaluation
+  # tree spans client/port-shell, client/src-tauri (shared shell source
+  # and core-client) and the shared grammar crate, and a relative climb
+  # out of client/ would stay an unnormalized ".." path inside flake
+  # evaluation
   repoRoot,
 }: let
   clientRoot = repoRoot + "/client";
-  # the viewer's own frontend and npm graph: separate sources,
-  # lock and hash, never merged into the tracker crate or the workbench
-  # assets. Its checks are plain tool runs (typecheck, build, contract
-  # tests); they claim nothing about service isolation - the enforced
-  # bwrap boundary is the harness's job and applies to the service
-  # lanes only.
+  # the frontend and its npm graph: the client's package-lock, the port
+  # tree, and the fixture corpus its bundled globs reach
   src = lib.sourceByRegex clientRoot [
-    "^src$"
-    "^src/.*$"
-    "^tests$"
-    "^tests/.*$"
+    "^port$"
+    "^port/.*$"
     "^fixtures$"
     "^fixtures/.*$"
     "^package\\.json$"
     "^package-lock\\.json$"
-    "^index\\.html$"
-    "^svelte\\.config\\.js$"
-    "^vite\\.config\\.ts$"
-    "^tsconfig\\.json$"
   ];
   npm = {
     pname = "saccade-app-web";
@@ -56,18 +52,26 @@
   };
   webDist = buildNpmPackage (npm
     // {
+      # not `npm run build`: the port builds through its own vite
+      # config from the client root, reusing the client's node_modules
+      dontNpmBuild = true;
+      buildPhase = ''
+        runHook preBuild
+        node_modules/.bin/vite build -c port/vite.config.ts
+        runHook postBuild
+      '';
       installPhase = ''
         mkdir -p $out
-        cp -r dist/. $out/
+        cp -r port/dist/. $out/
       '';
     });
 in {
   web = webDist;
 
-  # the retained native app: the Tauri shell built against the
-  # bundled frontend dist, wrapped with its runtime libraries - a
-  # foreground binary a human runs with an explicit board path. No
-  # deployment, install or remote transfer.
+  # the native binary: the shared Tauri shell compiled through the port
+  # crate, wrapped with its runtime libraries - a foreground binary the
+  # harness boots by store path. No deployment, install or remote
+  # transfer.
   app = let
     webkitLibs = lib.makeLibraryPath [
       webkitgtk_4_1
@@ -79,39 +83,30 @@ in {
       dbus
       alsa-lib
     ];
-    # the app's cargo tree: client/src-tauri plus the shared board-grammar
-    # crate it validates through, kept at their real tree shape so the
-    # path dependency "../../grammar" resolves exactly as in the working
-    # copy. The fixture corpus is dead weight for the build and stays
-    # only while the source shape is unchanged; no nested lock files.
+    # the cargo tree: client/port-shell plus everything the shared shell
+    # compile reads (the lib source under client/src-tauri/src,
+    # core-client, the grammar crate). The root workspace manifests are
+    # not part of this tree: the port crate is its own workspace root.
     cargoSrc = lib.sourceByRegex repoRoot [
-      "^Cargo\.toml$"
-      "^Cargo\.lock$"
-      # the workspace manifest names the companion member: cargo
-      # refuses to load the workspace without its manifest, though the
-      # app builds nothing of it
-      "^companion$"
-      "^companion/Cargo\.toml$"
-      "^tracker$"
-      "^tracker/Cargo\.toml$"
       "^client$"
+      "^client/port-shell$"
+      "^client/port-shell/Cargo\\.toml$"
+      "^client/port-shell/Cargo\\.lock$"
+      "^client/port-shell/build\\.rs$"
+      "^client/port-shell/tauri\\.conf\\.json$"
+      "^client/port-shell/src$"
+      "^client/port-shell/src/.*$"
       "^client/src-tauri$"
-      "^client/src-tauri/Cargo\.toml$"
-      "^Cargo\.lock$"
-      "^client/src-tauri/build\.rs$"
-      "^client/src-tauri/tauri\.conf\.json$"
       "^client/src-tauri/src$"
       "^client/src-tauri/src/.*$"
+      "^client/src-tauri/icons$"
+      "^client/src-tauri/icons/.*$"
       "^client/src-tauri/core-client$"
       "^client/src-tauri/core-client/Cargo\\.toml$"
       "^client/src-tauri/core-client/src$"
       "^client/src-tauri/core-client/src/.*$"
-      "^client/src-tauri/icons$"
-      "^client/src-tauri/icons/.*$"
-      "^client/fixtures$"
-      "^client/fixtures/.*$"
       "^grammar$"
-      "^grammar/Cargo\.toml$"
+      "^grammar/Cargo\\.toml$"
       "^grammar/src$"
       "^grammar/src/.*$"
     ];
@@ -120,17 +115,16 @@ in {
       pname = "saccade-app";
       version = "0.1.0";
       src = cargoSrc;
-      # no tests inside nix: the parity suite runs in the devshell
-      # (viewer-native-check); a sandbox cold compile puts the cheap
-      # failure behind the expensive step
+      # no tests inside nix: the parity suite runs in the devshell; a
+      # sandbox cold compile puts the cheap failure behind the
+      # expensive step
       doCheck = false;
-      # cargoRoot names the manifest for the lockfile check and vendor
-      # paths; buildAndTestSubdir is what moves cargo into it for the
-      # build itself in this nixpkgs
-      cargoRoot = ".";
-      buildAndTestSubdir = "client/src-tauri";
+      # cargoRoot names the manifest dir for the lockfile check and the
+      # vendor paths: the port crate carries its own Cargo.lock
+      cargoRoot = "client/port-shell";
+      buildAndTestSubdir = "client/port-shell";
       cargoLock = {
-        lockFile = repoRoot + "/Cargo.lock";
+        lockFile = clientRoot + "/port-shell/Cargo.lock";
       };
       # without tauri's custom-protocol feature the release binary
       # dials the dev server instead of serving the embedded dist
@@ -145,12 +139,13 @@ in {
         pango
         dbus
       ];
-      # the embedded frontend: tauri.conf reads frontendDist
-      # ../dist, one level above the manifest, and preBuild runs from
-      # the source root before the build hook enters the manifest dir
+      # the embedded frontend: the port tauri conf reads frontendDist
+      # ../port/dist, one level above the port crate's manifest, and
+      # preBuild runs from the source root before the build hook
+      # enters the crate dir
       preBuild = ''
-        mkdir -p client/dist
-        cp -r ${webDist}/. client/dist/
+        mkdir -p client/port/dist
+        cp -r ${webDist}/. client/port/dist/
       '';
       postInstall = ''
         wrapProgram $out/bin/saccade-app \
@@ -159,7 +154,7 @@ in {
       meta.mainProgram = "saccade-app";
     };
 
-  # the WebDriver intermediary node for the native interaction lane:
+  # the WebDriver intermediary node for the native test project:
   # nixpkgs does not package tauri-driver at this pin, so it builds
   # from the crates.io crate with the upstream Cargo.lock committed
   # beside it (tauri-driver/). Pure Rust (hyper/tokio; no GUI

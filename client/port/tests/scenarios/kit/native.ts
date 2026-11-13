@@ -284,7 +284,7 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
   // the app's own boot is the readiness: its readout door answers
   await expect
     .poll(async () => (await readoutHere().catch(() => null))?.app.name ?? null, { timeout: 30_000 })
-    .toBe("saccade-app-port");
+    .toBe("saccade-app");
   return {
     app,
     close: async () => {

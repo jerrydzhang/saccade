@@ -10,13 +10,13 @@
 # per chunk; this pin is the iteration surface.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-BIN=$ROOT/client/port-shell/target/debug/saccade-app-port
+BIN=$ROOT/client/port-shell/target/debug/saccade-app
 PIN_DIR=/var/tmp/saccade-app-1000/debug-bin
 
 test -x "$BIN" || { echo "no debug binary at $BIN (run the cargo build first)" >&2; exit 1; }
 
-NIX_APP=$(cd "$ROOT" && nix build --accept-flake-config .#saccade-app-port --print-out-paths --no-link 2>/dev/null | grep -o '/nix/store/[a-z0-9]*-saccade-app-port-0\.1\.0' | tail -1)
-NIX_ELF="$NIX_APP/bin/.saccade-app-port-wrapped"
+NIX_APP=$(cd "$ROOT" && nix build --accept-flake-config .#saccade-app --print-out-paths --no-link 2>/dev/null | grep -o '/nix/store/[a-z0-9]*-saccade-app-0\.1\.0' | tail -1)
+NIX_ELF="$NIX_APP/bin/.saccade-app-wrapped"
 test -f "$NIX_ELF" || { echo "the cached authoritative build names no ELF at $NIX_ELF" >&2; exit 1; }
 INTERP=$(patchelf --print-interpreter "$NIX_ELF")
 NIX_RPATH=$(patchelf --print-rpath "$NIX_ELF")
@@ -37,6 +37,6 @@ test -n "$LIBS" || { echo "no rpath resolved for $BIN" >&2; exit 1; }
 patchelf --set-rpath "$LIBS" "$BIN"
 
 mkdir -p "$PIN_DIR"
-install -m 0755 "$BIN" "$PIN_DIR/saccade-app-port.tmp"
-mv "$PIN_DIR/saccade-app-port.tmp" "$PIN_DIR/saccade-app-port"
-echo "debug binary pinned: $PIN_DIR/saccade-app-port (runtime reproduced from $NIX_APP)"
+install -m 0755 "$BIN" "$PIN_DIR/saccade-app.tmp"
+mv "$PIN_DIR/saccade-app.tmp" "$PIN_DIR/saccade-app"
+echo "debug binary pinned: $PIN_DIR/saccade-app (runtime reproduced from $NIX_APP)"

@@ -1,27 +1,24 @@
 [package]
-name = "saccade-app-port"
+name = "saccade-app"
 version = "0.1.0"
-description = "The Saccade port's binary: the shared Rust shell around the port frontend (t-36 phase-3 slice 1)"
+description = "The Saccade app's binary: the shared Rust shell around the client/port frontend"
 edition = "2021"
 
-# the port's own workspace root: the repo's root workspace stays
-# untouched (the existing saccade-app build must not change), and a
-# standalone workspace stops cargo's upward search here
+# its own workspace root: the GTK/WebKit build stays out of the repo's
+# root workspace (whose default members build without those libraries),
+# and a standalone workspace stops cargo's upward search here
 [workspace]
 
-# The shared shell: the lib target compiles the SAME lib.rs and modules
-# the packaged app ships (client/src-tauri/src), under this package's
-# manifest directory. The tauri context macro reads THIS crate's
-# tauri.conf.json (the port conf, frontendDist ../port/dist), so the
-# binary embeds the port frontend while the shell source stays one
-# copy. The old tree's crate is not a dependency and its build inputs
-# are untouched.
+# The shared shell: the lib target compiles the shell library in
+# client/src-tauri/src under this package's manifest directory. The
+# tauri context macro reads THIS crate's tauri.conf.json (frontendDist
+# ../port/dist), so the binary embeds the client/port frontend.
 [lib]
-name = "saccade_app_port_lib"
+name = "saccade_app_lib"
 path = "../src-tauri/src/lib.rs"
 
 [[bin]]
-name = "saccade-app-port"
+name = "saccade-app"
 path = "src/main.rs"
 
 [build-dependencies]

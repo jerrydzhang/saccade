@@ -98,7 +98,7 @@ from the registry's reviewed erasure boundary. -->
 
 <div class="port-shell">
   <header class="port-strip">
-    <span class="port-strip-name">saccade (port)</span>
+    <span class="port-strip-name">saccade</span>
     <span class="port-strip-location" data-port-strip="location">
       {strip?.location ?? "no board"}
     </span>

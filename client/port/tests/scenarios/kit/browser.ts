@@ -58,7 +58,7 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
   const inside = page.frameLocator(page.elementLocator(frame));
   // keyboard input lands in the focused frame: a real click on the
   // app's strip gives the app window focus before any key
-  await inside.getByText("saccade (port)").click();
+  await inside.getByText("saccade", { exact: true }).click();
   const app: AppDriver = {
     async readout() {
       const door = portWindow().__saccadePort;

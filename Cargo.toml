@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 # bare cargo commands cover the tracker and the grammar crate; the
-# client's Tauri crate joins the workspace for the single lock but
-# needs the saccade-app shell's GTK/WebKit inputs to build
+# app's read-only core client joins the workspace for the single lock
+# (the app's own GTK/WebKit crate is client/port-shell, its own
+# workspace root)
 members = [
     "tracker",
     "grammar",
     "companion",
-    "client/src-tauri",
     "client/src-tauri/core-client",
 ]
 default-members = ["tracker", "grammar", "companion"]

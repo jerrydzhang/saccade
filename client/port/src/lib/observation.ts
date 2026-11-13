@@ -40,7 +40,7 @@ import type { TaskRow } from "./tasks/page.ts";
 export const PORT_SURFACE = "__saccadePort" as const;
 
 export type PortObservation = {
-  app: Readonly<{ name: "saccade-app-port"; slice: number }>;
+  app: Readonly<{ name: "saccade-app"; slice: number }>;
   /** The surface whose buffer the window shows: the other surface's
    * retained buffer keeps its state and re-activates on its trail
    * return. */
@@ -312,7 +312,7 @@ export function buildReadout(
   const board = frame?.board ?? null;
   const tasksFrame = input.surface === "tasks" ? tasksFrameOf(input.state).frame : null;
   return {
-    app: { name: "saccade-app-port", slice: 1 },
+    app: { name: "saccade-app", slice: 1 },
     surface: input.surface,
     window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound, focus: input.focus ?? null },
     board: {

@@ -56,13 +56,14 @@ VIEWER = HERE.parent
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
     ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
-    ("typecheck", ["npm", "run", "check"]),
-    ("contracts", ["npm", "run", "test"]),
+    # the app's frontend typecheck (client/port; its suites run through
+    # vitest: just port-test and just port-test-browser)
+    ("typecheck", ["node_modules/.bin/tsc", "--noEmit", "-p", "port/tsconfig.json"]),
     # the read-only herdr-core client is a pure crate: its contract
     # tests (request shapes, error mapping, truncation refusal, remote
     # containment) need no GUI libraries, unlike the tauri shell itself
     ("bridge-contracts", ["cargo", "test", "-q", "--manifest-path", "src-tauri/core-client/Cargo.toml"]),
-    ("build", ["npm", "run", "build"]),
+    ("build", ["node_modules/.bin/vite", "build", "-c", "port/vite.config.ts"]),
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30

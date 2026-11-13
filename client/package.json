@@ -4,11 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:port": "vitest run -c port/vitest.config.ts --project unit"
   },
   "dependencies": {

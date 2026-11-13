@@ -297,19 +297,12 @@
     # is called on, so overlays.default can build it against a
     # consumer's own nixpkgs - the packaged binary then shares the
     # host's GL stack instead of this flake's pin. The repo root rides
-    # in explicitly: the app's cargo tree spans client/src-tauri and
-    # the shared grammar crate, and package paths are rooted explicitly
-    # would stay an unnormalized ".." path inside flake evaluation.
+    # in explicitly: the app's cargo tree spans client/port-shell,
+    # client/src-tauri and the shared grammar crate, and a relative
+    # climb would stay an unnormalized ".." path inside flake evaluation.
     saccadeApp =
       pkgs: root:
         pkgs.callPackage ./saccade-app.nix {repoRoot = root;};
-    # the port's packaging lives in nix/saccade-app-port.nix, shaped
-    # like the app's and entirely additive: the port frontend dist and
-    # the port's own native binary, built from the shared shell crate
-    # with its own tauri conf. The saccade-app entry above is untouched.
-    saccadeAppPort =
-      pkgs: root:
-        pkgs.callPackage ./saccade-app-port.nix {repoRoot = root;};
   in {
     # the consumer-facing overlay: a NixOS configuration sets
     # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
@@ -569,10 +562,10 @@
               saccade-app-web = (saccadeApp pkgs ../.).web;
               saccade-app-tauri-driver = (saccadeApp pkgs ../.).driver;
 
-              # the port (t-36 phase-3): its own binary for the lanes to
-              # boot by store path, same pin discipline as the app
-              saccade-app-port = (saccadeAppPort clientPkgs ../.).app;
-              saccade-app-port-web = (saccadeAppPort pkgs ../.).web;
+              # the port's former name, kept for ONE handover so a
+              # command naming it still runs the app (t-36 m-554); goes
+              # in the batch after
+              saccade-app-port = (saccadeApp clientPkgs ../.).app;
 
               default = pkgs.symlinkJoin {
                 name = "saccade";

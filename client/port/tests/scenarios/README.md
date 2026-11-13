@@ -137,7 +137,7 @@ classic WebDriver mode (WebKitWebDriver has no BiDi).
 SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<the caller-side tracker db> just port-test-native
 ```
 
-`SAC_APP_BIN` defaults to the nix-built port app (`.#saccade-app-port`; its
+`SAC_APP_BIN` defaults to the nix-built app (`.#saccade-app`; its
 sources include `port/tests`, so a scenario edit rebuilds it, about 2
 minutes); pass a built one to skip that. The run root is printed and kept:
 `logs/suite.log` (the vitest output), `logs/weston.log`, and per test
