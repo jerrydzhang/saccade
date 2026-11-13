@@ -390,7 +390,7 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
     return binds
 
 
-def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
+def session_suite(board_arg: str, tracker_db_candidate: str, vitest_args: list[str] | None = None) -> int:
     """Gated. One bounded sandbox run of the port suite's native project
     (client/port/tests/scenarios/README.md, native): the session lane's
     resolution, env and binds unchanged, plus the suite payload, the
@@ -428,7 +428,10 @@ def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
         (str((HERE / "suite_payload.py").resolve()), SUITE_PAYLOAD_SANDBOX_PATH),
         (str(VIEWER.resolve()), SUITE_CLIENT_SANDBOX_PATH),
     ]
-    cmd = isolation.build_command(resolved["bwrap"], run_root, [resolved["python"], SUITE_PAYLOAD_SANDBOX_PATH], binds)
+    # vitest's own filters (a file or a test name) pass through to the
+    # payload, which appends them to the native project's run
+    payload = [resolved["python"], SUITE_PAYLOAD_SANDBOX_PATH, *(vitest_args or [])]
+    cmd = isolation.build_command(resolved["bwrap"], run_root, payload, binds)
     print("[suite] gate command:", " ".join(cmd), flush=True)
     print(f"[suite] run root: {run_root}", flush=True)
     supervisor = isolation.PidfdSupervisor(cmd, env)
@@ -456,11 +459,12 @@ def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
 
 def session_main(rest: list[str], board_arg: str) -> int:
     """The session lane's one verb: suite (the app's vitest native
-    project in the sandbox)."""
-    if rest != ["suite"]:
+    project in the sandbox), optionally followed by vitest's own
+    filters (`session suite s18`)."""
+    if rest[:1] != ["suite"]:
         print("[session] the one verb is suite (the native project run)", file=sys.stderr)
         return 2
-    return session_suite(board_arg, tracker_db_arg)
+    return session_suite(board_arg, tracker_db_arg, rest[1:])
 
 
 def gated_stub(lane: str) -> int:
