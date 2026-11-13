@@ -111,6 +111,9 @@ export interface BoardUI extends HydrationHost {
   enterFind(): void;
   /** The follow state as information (the S15 diagnosis): the
    * followed address and whether the poll is armed. */
+  /** The view's work counts (the readout's presentation field). */
+  reportPresentation(stats: Readonly<{ renders: number; hydrated: number }>): void;
+  presentationStats(): Readonly<{ renders: number; hydrated: number }> | null;
   followState(): {
     armed: boolean;
     task: number | null;
@@ -212,6 +215,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // publication re-runs the component's render effect, which reports
   // again - only a real outcome change may republish).
   let publishedOutcomesKey = "";
+  let presentation: Readonly<{ renders: number; hydrated: number }> | null = null;
 
   function displayedData(): Readonly<BoardData> | null {
     const state = buffer.snapshot();
@@ -327,6 +331,12 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     enterFind() {
       if (scope.frame().board != null) find.enter();
+    },
+    reportPresentation(stats) {
+      presentation = stats;
+    },
+    presentationStats() {
+      return presentation;
     },
     followState() {
       return {

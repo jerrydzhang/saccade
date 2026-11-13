@@ -216,12 +216,12 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
       if (block.title) {
         section.append(el("h2", { class: "group-title" }, block.title));
       }
-      // Folded groups keep their header and drop their rendered
-      // content: the children keep MODEL existence (targets) but have
-      // no presentation - no geometry, no labels, never selectable.
+      // A folded group keeps its content rendered and HIDDEN (the
+      // prototype toggles .closed over a rendered body, inst16.html:526):
+      // a fold is an attribute, never a re-render (m-547 (5)). Hidden
+      // children have no geometry, so no labels, never selectable.
       if (hooks.folded !== undefined && hooks.folded.has(blockId)) {
         section.setAttribute("data-port-folded", "");
-        return section;
       }
       let childCounter = 0;
       for (const child of block.content) {

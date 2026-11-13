@@ -138,11 +138,20 @@ export function createFindSession(units: () => readonly FindUnit[]): FindSession
   let open = false;
   let query = "";
   let active = 0;
+  // the occurrences of the current units and query, kept until either
+  // changes (the view reads them several times per change)
+  let memo: { units: readonly FindUnit[]; query: string; occurrences: readonly FindOccurrence[] } | null = null;
+  const occurrencesOf = (current: readonly FindUnit[], text: string): readonly FindOccurrence[] => {
+    if (memo !== null && memo.units === current && memo.query === text) return memo.occurrences;
+    const occurrences = searchUnits(current, text);
+    memo = { units: current, query: text, occurrences };
+    return occurrences;
+  };
 
   return {
     isOpen: () => open,
     query: () => query,
-    occurrences: () => searchUnits(units(), query),
+    occurrences: () => occurrencesOf(units(), query),
     active: () => active,
     enter: () => {
       // Entry clears nothing (baseline openSearch): a re-entered Find
@@ -153,10 +162,10 @@ export function createFindSession(units: () => readonly FindUnit[]): FindSession
       // active is deliberately not reset: typing updates the matches
       // while the active index persists (baseline behavior).
       query = text;
-      return searchUnits(units(), query);
+      return occurrencesOf(units(), query);
     },
     move: (delta: number) => {
-      const occurrences = searchUnits(units(), query);
+      const occurrences = occurrencesOf(units(), query);
       if (occurrences.length === 0) return null;
       active = (active + delta + occurrences.length) % occurrences.length;
       return occurrences[active] ?? null;

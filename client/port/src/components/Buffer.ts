@@ -799,6 +799,8 @@ export class SliceBufferHost<
         if (!(part instanceof HTMLElement)) return null;
         const host = element.getBoundingClientRect();
         const box = part.getBoundingClientRect();
+        // a hidden part (inside a folded group) has no geometry
+        if (box.width === 0 && box.height === 0) return null;
         const left = element.scrollLeft - host.left - element.clientLeft;
         const top = element.scrollTop - host.top - element.clientTop;
         return {

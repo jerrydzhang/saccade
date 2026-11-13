@@ -109,6 +109,11 @@ export type PortObservation = {
   /** The board surface's follow state (the S15 diagnosis): whether
    * the follow-current poll is armed and for which task. */
   follow: Readonly<{ armed: boolean; task: number | null; address: string | null; requests: readonly string[] }> | null;
+  /** The board view's own work since it was created (m-547 (5), the
+   * mechanism the performance tests read): how many times it rendered
+   * the board, and how many units (math, diagrams, figures, images) it
+   * hydrated. A fold, a find, a selection must move neither. */
+  presentation?: Readonly<{ renders: number; hydrated: number }> | null;
   /** The input surface (batch 3's contract): the pending strokes,
    * the which-key popup's content while shown, and the NAMED
    * tunables (read by the scenarios, never pinned there). */
@@ -299,6 +304,7 @@ export function buildReadout(
     copy: PortObservation["copy"];
     inspection: PortObservation["inspection"];
     follow: PortObservation["follow"];
+    presentation?: PortObservation["presentation"];
     input: PortObservation["input"];
   }>,
 ): PortObservation {
@@ -330,6 +336,7 @@ export function buildReadout(
     copy: input.copy,
     inspection: input.inspection,
     follow: input.follow,
+    presentation: input.presentation ?? null,
     input: input.input,
     tasks: input.surface === "tasks"
       ? tasksViewOf(tasksFrame, input.state)

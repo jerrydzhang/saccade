@@ -158,10 +158,11 @@ import { placeMenuInStage } from "../lib/menu/geometry.ts";
       content.resolved?.machine ?? "",
       identity,
       content.board === null ? "no-board" : "board",
-      content.folded.join("\n"),
     ].join("\u0000");
   });
   let renders = $state(0);
+  // the units hydrated so far (the readout's presentation.hydrated)
+  let hydrated = 0;
 
   $effect(() => {
     // tracked: the render key and the host element, nothing else (a
@@ -195,14 +196,32 @@ import { placeMenuInStage } from "../lib/menu/geometry.ts";
     const container = renderBoard(board, hooks);
     element.replaceChildren(container);
     renders += 1;
+    controller.reportPresentation({ renders, hydrated });
     const collected: RenderOutcome[] = [];
     void hydrate(container, controller, location, generation, collected).then(
       (outcomes) => {
+        hydrated += outcomes.length;
+        controller.reportPresentation({ renders, hydrated });
         if (controller.displayedGeneration() !== generation) return;
         controller.reportRenderOutcomes(generation, outcomes);
       },
     );
   }
+
+  // A fold is an attribute on the rendered group (m-547 (5)): the
+  // folded set is applied to the board as it stands, never a rebuild.
+  const foldedKey = $derived(content.folded.join("\n"));
+  $effect(() => {
+    const element = host;
+    void renders;
+    const folded = new Set(foldedKey.length === 0 ? [] : foldedKey.split("\n"));
+    if (element === null) return;
+    for (const group of element.querySelectorAll<HTMLElement>(".block-group[data-port-part]")) {
+      const part = group.getAttribute("data-port-part") ?? "";
+      if (folded.has(part)) group.setAttribute("data-port-folded", "");
+      else group.removeAttribute("data-port-folded");
+    }
+  });
 
   // D2: the match marks on the matched TEXT (lib/find/marks.ts): a
   // mark on every occurrence, the active one distinct, repainted on

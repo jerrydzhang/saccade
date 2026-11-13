@@ -18,6 +18,7 @@
 // window through the same suite-open-citation custom event, which the
 // port window assembles.
 
+import { inPool } from "./pool.ts";
 import { figureShape } from "../figures/shape.ts";
 import { renderMath } from "../mathjax.ts";
 import { renderMermaid } from "../mermaid.ts";
@@ -72,10 +73,15 @@ export async function hydrate(
   }
 
   const figures = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="figure"]'));
-  for (const frame of figures) {
-    await hydrateFigure(frame, host, location, collected);
-    if (stale()) return collected;
-  }
+  // the figures load SIX at a time (lib/board/pool.ts), never one round
+  // trip after another; each figure's outcome keeps its document place
+  const figureOutcomes: RenderOutcome[][] = figures.map(() => []);
+  await inPool(figures, 6, async (frame, index) => {
+    if (stale()) return;
+    await hydrateFigure(frame, host, location, figureOutcomes[index]!);
+  });
+  if (stale()) return collected;
+  for (const outcomes of figureOutcomes) collected.push(...outcomes);
 
   const images = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="image"]'));
   for (const span of images) {

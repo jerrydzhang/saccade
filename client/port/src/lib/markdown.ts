@@ -68,12 +68,40 @@ export function promotedDisplayMath(
   return markdown.slice(start, endOffset).startsWith("$$");
 }
 
+// One parse per markdown string (m-547 (5)): the renderer, the model
+// targets (diagrams, refs) and find (shown text) all read the same
+// block, and each parsed it again - on t-36 every find keystroke
+// re-parsed all 125 blocks. The tree depends on the text alone
+// (positions are relative to it; the block offsets apply on top), and
+// no consumer mutates it. Bounded: the oldest entry goes first.
+const ROOT_CACHE_LIMIT = 4096;
+const rootCache = new Map<string, Root>();
+let parses = 0;
+
+function parsedRoot(markdown: string): Root {
+  const cached = rootCache.get(markdown);
+  if (cached !== undefined) return cached;
+  parses += 1;
+  const root = processor.parse(markdown) as Root;
+  if (rootCache.size >= ROOT_CACHE_LIMIT) {
+    const oldest = rootCache.keys().next().value;
+    if (oldest !== undefined) rootCache.delete(oldest);
+  }
+  rootCache.set(markdown, root);
+  return root;
+}
+
+/** How many real parses ran (the parse cache's mechanism test). */
+export function markdownParseCount(): number {
+  return parses;
+}
+
 export function parseMarkdown(
   markdown: string,
   blockOffset: number,
   blockLine: number,
 ): ParsedMarkdown {
-  const root = processor.parse(markdown) as Root;
+  const root = parsedRoot(markdown);
   const mathNodes: MathNode[] = [];
   const mermaidFences: { code: string; pos: SourceRange }[] = [];
   const diagnostics: Diagnostic[] = [];

@@ -424,3 +424,9 @@ body {
   color: var(--port-color-muted);
   font-size: 0.875rem;
 }
+
+/* a folded group: its header shows, its rendered content is hidden
+ * (the prototype's .closed > .gbody) */
+.block-group[data-port-folded] > :not(.group-title) {
+  display: none;
+}

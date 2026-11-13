@@ -1353,6 +1353,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
         activeSurface === "board" && instruments.board !== undefined
           ? ((instruments.board.presentation as BoardUI | null)?.followState() ?? null)
           : null,
+      presentation:
+        activeSurface === "board" && instruments.board !== undefined
+          ? ((instruments.board.presentation as BoardUI | null)?.presentationStats() ?? null)
+          : null,
       input: inputView(),
     });
   }
