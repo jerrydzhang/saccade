@@ -377,6 +377,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyInspection();
         notifyStrip();
       },
+      pan: (dx, dy) => {
+        if (inspection !== null) inspection = { ...inspection, x: inspection.x + dx, y: inspection.y + dy };
+        notifyInspection();
+      },
     }),
   );
 

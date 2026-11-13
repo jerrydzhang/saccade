@@ -12,6 +12,7 @@ import {
   type InputContext,
 } from "./input-context.ts";
 import { validateNoCollisions } from "./key-matcher.ts";
+import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 
 // The window's own surfaces. The picker is the open-location input (a
 // window surface, not a board-content action): space-space opens it,
@@ -164,6 +165,8 @@ export interface InspectionActions {
   zoomOut(): void;
   zoomReset(): void;
   close(): void;
+  /** Move the stage by (dx, dy) CSS pixels. */
+  pan(dx: number, dy: number): void;
 }
 
 export function inspectionContext(actions: InspectionActions): InputContext {
@@ -184,6 +187,24 @@ export function inspectionContext(actions: InspectionActions): InputContext {
       {
         action: { id: "inspection.close", label: "close the inspection", run: () => actions.close() },
         keys: [sequence(key("Escape"))],
+      },
+      // h/j/k/l move the VIEW as j/k move it over a board (m-550): j
+      // goes down the figure, so the stage moves up by the step
+      {
+        action: { id: "inspection.pan-left", label: "pan left", run: () => actions.pan(INSPECTION_PAN_PX, 0) },
+        keys: [sequence(key("h"))],
+      },
+      {
+        action: { id: "inspection.pan-down", label: "pan down", run: () => actions.pan(0, -INSPECTION_PAN_PX) },
+        keys: [sequence(key("j"))],
+      },
+      {
+        action: { id: "inspection.pan-up", label: "pan up", run: () => actions.pan(0, INSPECTION_PAN_PX) },
+        keys: [sequence(key("k"))],
+      },
+      {
+        action: { id: "inspection.pan-right", label: "pan right", run: () => actions.pan(-INSPECTION_PAN_PX, 0) },
+        keys: [sequence(key("l"))],
       },
     ]),
     // the inspector is modal: anything it does not define is consumed

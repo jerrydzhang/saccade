@@ -27,6 +27,10 @@ export type InspectionState = Readonly<{
 // keys + and - multiply by 1.2, a wheel notch by 1.12, = resets to 1.2
 // and the centre, always clamped to 0.3-8. Multiplicative - never a
 // fixed-step ladder.
+/** The viewer's h/j/k/l pan step in CSS pixels (m-550, a tunable): the
+ * size of the board's j/k line (components/Buffer.ts SCROLL_LINE_PX). */
+export const INSPECTION_PAN_PX = 60;
+
 export const ZOOM_MIN = 0.3;
 export const ZOOM_MAX = 8;
 const KEY_FACTOR = 1.2;

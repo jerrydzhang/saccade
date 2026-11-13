@@ -36,6 +36,7 @@ test("the inspection context: its own keys act, everything else is consumed iner
       zoomOut: () => { ran.push("out"); },
       zoomReset: () => { ran.push("reset"); },
       close: () => { ran.push("close"); },
+      pan: (dx: number, dy: number) => { ran.push(`pan ${dx},${dy}`); },
     }),
   );
   const apply = (key: string): string => {
@@ -46,11 +47,12 @@ test("the inspection context: its own keys act, everything else is consumed iner
   assert.equal(apply("-"), "consume");
   assert.equal(apply("="), "consume");
   assert.equal(apply("Escape"), "consume");
+  // h j k l pan by the named step (m-550): the view moves as j/k move it
+  for (const k of ["h", "j", "k", "l"]) assert.equal(apply(k), "consume");
   // a board scroll key is consumed WITHOUT acting: no fall-through
   // to the board beneath, no silent scroll (scenario 4)
-  assert.equal(apply("j"), "consume");
   assert.equal(apply("g"), "consume");
-  assert.deepEqual(ran, ["in", "out", "reset", "close"]);
+  assert.deepEqual(ran, ["in", "out", "reset", "close", "pan 60,0", "pan 0,-60", "pan 0,60", "pan -60,0"]);
 });
 
 test("the readout carries the inspection while open, null when closed", () => {

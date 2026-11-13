@@ -110,3 +110,28 @@ test("the wheel zooms x1.12 a notch, about the stage's centre", async ({ app, tr
   await expect.poll(async () => (await app.readout()).inspection?.zoom ?? 0).toBeCloseTo(1.2, 6);
   await centred(app);
 });
+
+// m-550: h/j/k/l pan the viewer, a step the size of j/k's line (the
+// tunable INSPECTION_PAN_PX), in the viewer's own context: the view
+// moves as j/k move it over a board (j: the view goes down, so the
+// stage goes up), and no stroke reaches the board beneath.
+test("h j k l pan the view by the named step; the board beneath never scrolls", { tags: ["native"] }, async ({ app, tracker }) => {
+  await viewerBoard(app, tracker);
+  await opened(app, "/content/0");
+  const board = (await app.readout()).viewport.top;
+  const pan = async () => {
+    const view = (await app.readout()).inspection;
+    return view === null ? null : [Math.round(view.x), Math.round(view.y)];
+  };
+  await app.press("l");
+  await expect.poll(pan).toEqual([-60, 0]);
+  await app.press("h", "h");
+  await expect.poll(pan).toEqual([60, 0]);
+  await app.press("j");
+  await expect.poll(pan).toEqual([60, -60]);
+  await app.press("k", "k");
+  await expect.poll(pan).toEqual([60, 60]);
+  expect((await app.readout()).viewport.top).toBe(board);
+  await app.press("=");
+  await expect.poll(pan).toEqual([0, 0]);
+});
