@@ -1095,14 +1095,23 @@ export function createPortWindow(windowId = "main"): PortWindow {
       meta: event.metaKey,
     };
     trace?.set("route", field ? "captured-field" : "window-then-buffer");
+    let windowAnswer: string | null = null;
     const disposition = field
       ? activeInstrument().handleKey(stroke)
       : dispatchStroke(
           windowHost,
           activeInstrument(),
           stroke,
-          trace === null ? undefined : (owner, answer) => trace.set(owner, answer),
+          trace === null
+            ? undefined
+            : (owner, answer) => {
+                windowAnswer = answer;
+                trace.set(owner, answer);
+              },
         );
+    if (trace !== null && (field || !/^invoke:|^prefix$/.test(String(windowAnswer)))) {
+      trace.set("buffer", activeInstrument().inputState().lastAnswer);
+    }
     trace?.set("disposition", disposition);
     if (disposition === "consume") event.preventDefault();
   };

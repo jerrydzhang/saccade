@@ -125,6 +125,10 @@ export type BufferInputState = Readonly<{
   context: "reading" | "captured" | "none";
   kind: InputContext["kind"] | null;
   pending: readonly KeyInput[];
+  /** The last stroke's resolution here ("invoke:<action id>",
+   * "prefix", "consume", "native-editing", or "inactive" when the
+   * buffer refused the stroke), or null before any. */
+  lastAnswer: string | null;
 }>;
 export type BufferBuild<T extends object, UI extends object, A extends AnchorData> = Readonly<{
   context: BufferContext;
@@ -381,6 +385,7 @@ export class SliceBufferHost<
       context: this.inputHost === null ? "none" : this.currentLease !== null ? "captured" : "reading",
       kind: this.installedKind,
       pending: this.inputHost?.pendingView()?.prefix ?? [],
+      lastAnswer: this.lastAnswer,
     };
   }
   private leases: Set<InputLeaseImpl> = new Set();
@@ -466,10 +471,15 @@ export class SliceBufferHost<
   // drain (SEQUENCE_TIMEOUT_MS = 1000), unmatched application keys are
   // consumed - never dispatched to anything underneath (scenario 10).
   handleKey(input: KeyInput): KeyDisposition {
-    if (this.destroyed || this.state.kind !== "alive" || !this.state.active || this.inputHost === null) return "allow-default";
+    if (this.destroyed || this.state.kind !== "alive" || !this.state.active || this.inputHost === null) {
+      this.lastAnswer = "inactive";
+      return "allow-default";
+    }
     const resolution = this.inputHost.stroke(input);
+    this.lastAnswer = resolution.kind === "invoke" ? `invoke:${resolution.action.id}` : resolution.kind;
     return this.inputHost.apply(resolution);
   }
+  private lastAnswer: string | null = null;
 
   destroy(): void {
     if (this.destroyed) return;

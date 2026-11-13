@@ -30,6 +30,9 @@ export type ShellWorld = {
   testOpen: string | null;
   /** Every invoke, in order. */
   calls: ShellCall[];
+  /** Whether SACCADE_KEY_TRACE is set for this shell (off unless a
+   * scenario asks). */
+  keyTrace?: boolean;
 };
 
 export const SHELL_WORLD_KEY = "__portSuiteShell";
@@ -116,6 +119,11 @@ export function installShell(world: ShellWorld): void {
       case "broadcast_jump_labels_clear":
         self.__suiteJumpHide?.();
         return null;
+      // commands.rs key_trace(window, lines: Vec<String>) -> bool: whether
+      // SACCADE_KEY_TRACE is set; when it is, the lines go to stderr
+      // (here: the call log carries them)
+      case "key_trace":
+        return world.keyTrace === true;
       // commands.rs machine_id() -> Option<String> (/etc/machine-id): no machine id here,
       // so no tracker is ever proven to be this machine
       case "machine_id":

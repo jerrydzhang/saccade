@@ -126,6 +126,8 @@ export type BridgedOptions = {
   /** Other live windows besides "main": each is born and attached on
    * this device's window store, the way its own boot would do it. */
   others?: string[];
+  /** The shell's SACCADE_KEY_TRACE (the D1 diagnostic), off by default. */
+  keyTrace?: boolean;
 };
 
 export const test = base.extend<{
@@ -159,7 +161,7 @@ export const test = base.extend<{
         await tracker.attachedWindow(stateId, device);
         windows.push({ label, stateId });
       }
-      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [] };
+      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [], keyTrace: options.keyTrace === true };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
       const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);
