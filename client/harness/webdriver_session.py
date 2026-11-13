@@ -31,7 +31,6 @@ PID-namespace teardown remains the backstop.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import pathlib
@@ -393,14 +392,6 @@ class SessionState:
         # adopted, never outliving the sandbox
         self.server: subprocess.Popen[bytes] | None = None
         self.server_port = 0
-        # the t36 lane mode's own machinery: the feed proxy on the
-        # core socket path (started before the app spawns) and the
-        # in-sandbox seed server the tracker checks open locations
-        # against
-        self.feed_proxy: object | None = None
-        self.seed_server: object | None = None
-        self.tracker_base = ""
-        self.tracker_tasks: dict = {}
 
     def chain_status(self) -> dict:
         return {
@@ -482,14 +473,6 @@ def teardown(state: SessionState) -> int:
         except subprocess.TimeoutExpired:
             state.weston.kill()
             state.weston.wait(timeout=5)
-    if state.seed_server is not None:
-        seed_stop = getattr(state.seed_server, "stop", None)
-        if callable(seed_stop):
-            seed_stop()
-    if state.feed_proxy is not None:
-        proxy_stop = getattr(state.feed_proxy, "stop", None)
-        if callable(proxy_stop):
-            proxy_stop()
     if state.server is not None and state.server.poll() is None:
         state.server.terminate()
         try:
@@ -550,65 +533,6 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         inventory = enumerate_windows(state.client)
         suite = invoke_suite_window(state.client, SUITE_WINDOWS_SCRIPT, [])
         return {"ok": True, "windows": inventory, "suite": suite}, False
-    if command == "feed":
-        proxy = state.feed_proxy
-        if proxy is None or not getattr(proxy, "started", False):
-            raise WebDriverError("invalid argument", "no feed proxy in this session (t36 lane mode only)")
-        action = request.get("action")
-        if action == "status":
-            return {"ok": True, "feed": proxy.recordings()}, False
-        if action == "inject-status":
-            delivered = proxy.inject_status(
-                str(request.get("terminal") or "t-1"),
-                state=str(request.get("state") or "working"),
-                app=str(request.get("app") or "pi"),
-                msg=str(request.get("msg") or ""),
-                progress=request.get("progress"),
-                title=request.get("title"),
-            )
-            return {"ok": True, "delivered": delivered}, False
-        if action == "inject-unknown":
-            delivered = proxy.inject_unknown(str(request.get("event_type") or "deck-cue"))
-            return {"ok": True, "delivered": delivered}, False
-        if action == "inject-finished":
-            delivered = proxy.inject_finished(
-                str(request.get("terminal") or "t-1"), reason=str(request.get("reason") or "exited")
-            )
-            return {"ok": True, "delivered": delivered}, False
-        raise WebDriverError("invalid argument", f"unknown feed action: {action!r}")
-    if command == "tracker":
-        if not state.tracker_base:
-            raise WebDriverError("invalid argument", "no seed server in this session (t36 lane mode only)")
-        return {"ok": True, "base": state.tracker_base, "tasks": state.tracker_tasks}, False
-    if command == "tracker-commit":
-        # S15's mid-check commit through the real wire: the payload
-        # posts to its own seed server (the server lives in this
-        # sandbox's netns; the host cannot reach it). The commit shape
-        # is the seeds module's - one revised board.yaml, real wire.
-        import t36_seeds
-
-        if not state.tracker_base or state.seed_server is None:
-            raise WebDriverError("invalid argument", "no seed server in this session (t36 lane mode only)")
-        task = request.get("task")
-        if not isinstance(task, int):
-            raise WebDriverError("invalid argument", "tracker-commit needs the task number")
-        board_text = request.get("board")
-        if not isinstance(board_text, str) or "grammar:" not in board_text:
-            raise WebDriverError("invalid argument", "tracker-commit needs a board.yaml text")
-        # a wire refusal is a per-request answer, never a payload exit:
-        # an escaping SeedRefused would tear the whole session down
-        try:
-            reply = state.seed_server.post("/api/v1/boards/commit", {
-                "context": t36_seeds.SEED_CONTEXT,
-                "task": task,
-                "files": {"files": [{"path": "board.yaml",
-                                     "content": base64.b64encode(board_text.encode("utf-8")).decode("ascii")}]},
-                "message": str(request.get("message") or "t36 mid-check commit"),
-                "client": t36_seeds.SEED_CLIENT,
-            })
-        except t36_seeds.SeedRefused as error:
-            raise WebDriverError("unknown error", str(error)[:300]) from None
-        return {"ok": True, "revision": reply.get("revision"), "commit": reply.get("commit") or reply.get("hash")}, False
     if command == "open-window":
         assert state.client is not None
         state_id = request.get("state_id")
@@ -777,83 +701,6 @@ def serve(state: SessionState, socket_path: str, lifetime: float, ready_file: st
     return teardown(state)
 
 
-TRACKER_CITED_BOARD = """grammar: 1
-task: t-0
-content:
-  - text: the seed account a citation points at
-"""
-
-TRACKER_CITING_BOARD = """grammar: 1
-task: t-1
-content:
-  - text: the citing account, served by the real wire
-  - incorporation:
-      source:
-        task: t-0
-        revision: 1
-        select: [/content/0]
-      content:
-        - text: the receiving text for the cited seed
-"""
-
-
-def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
-    """The t36 lane mode's setup, BEFORE the app spawns: the feed
-    proxy binds the core socket path (the app dials it at startup),
-    then a real sac serve on a throwaway db carries the group-made
-    seed boards the tracker checks open. Every step is a recorded
-    check, teed to logs/t36-prelude.log so the driver's gate-TAP
-    merge can parse them; a failure here leaves the chain down and
-    the verdict red."""
-    import t36_feed_proxy
-    import t36_seeds
-
-    prelude_log_path = logs / "t36-prelude.log"
-
-    def gate(name: str, condition: bool, detail: str = "") -> None:
-        check(name, condition, detail)
-        line = f"[webdriver] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}".rstrip() + "\n"
-        with open(prelude_log_path, "a", encoding="utf-8") as log:
-            log.write(line)
-
-    serve_bin = os.environ.get("SAC_APP_SERVE_BIN", "")
-    if not serve_bin.startswith("/"):
-        print("containment refusal: SAC_APP_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
-        raise SystemExit(1)
-
-    proxy = t36_feed_proxy.FeedProxy(t36_feed_proxy.default_socket_path())
-    proxy.start()
-    state.feed_proxy = proxy
-    gate("the feed proxy listens on the core socket path", proxy.started, t36_feed_proxy.default_socket_path())
-
-    # the server shells out to git, which the scrubbed env would never
-    # find: the pinned git rides /lane beside the server
-    os.environ["PATH"] = "/lane:" + os.environ.get("PATH", "/usr/bin:/bin")
-    root = state.shots.parent / "seed"
-    try:
-        server = t36_seeds.SeedServer(serve_bin, root)
-        server.start()
-    except t36_seeds.SeedRefused as error:
-        gate("the t36 seed server answers", False, str(error)[:200])
-        teardown(state)
-        raise SystemExit(1)
-    state.seed_server = server
-    state.tracker_base = server.base
-    gate("the t36 seed server answers", server.process is not None and server.process.poll() is None, server.base)
-    try:
-        commits = server.seed()
-        state.tracker_tasks = {entry["task"]: entry for entry in commits}
-        gate(
-            "the t36 seed boards committed (groups on the real wire)",
-            len(commits) == 5 and all(entry.get("revision") is not None for entry in commits),
-            json.dumps([[entry["task"], entry.get("revision")] for entry in commits]),
-        )
-    except t36_seeds.SeedRefused as error:
-        gate("the t36 seed boards committed (groups on the real wire)", False, str(error)[:200])
-        teardown(state)
-        raise SystemExit(1)
-
-
 def main() -> int:
     if not run_canary_first():
         return 1
@@ -885,11 +732,6 @@ def main() -> int:
     state.board_dir_host = os.environ.get("SESSION_BOARD_DIR_HOST", "")
     state.wayland_name = f"wayland-{os.getpid() % 97}"
     try:
-        # the t36 prelude runs BEFORE anything spawns: the feed proxy
-        # must hold the core socket path before the app dials it, and
-        # the seed server must answer before a tracker location opens
-        if os.environ.get("SESSION_MODE") == "t36":
-            t36_prelude(state, logs)
         weston = start_weston(weston_bin, state.wayland_name, logs)
         if weston is None:
             return 1

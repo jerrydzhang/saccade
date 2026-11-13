@@ -15,17 +15,18 @@ Lanes:
   session      GATED. The enforced sandbox with a private headless
                Weston around the packaged app: suite runs the app's
                vitest native project (client/port, the payload
-               suite_payload.py); up / up-t36 hold one sandbox with the
+               suite_payload.py); up holds one sandbox with the
                tauri-driver -> WebKitWebDriver chain and the app for an
                explicit max lifetime, and inspect/input/observe/shot and
                the window verbs act and observe over a private run-root
-               socket (never a host-visible port) - the t36 Python port
-               lane's driver; down tears the chain down in owned order.
+               socket (never a host-visible port) - an interactive
+               debugging tool; down tears the chain down in owned order.
   serve        GATED, not implemented in this change.
 
 (The old app's browser, native and remote lanes, the scripted session
 checks and the session tracker sequence retired with the old app,
-t-36 m-554.)
+t-36 m-554; the t36 Python port lane and its up-t36 mode moved into
+vitest, t-36 m-556.)
 
 Everything that spawns sandbox processes goes through
 isolation.PidfdSupervisor: one bwrap supervisor per run, kernel-verified
@@ -51,7 +52,10 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py", "harness/t36_seeds.py", "harness/t36_checks.py", "harness/t36_differential.py", "harness/t36_feed_proxy.py", "harness/suite_payload.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py", "harness/t36_seeds.py", "harness/suite_payload.py"]),
+    # the harness's own unit tests (the seed module the scenarios' tracker
+    # is seeded with)
+    ("harness-tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "harness/tests", "-t", "."]),
     # the app's frontend typecheck (client/port; its suites run through
     # vitest: just app-test and just app-test-browser)
     ("typecheck", ["node_modules/.bin/tsc", "--noEmit", "-p", "port/tsconfig.json"]),
@@ -534,13 +538,12 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     return env
 
 
-def session_binds(resolved: dict, mode: str = "plain") -> list[tuple[str, str]]:
+def session_binds(resolved: dict) -> list[tuple[str, str]]:
     """Read-only binds: the canary, both lane modules, the pinned
     binaries (covered by the /nix/store bind - stated explicitly for
     review) and the board's parent directory. The screenshooter stays
     bound: shot captures compositor frames beside WebDriver shots.
-    A run that seeds a tracker adds its own sac binary at /lane/sac; the
-    t36 mode adds the seed and feed-proxy modules beside it."""
+    A run that seeds a tracker adds its own sac binary at /lane/sac."""
     binds = [
         (resolved["canary"], CANARY_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
@@ -556,9 +559,6 @@ def session_binds(resolved: dict, mode: str = "plain") -> list[tuple[str, str]]:
         binds.append((resolved["serve_bin"], "/lane/sac"))
     if resolved.get("git_bin"):
         binds.append((resolved["git_bin"], "/lane/git"))
-    if mode == "t36":
-        binds.append((str((HERE / "t36_feed_proxy.py").resolve()), "/lane/t36_feed_proxy.py"))
-        binds.append((str((HERE / "t36_seeds.py").resolve()), "/lane/t36_seeds.py"))
     return binds
 
 
@@ -687,17 +687,13 @@ def daemon_hold_supervisor(
     os._exit(0)
 
 
-def session_up(board_arg: str, lifetime: float, mode: str = "plain", reuse_root: str = "") -> int:
+def session_up(board_arg: str, lifetime: float) -> int:
     """Gated. One sandbox, one daemonized supervisor holder, one control
     socket. Idempotent while the session is alive; a stale record is
-    cleared, never adopted. The t36 mode adds the feed proxy and the
-    in-sandbox seed server (SAC_APP_SERVE_BIN required). reuse_root
-    relaunches into an existing run root: the run's own data and cache
-    dirs persist, so the app's launch-restore surface is exercisable
-    (S20's persisted-surface assertions)."""
+    cleared, never adopted."""
     isolation_gate("webdriver")
 
-    resolved = session_resolved(board_arg, tracker_db_arg, require_serve_bin=(mode == "t36"))
+    resolved = session_resolved(board_arg, tracker_db_arg)
     if resolved is None:
         return 1
     if lifetime <= 0 or lifetime > 4 * 3600:
@@ -729,27 +725,13 @@ def session_up(board_arg: str, lifetime: float, mode: str = "plain", reuse_root:
     import isolation
 
     token = uuid.uuid4().hex
-    if reuse_root:
-        reuse = pathlib.Path(reuse_root)
-        if not reuse.is_dir():
-            print(f"containment refusal: reuse_root does not exist: {reuse_root}", file=sys.stderr)
-            return 1
-        run_root = reuse
-        (run_root / "logs").mkdir(exist_ok=True)
-        (run_root / "shots").mkdir(exist_ok=True)
-    else:
-        run_root = isolation.make_run_root("session")
+    run_root = isolation.make_run_root("session")
     env = session_env(resolved, run_root, token, lifetime)
-    if mode == "t36":
-        env["SESSION_MODE"] = "t36"
-        # the payload's own seed server rides /lane/sac; the prelude
-        # refuses without it
-        env["SAC_APP_SERVE_BIN"] = "/lane/sac"
     cmd = isolation.build_command(
         resolved["bwrap"],
         run_root,
         [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
-        session_binds(resolved, mode),
+        session_binds(resolved),
     )
     print("[session] gate command:", " ".join(cmd), flush=True)
     supervisor = isolation.PidfdSupervisor(cmd, env)
@@ -1055,8 +1037,6 @@ def session_main(rest: list[str], board_arg: str) -> int:
         return int(exit.code or 2)
     if verb == "up":
         return session_up(board_arg, lifetime)
-    if verb == "up-t36":
-        return session_up(board_arg, lifetime, mode="t36")
     if verb == "down":
         return session_down()
     if verb == "status":

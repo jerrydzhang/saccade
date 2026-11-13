@@ -35,8 +35,8 @@ const NAMED: Record<string, string> = {
 
 // shifted symbols ride explicit Shift chords on their US-layout base
 // key: on this WebKitWebDriver stack a bare shifted codepoint loses
-// its shift after a pointer action (client/harness/t36_port.py
-// type_text records the evidence); uppercase letters likewise
+// its shift after a pointer action (the retired t36 lane recorded the
+// evidence); uppercase letters likewise
 const CHORDS: Record<string, string> = {
   "~": "`", "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8",
   "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'",

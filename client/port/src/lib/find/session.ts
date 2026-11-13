@@ -18,7 +18,7 @@
 //     acts on the enclosing target. Entry in the prototype is space
 //     then / through the leader (:71-79 commands table, :501 space
 //     opens it) - the ratified difference is the bare / entry, carried
-//     by input adapter A2 (harness t36_adapters.py:61-67; scenario 16
+//     by input adapter A2 (the retired t36 lane's adapters; scenario 16
 //     differential note, line 367).
 //   - Baseline app (4d59c35/b8240b5, the S16-green carrier):
 //     openSearch/closeSearch App.svelte:1055-1061; Escape closes at

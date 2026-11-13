@@ -68,9 +68,9 @@ that spawns runs inside one bwrap sandbox under
 - `session suite` - a private headless Weston around the built app, then
   vitest's native project (payload `suite_payload.py`); what
   `just app-test-native` runs
-- `session up` / `up-t36` / `down` and the window verbs - the held
-  WebDriver session the t36 Python port lane (`t36_*.py`) drives; that
-  lane migrates into vitest next, then goes
+- `session up` / `down` and the window verbs - a held WebDriver session
+  around the app, an interactive debugging tool (the t36 Python port lane
+  that drove it migrated into vitest, t-36 m-556)
 
 Run roots are kept under `/var/tmp/saccade-app-<uid>/` for inspection.
 

@@ -23,6 +23,7 @@ from the same seeded tracker.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -189,6 +190,14 @@ def seed_via(post) -> list[dict]:
     return commits
 
 
+def _sha256_of_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _b64(text: str) -> str:
     import base64
 
@@ -269,12 +278,10 @@ class SeedServer:
         return seed_via(self.post)
 
     def seeds_record(self, commits: list[dict]) -> dict:
-        """The manifest's seeds block, validation-ready."""
-        from t36_results import sha256_of_file
-
+        """The seeds record: where the db and repo are, and the db's hash."""
         return {
             "db_path": str(self.db),
-            "db_hash": sha256_of_file(str(self.db)),
+            "db_hash": _sha256_of_file(self.db),
             "repo": str(self.repo),
             "serve_bin": self.sac_bin,
             "commits": commits,

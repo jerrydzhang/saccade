@@ -1,9 +1,10 @@
 # The port's scenarios
 
 One runner (vitest), three projects (`client/port/vitest.config.ts`), and one
-way to write a scenario. These projects are the app's test gate (the old
-app's harness lanes retired with it, t-36 m-554); the t36 Python port lane
-in `client/harness/t36_*.py` remains until its scenarios migrate here.
+way to write a scenario. These projects are the app's test gate: the old
+app's harness lanes retired with it (t-36 m-554), and the t36 Python port
+lane's scenarios migrated here (t-36 m-556). The tracker's seed boards still
+come from `client/harness/t36_seeds.py`.
 
 | project | what | command | runtime |
 | --- | --- | --- | --- |
@@ -108,9 +109,9 @@ Every module is a test-infrastructure module; each line says why it exists.
   (commits, window-state reads), usable from both realms.
 - `kit/tracker.ts`, `kit/tracker-setup.ts`: the throwaway tracker, a real
   `sac serve` on a fresh temp db and repo on a free loopback port, seeded by
-  `client/harness/t36_seeds.py` itself (one source for the seed boards until
-  the harness cuts over). It is never the production tracker; the run root is
-  printed and kept.
+  `client/harness/t36_seeds.py` (the one source of the seed boards, with its
+  own unit tests in `client/harness/tests/`). It is never the production
+  tracker; the run root is printed and kept.
 
 ## Browser
 
