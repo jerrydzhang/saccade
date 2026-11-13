@@ -190,6 +190,19 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
     },
+    async menuGeometry() {
+      return browser.execute(() => {
+      const menu = document.querySelector("[data-port-menu]") as HTMLElement | null;
+        if (menu === null) return null;
+        const box = (element: Element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+        };
+        const part = menu.getAttribute("data-port-menu-part") ?? "";
+        const target = part === "" ? null : document.querySelector(`.port-board-view [data-port-part=${JSON.stringify(part)}], .port-tasks-stage [data-port-part=${JSON.stringify(part)}]`);
+        return { menu: box(menu), target: target === null ? null : box(target), part, viewport: { width: window.innerWidth, height: window.innerHeight } };
+      });
+    },
     async partText(part) {
       return browser.execute((path: string) => {
         const element = document.querySelector(`[data-port-part=${JSON.stringify(path)}]`);

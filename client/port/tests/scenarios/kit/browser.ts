@@ -98,6 +98,19 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     },
+    async menuGeometry() {
+      const window = portWindow();
+      const document = window.document;
+      const menu = document.querySelector("[data-port-menu]") as HTMLElement | null;
+      if (menu === null) return null;
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      };
+      const part = menu.getAttribute("data-port-menu-part") ?? "";
+      const target = part === "" ? null : document.querySelector(`.port-board-view [data-port-part=${JSON.stringify(part)}], .port-tasks-stage [data-port-part=${JSON.stringify(part)}]`);
+      return { menu: box(menu), target: target === null ? null : box(target), part, viewport: { width: window.innerWidth, height: window.innerHeight } };
+    },
     async partText(part) {
       // the app's iframe is its own realm: instanceof against this
       // page's HTMLElement would always fail

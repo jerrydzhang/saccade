@@ -57,3 +57,33 @@ export function menuPlacement(input: MenuPlacementInput): PlacementPoint {
   top = Math.max(margin, Math.min(top, viewport.height - menu.height - margin));
   return { x: left, y: top };
 }
+
+/** The menu's position inside its stage (the views' absolutely placed
+ * layer, which scrolls with the content), placed as the prototype's
+ * openAt does: in VIEWPORT coordinates - at the pointer, else beside
+ * the target - clamped to the viewport, then converted to the stage.
+ * The right-click point arrives relative to the host. (A placement in
+ * stage coordinates clamped by the window height put the menu far off
+ * screen on a scrolled board, m-545.) */
+export function placeMenuInStage(input: Readonly<{
+  menu: HTMLElement;
+  stage: HTMLElement;
+  host: HTMLElement;
+  /** The right-click point, host-relative, or null. */
+  at: PlacementPoint | null;
+  /** The target part's element, if rendered. */
+  target: Element | null;
+}>): PlacementPoint {
+  const view = input.stage.ownerDocument.defaultView;
+  const stageBox = input.stage.getBoundingClientRect();
+  const hostBox = input.host.getBoundingClientRect();
+  const menuBox = input.menu.getBoundingClientRect();
+  const targetBox = input.target === null ? null : input.target.getBoundingClientRect();
+  const placed = menuPlacement({
+    at: input.at === null ? null : { x: input.at.x + hostBox.left, y: input.at.y + hostBox.top },
+    target: targetBox === null ? null : { left: targetBox.left, top: targetBox.top, bottom: targetBox.bottom },
+    menu: { width: menuBox.width, height: menuBox.height },
+    viewport: { width: view?.innerWidth ?? stageBox.width, height: view?.innerHeight ?? stageBox.height },
+  });
+  return { x: placed.x - stageBox.left, y: placed.y - stageBox.top };
+}

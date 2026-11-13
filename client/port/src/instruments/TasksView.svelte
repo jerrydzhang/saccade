@@ -10,7 +10,7 @@ return anchor's identity), data-port-open names the row's link. -->
 <script lang="ts">
   import type { MenuView, SelectSessionView } from "./tasks.ts";
 import LabelOverlay from "../components/LabelOverlay.svelte";
-import { menuPlacement } from "../lib/menu/geometry.ts";
+import { placeMenuInStage } from "../lib/menu/geometry.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
 
@@ -79,28 +79,13 @@ let menuElement: HTMLElement | null = $state(null);
     const element = menuElement;
     const stageElement = host?.parentElement ?? null;
     if (element === null || stageElement === null) return;
-    const stageBox = stageElement.getBoundingClientRect();
-    const menuBox = element.getBoundingClientRect();
+    const hostElement = host;
+    if (hostElement === null) return;
     const targetElement =
       menu.part !== null
-        ? host.querySelector(`[data-port-part=${JSON.stringify(menu.part)}]`)
+        ? hostElement.querySelector(`[data-port-part=${JSON.stringify(menu.part)}]`)
         : null;
-    const targetBox =
-      targetElement instanceof HTMLElement ? targetElement.getBoundingClientRect() : null;
-    menuAt = menuPlacement({
-      at: menu.at !== null
-        ? { x: menu.at.x - stageBox.left, y: menu.at.y - stageBox.top }
-        : null,
-      target: targetBox !== null
-        ? {
-            left: targetBox.left - stageBox.left,
-            top: targetBox.top - stageBox.top,
-            bottom: targetBox.bottom - stageBox.top,
-          }
-        : null,
-      menu: { width: menuBox.width, height: menuBox.height },
-      viewport: { width: stageBox.width, height: window.innerHeight },
-    });
+    menuAt = placeMenuInStage({ menu: element, stage: stageElement, host: hostElement, at: menu.at, target: targetElement });
   });
 
   function chipBox(part: string): { left: number; top: number } | null {
@@ -166,6 +151,7 @@ a11y click advisories do not apply. -->
   <div
       class="port-menu"
       data-port-menu=""
+      data-port-menu-part={menu.part ?? ""}
       bind:this={menuElement}
       style="left: {menuAt.x}px; top: {menuAt.y}px"
     >
@@ -177,7 +163,7 @@ a11y click advisories do not apply. -->
         onclick={(event) => {
           event.stopPropagation();
           controller.menuSession().choose(index);
-        }}>{act.key} {act.label}</button>
+        }}>{act.key} {act.label}{#if index === 0}<span class="port-menu-enter">{"  \u21b5"}</span>{/if}</button>
     {/each}
   </div>
 {/if}

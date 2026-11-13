@@ -48,6 +48,10 @@ declare module "vitest" {
   }
 }
 
+export type Box = { left: number; top: number; right: number; bottom: number };
+/** AppDriver.menuGeometry's answer. */
+export type MenuGeometry = { menu: Box; target: Box | null; part: string; viewport: { width: number; height: number } };
+
 /** One painted find mark (AppDriver.findMarks). */
 export type FindMark = { part: string | null; text: string; active: boolean };
 
@@ -77,6 +81,10 @@ export interface AppDriver {
   labels(): Promise<{ label: string; part: string }[]>;
   /** Whether an act menu is open now. */
   menuOpen(): Promise<boolean>;
+  /** The open act menu's box and its target part's box, in viewport
+   * (client) coordinates, with the viewport's size; null when no menu
+   * is open. The menu names its target by data-port-menu-part. */
+  menuGeometry(): Promise<MenuGeometry | null>;
   /** The content part visibly marked as find's active match, or null.
    * Reads the data-port-find-active mark (D2, lib/find/marks.ts). */
   activeMatch(): Promise<string | null>;
