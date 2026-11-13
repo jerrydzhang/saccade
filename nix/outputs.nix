@@ -562,11 +562,6 @@
               saccade-app-web = (saccadeApp pkgs ../.).web;
               saccade-app-tauri-driver = (saccadeApp pkgs ../.).driver;
 
-              # the port's former name, kept for ONE handover so a
-              # command naming it still runs the app (t-36 m-554); goes
-              # in the batch after
-              saccade-app-port = (saccadeApp clientPkgs ../.).app;
-
               default = pkgs.symlinkJoin {
                 name = "saccade";
                 paths =
