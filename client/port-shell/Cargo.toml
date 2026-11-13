@@ -1,6 +1,6 @@
 [package]
 name = "saccade-app"
-version = "0.1.0"
+version = "0.2.0"
 description = "The Saccade app's binary: the shared Rust shell around the client/port frontend"
 edition = "2021"
 

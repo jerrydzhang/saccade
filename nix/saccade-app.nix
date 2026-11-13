@@ -46,9 +46,9 @@
   ];
   npm = {
     pname = "saccade-app-web";
-    version = "0.1.0";
+    version = "0.2.0";
     inherit src;
-    npmDepsHash = "sha256-Sn8IYlaL6ODCPZTqSQ/AEy+E7+DQkonskNljcO+eus8=";
+    npmDepsHash = "sha256-bVSzyN8nrUrNT11I/WT9zy3w7v179PS/rBpPdkD8LkA=";
   };
   webDist = buildNpmPackage (npm
     // {
@@ -113,7 +113,7 @@ in {
   in
     rustPlatform.buildRustPackage {
       pname = "saccade-app";
-      version = "0.1.0";
+      version = "0.2.0";
       src = cargoSrc;
       # no tests inside nix: the parity suite runs in the devshell; a
       # sandbox cold compile puts the cheap failure behind the
