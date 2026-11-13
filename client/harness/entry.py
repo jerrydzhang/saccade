@@ -12,21 +12,17 @@ Lanes:
                canary with full namespace/path baselines, bounded
                timeout, owned cleanup. No test payload, browser, core,
                compositor or SSH activity in this lane.
-  session      GATED. The enforced sandbox with a private headless
-               Weston around the packaged app: suite runs the app's
+  session      GATED. session suite: the enforced sandbox with a private
+               headless Weston around the packaged app, then the app's
                vitest native project (client/port, the payload
-               suite_payload.py); up holds one sandbox with the
-               tauri-driver -> WebKitWebDriver chain and the app for an
-               explicit max lifetime, and inspect/input/observe/shot and
-               the window verbs act and observe over a private run-root
-               socket (never a host-visible port) - an interactive
-               debugging tool; down tears the chain down in owned order.
+               suite_payload.py).
   serve        GATED, not implemented in this change.
 
 (The old app's browser, native and remote lanes, the scripted session
 checks and the session tracker sequence retired with the old app,
 t-36 m-554; the t36 Python port lane and its up-t36 mode moved into
-vitest, t-36 m-556.)
+vitest, t-36 m-556; the interactive session tool - up, down and the
+window verbs - retired, t-36 m-559.)
 
 Everything that spawns sandbox processes goes through
 isolation.PidfdSupervisor: one bwrap supervisor per run, kernel-verified
@@ -36,13 +32,10 @@ handle, verified reaping, no pattern kills, no numeric-PID fallback.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import pathlib
 import re
 import shutil
-import signal
-import socket
 import subprocess
 import sys
 import time
@@ -52,7 +45,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py", "harness/t36_seeds.py", "harness/suite_payload.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/harness_checks.py", "harness/t36_seeds.py", "harness/suite_payload.py"]),
     # the harness's own unit tests (the seed module the scenarios' tracker
     # is seeded with)
     ("harness-tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "harness/tests", "-t", "."]),
@@ -67,9 +60,6 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
-SESSION_UP_TIMEOUT_SECONDS = 90
-SESSION_DOWN_TIMEOUT_SECONDS = 30
-SESSION_DEFAULT_LIFETIME_SECONDS = 1800
 # the suite mode's whole bound: weston, then the port suite's native
 # project (one fresh app chain per test), teardown
 SESSION_SUITE_TIMEOUT_SECONDS = 960
@@ -77,17 +67,10 @@ SESSION_SUITE_TIMEOUT_SECONDS = 960
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
 CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
-SESSION_PAYLOAD_SANDBOX_PATH = "/lane/webdriver_session.py"
-SESSION_CLIENT_SANDBOX_PATH = "/lane/webdriver_client.py"
-# the suite mode: its payload beside the session modules, and the client
-# tree (node_modules, the port, the scenarios, the seed module) read-only
+# the suite mode: its payload, and the client tree (node_modules, the
+# port, the scenarios, the seed module) read-only
 SUITE_PAYLOAD_SANDBOX_PATH = "/lane/suite_payload.py"
 SUITE_CLIENT_SANDBOX_PATH = "/suite/client"
-# the control socket and ready marker live in the run root, which is
-# bind-mounted read-write at the identical path: the host reaches the
-# payload over a private Unix socket inside a 0700 tree, never a port
-SESSION_SOCKET_NAME = "control.sock"
-SESSION_READY_NAME = "session-ready.json"
 tracker_db_arg = ""
 
 
@@ -204,13 +187,6 @@ def preflight() -> int:
             print(f"[preflight] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
-REMOTE_LOCATION = "b:/board/real.yaml"
-
-
-SESSION_TARGET_ID = re.compile(r"^[A-Za-z0-9:_-]{1,120}$")
-SESSION_SHOT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
-
-
 def verify_fontconfig_file(path: str) -> tuple[bool, str]:
     """The pinned generated fontconfig: must be a store path as given,
     readable, and reference at least one font directory inside the
@@ -236,145 +212,6 @@ def fontconfig_content_ok(text: str) -> tuple[bool, str]:
     return True, ""
 
 
-def session_state_path() -> pathlib.Path:
-    """One active session record under the runtime root; its directory
-    is 0700, so the control socket it names is private to the uid."""
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    base = pathlib.Path(f"{isolation.RUNTIME_ROOT}-{os.getuid()}")
-    return base / "session.json"
-
-
-def write_session_record(record: dict) -> None:
-    path = session_state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".new")
-    tmp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    tmp.replace(path)
-
-
-def load_session_record() -> dict | None:
-    try:
-        value = json.loads(session_state_path().read_text())
-    except (OSError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def clear_session_record(token: str) -> bool:
-    """Remove the record only when it still names our own token: a slow
-    teardown never deletes a newer session's identity."""
-    record = load_session_record()
-    if record is None or record.get("token") != token:
-        return False
-    try:
-        session_state_path().unlink()
-    except OSError:
-        return False
-    return True
-
-
-def process_env_value(pid: int, name: str) -> str | None:
-    try:
-        data = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-    except OSError:
-        return None
-    for entry in data:
-        key, sep, value = entry.partition(b"=")
-        if sep and key.decode(errors="replace") == name:
-            return value.decode(errors="replace")
-    return None
-
-
-def open_verified_pidfd(pid: int, token: str) -> int | None:
-    """Pin the process FIRST - a held pidfd cannot be recycled - then
-    verify the token on the pinned process and confirm it is alive
-    through the same fd. There is no window in which a recycled PID
-    inherits another process's verdict."""
-    try:
-        fd = os.pidfd_open(pid)
-    except OSError:
-        return None
-    try:
-        if process_env_value(pid, "SAC_APP_SESSION_TOKEN") != token:
-            os.close(fd)
-            return None
-        signal.pidfd_send_signal(fd, 0)  # alive probe through the pin
-        return fd
-    except (OSError, ProcessLookupError):
-        os.close(fd)
-        return None
-
-
-def signal_verified_pid(pid: int, token: str, sig: signal.Signals) -> bool:
-    """One signal through a token-verified pidfd: ownership verified on
-    the pinned process, no numeric-PID fallback, no pattern kills."""
-    fd = open_verified_pidfd(pid, token)
-    if fd is None:
-        return False
-    try:
-        signal.pidfd_send_signal(fd, sig)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
-    finally:
-        os.close(fd)
-
-
-def wait_pid_gone(pid: int, timeout: float) -> bool:
-    """Poll the held pidfd, never the numeric /proc entry: the fd pins
-    the exact process we verified, and only the kernel's release of it
-    (ESRCH) counts as gone."""
-    try:
-        fd = os.pidfd_open(pid)
-    except OSError:
-        return True
-    try:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                signal.pidfd_send_signal(fd, 0)
-            except ProcessLookupError:
-                return True
-            time.sleep(0.1)
-        return False
-    finally:
-        os.close(fd)
-
-
-def escalate_verified_pid(pid: object, token: str) -> None:
-    """TERM, bounded grace, KILL through a verified pidfd; the same
-    escalation ladder the supervisor uses, outside its class because the
-    daemon and bwrap outlive the process that spawned them."""
-    if not isinstance(pid, int) or pid <= 0:
-        return
-    if signal_verified_pid(pid, token, signal.SIGTERM):
-        if not wait_pid_gone(pid, 5.0):
-            signal_verified_pid(pid, token, signal.SIGKILL)
-            wait_pid_gone(pid, 5.0)
-
-
-def session_request(socket_path: str, payload: dict, timeout: float = 60.0) -> dict:
-    """One JSON request to the session payload over the private
-    run-root socket; one JSON response line comes back."""
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    conn.settimeout(timeout)
-    try:
-        conn.connect(socket_path)
-        conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-        with conn.makefile("rb") as reader:
-            line = reader.readline(1 << 20)
-        if not line:
-            raise RuntimeError("session payload closed the connection without a response")
-        response = json.loads(line.decode("utf-8"))
-    finally:
-        conn.close()
-    if not isinstance(response, dict):
-        raise RuntimeError("malformed session response")
-    return response
-
-
 def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bin: bool = False) -> dict | None:
     """Every pinned path the session lane consumes, with the same
     refusals the native lane makes. Returns None after printing a
@@ -389,8 +226,6 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
     bwrap = str(pathlib.Path(found).resolve())
     python = str(pathlib.Path(sys.executable).resolve())
     canary = str((HERE / "containment_canary.py").resolve())
-    session_py = str((HERE / "webdriver_session.py").resolve())
-    client_py = str((HERE / "webdriver_client.py").resolve())
 
     tools: dict[str, str | None] = {}
     for name, binary in (
@@ -479,8 +314,6 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         "bwrap": bwrap,
         "python": python,
         "canary": canary,
-        "session_py": session_py,
-        "client_py": client_py,
         "weston": tools["weston"],
         "shooter": tools["shooter"],
         "tauri_driver": tools["tauri_driver"],
@@ -497,7 +330,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
     }
 
 
-def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: float) -> dict[str, str]:
+def session_env(resolved: dict, run_root: pathlib.Path, token: str) -> dict[str, str]:
     """The fresh allowlist plus the lane's explicit pins. The GL and
     scale facts are the native lane's; they ride the chain env, and a
     GSubprocessLauncher child (the app) inherits its parent's
@@ -527,9 +360,6 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
-    env["SESSION_CONTROL_SOCKET"] = str(run_root / SESSION_SOCKET_NAME)
-    env["SESSION_READY_FILE"] = str(run_root / SESSION_READY_NAME)
-    env["SESSION_LIFETIME_SECONDS"] = str(int(lifetime))
     # the ownership token the host later verifies in /proc environ
     # before any pidfd signal; never SACCADE_-prefixed (the canary
     # refuses that namespace by design)
@@ -546,8 +376,6 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
     A run that seeds a tracker adds its own sac binary at /lane/sac."""
     binds = [
         (resolved["canary"], CANARY_SANDBOX_PATH),
-        (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
-        (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
         (resolved["app"], resolved["app"]),
         (resolved["weston"], resolved["weston"]),
         (resolved["shooter"], resolved["shooter"]),
@@ -560,220 +388,6 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
     if resolved.get("git_bin"):
         binds.append((resolved["git_bin"], "/lane/git"))
     return binds
-
-
-def record_alive(record: dict | None) -> bool:
-    """Liveness without signaling: the daemon and the bwrap supervisor
-    both carry the session token in their environment."""
-    if not isinstance(record, dict):
-        return False
-    token = record.get("token")
-    if not isinstance(token, str):
-        return False
-    for key in ("daemon_pid", "supervisor_pid"):
-        pid = record.get(key)
-        if isinstance(pid, int) and pid > 0 and process_env_value(pid, "SAC_APP_SESSION_TOKEN") == token:
-            return True
-    return False
-
-
-def daemon_hold_supervisor(
-    supervisor: object,
-    run_root: pathlib.Path,
-    token: str,
-    lifetime: float,
-    board: str,
-    ready_w: int,
-) -> None:
-    """The daemonized holder: starts the supervisor the launcher built,
-    announces readiness once the payload's control socket answers, then
-    polls for the payload's exit until the session bound (plus teardown
-    grace). Every exit path stops the supervisor through its pidfd and
-    clears the record (token-guarded) before exiting."""
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    # the holder outlives the `up` invocation: its own chatter goes to
-    # the run root's holder log, never the next command's terminal
-    holder_log = open(run_root / "logs" / "holder.log", "ab", buffering=0)
-    os.dup2(holder_log.fileno(), 1)
-    os.dup2(holder_log.fileno(), 2)
-
-    stopping = {"now": False}
-
-    def request_stop(_signum: object, _frame: object) -> None:
-        stopping["now"] = True
-
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(signal.SIGINT, request_stop)
-
-    def fail(message: str) -> None:
-        try:
-            os.write(ready_w, f"ERROR {message}\n".encode("utf-8"))
-        except OSError:
-            pass
-
-    def stop_and_clear() -> None:
-        supervisor.stop()
-        clear_session_record(token)
-
-    try:
-        supervisor.start()
-    except isolation.ContainmentRefused as error:
-        fail(f"supervisor refused: {error}")
-        os.close(ready_w)
-        os._exit(1)
-
-    socket_path = str(run_root / SESSION_SOCKET_NAME)
-    expires_epoch = time.time() + lifetime
-    record = {
-        "root": str(run_root),
-        "socket": socket_path,
-        "ready": str(run_root / SESSION_READY_NAME),
-        "daemon_pid": os.getpid(),
-        "supervisor_pid": supervisor._proc.pid,
-        "token": token,
-        "board": board,
-        "started": time.time(),
-        "expires": expires_epoch,
-    }
-    deadline = time.monotonic() + SESSION_UP_TIMEOUT_SECONDS
-    announced = False
-    while time.monotonic() < deadline:
-        if stopping["now"] or supervisor._proc.poll() is not None:
-            break
-        try:
-            probe = session_request(socket_path, {"cmd": "status"}, timeout=2.0)
-        except (OSError, RuntimeError, ValueError):
-            probe = None
-        if isinstance(probe, dict) and probe.get("ok"):
-            write_session_record(record)
-            try:
-                os.write(
-                    ready_w,
-                    ("READY " + json.dumps({k: record[k] for k in ("root", "socket", "board", "expires")}) + "\n").encode("utf-8"),
-                )
-                os.close(ready_w)
-            except OSError:
-                pass
-            ready_w = -1
-            announced = True
-            break
-        time.sleep(0.4)
-    if not announced:
-        output = ""
-        try:
-            supervisor.stop()
-            output = supervisor.read_output()
-        except (OSError, ValueError):
-            pass
-        clear_session_record(token)
-        fail(f"session did not come up: {output[-400:]}")
-        if ready_w != -1:
-            os.close(ready_w)
-        os._exit(1)
-
-    # hold for the payload: the bound is lifetime + teardown grace
-    grace = 120.0
-    end = time.monotonic() + lifetime + grace
-    while time.monotonic() < end:
-        if stopping["now"]:
-            print("[session] holder asked to stop; tearing down", flush=True)
-            break
-        if supervisor._proc.poll() is not None:
-            break
-        time.sleep(0.25)
-    stop_and_clear()
-    os._exit(0)
-
-
-def session_up(board_arg: str, lifetime: float) -> int:
-    """Gated. One sandbox, one daemonized supervisor holder, one control
-    socket. Idempotent while the session is alive; a stale record is
-    cleared, never adopted."""
-    isolation_gate("webdriver")
-
-    resolved = session_resolved(board_arg, tracker_db_arg)
-    if resolved is None:
-        return 1
-    if lifetime <= 0 or lifetime > 4 * 3600:
-        print("containment refusal: --max-lifetime must be within (0, 4h]", file=sys.stderr)
-        return 1
-
-    existing = load_session_record()
-    if existing is not None:
-        if record_alive(existing):
-            print(
-                json.dumps(
-                    {
-                        "session": "already-running",
-                        "root": existing.get("root"),
-                        "socket": existing.get("socket"),
-                        "board": existing.get("board"),
-                        "expires": existing.get("expires"),
-                    },
-                    indent=2,
-                )
-            )
-            return 0
-        session_state_path().unlink(missing_ok=True)
-
-    import select
-    import uuid
-
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    token = uuid.uuid4().hex
-    run_root = isolation.make_run_root("session")
-    env = session_env(resolved, run_root, token, lifetime)
-    cmd = isolation.build_command(
-        resolved["bwrap"],
-        run_root,
-        [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
-        session_binds(resolved),
-    )
-    print("[session] gate command:", " ".join(cmd), flush=True)
-    supervisor = isolation.PidfdSupervisor(cmd, env)
-
-    ready_r, ready_w = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        os.setsid()
-        os.close(ready_r)
-        try:
-            daemon_hold_supervisor(supervisor, run_root, token, lifetime, resolved["board_host"], ready_w)
-        finally:
-            os._exit(1)
-    os.close(ready_w)
-
-    deadline = time.monotonic() + SESSION_UP_TIMEOUT_SECONDS
-    buffer = b""
-    while time.monotonic() < deadline:
-        remaining = deadline - time.monotonic()
-        readable, _w, _x = select.select([ready_r], [], [], min(remaining, 1.0))
-        if not readable:
-            continue
-        chunk = os.read(ready_r, 4096)
-        if not chunk:
-            break
-        buffer += chunk
-        if b"\n" in buffer:
-            break
-    os.close(ready_r)
-    line = buffer.split(b"\n", 1)[0].decode("utf-8", errors="replace")
-    if line.startswith("READY "):
-        info = json.loads(line[len("READY "):])
-        print(json.dumps({"session": "up", **info, "lifetime": int(lifetime)}, indent=2))
-        return 0
-    detail = line[len("ERROR "):] if line.startswith("ERROR ") else line or "holder exited without a verdict"
-    print(f"[session] up failed: {detail}", file=sys.stderr)
-    # reap the finished holder: it exited after writing its verdict
-    try:
-        os.waitpid(pid, 0)
-    except (ChildProcessError, OSError):
-        pass
-    return 1
 
 
 def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
@@ -806,7 +420,7 @@ def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
 
     run_root = isolation.make_run_root("session-suite")
     token = uuid.uuid4().hex
-    env = session_env(resolved, run_root, token, SESSION_DEFAULT_LIFETIME_SECONDS)
+    env = session_env(resolved, run_root, token)
     env["SESSION_MODE"] = "suite"
     env["SUITE_NODE_BIN"] = node
     env["SUITE_CLIENT_DIR"] = SUITE_CLIENT_SANDBOX_PATH
@@ -840,251 +454,13 @@ def session_suite(board_arg: str, tracker_db_candidate: str) -> int:
             print(f"[suite] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
-def session_down() -> int:
-    """Gated. Graceful first: the down request makes the payload tear
-    its chain down in owned order and exit, the sandbox empties, the
-    holder exits and clears the record. Escalation, only if needed, is
-    the same TERM -> grace -> KILL ladder through token-verified pidfds
-    (daemon first - its stop path owns the supervisor - then bwrap)."""
-    isolation_gate("webdriver")
-
-    record = load_session_record()
-    if record is None:
-        print(json.dumps({"stopped": True, "note": "no session record"}))
-        return 0
-    token = record.get("token")
-    if not isinstance(token, str):
-        print("containment refusal: session record has no ownership token", file=sys.stderr)
-        return 1
-    socket_path = record.get("socket")
-    if isinstance(socket_path, str) and pathlib.Path(socket_path).exists():
-        try:
-            session_request(socket_path, {"cmd": "down"}, timeout=20.0)
-        except (OSError, RuntimeError, ValueError) as error:
-            print(f"[session] control socket did not take down ({error}); escalating", file=sys.stderr)
-    deadline = time.monotonic() + SESSION_DOWN_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if not record_alive(record):
-            break
-        time.sleep(0.2)
-    if record_alive(record):
-        escalate_verified_pid(record.get("daemon_pid"), token)
-        escalate_verified_pid(record.get("supervisor_pid"), token)
-    stopped = not record_alive(record)
-    clear_session_record(token)
-    print(json.dumps({"stopped": stopped, "root": record.get("root"), "files_retained": record.get("root")}))
-    return 0 if stopped else 1
-
-
-def session_live_socket() -> tuple[dict, str] | None:
-    record = load_session_record()
-    if record is None:
-        print("[session] no session record; run session up first", file=sys.stderr)
-        return None
-    socket_path = record.get("socket")
-    if not isinstance(socket_path, str) or not pathlib.Path(socket_path).exists():
-        print("[session] session control socket is gone; run session down then up", file=sys.stderr)
-        return None
-    return record, socket_path
-
-
-def session_status() -> int:
-    isolation_gate("webdriver")
-    record = load_session_record()
-    if record is None:
-        print(json.dumps({"running": False}))
-        return 0
-    socket_path = record.get("socket")
-    if isinstance(socket_path, str):
-        try:
-            response = session_request(socket_path, {"cmd": "status"}, timeout=5.0)
-            print(json.dumps({"running": True, **response, "root": record.get("root")}, indent=2))
-            return 0 if response.get("ok") else 1
-        except (OSError, RuntimeError, ValueError):
-            pass
-    print(
-        json.dumps(
-            {
-                "running": record_alive(record),
-                "note": "control socket unreachable; record facts only",
-                "root": record.get("root"),
-                "expires": record.get("expires"),
-            },
-            indent=2,
-        )
-    )
-    return 0
-
-
-def parse_scalar(value: str, field: str) -> float:
-    try:
-        number = float(value)
-    except ValueError:
-        print(f"[session] {field} must be a number: {value!r}", file=sys.stderr)
-        raise SystemExit(2) from None
-    return number
-
-
-def parse_verb_fields(args: list[str], bare_kinds: set[str]) -> tuple[dict, list[str]]:
-    fields: dict[str, str] = {}
-    bare: list[str] = []
-    for token in args:
-        key, sep, value = token.partition("=")
-        if sep and re.fullmatch(r"[a-z]+", key):
-            fields[key] = value
-        else:
-            bare.append(token)
-    unknown = set(fields) - bare_kinds
-    if unknown:
-        print(f"[session] unknown fields: {', '.join(sorted(unknown))}", file=sys.stderr)
-        raise SystemExit(2)
-    return fields, bare
-
-
-def build_input_request(args: list[str]) -> dict:
-    if not args:
-        print("[session] input needs a kind: click/type/key/wheel/drag/coords/rightclick", file=sys.stderr)
-        raise SystemExit(2)
-    kind = args[0]
-    if kind not in ("click", "type", "key", "wheel", "drag", "coords", "rightclick"):
-        print(f"[session] unknown input kind: {kind!r}", file=sys.stderr)
-        raise SystemExit(2)
-    fields, bare = parse_verb_fields(args[1:], {"target", "text", "dx", "dy", "x", "y", "steps"})
-    request: dict = {"cmd": "input", "kind": kind}
-    if kind == "key":
-        keys = bare if bare else ([fields["text"]] if "text" in fields else [])
-        if not keys:
-            print("[session] key input needs key names", file=sys.stderr)
-            raise SystemExit(2)
-        request["keys"] = keys
-        return request
-    if kind == "coords":
-        x = fields.get("x", bare[0] if bare else "")
-        y = fields.get("y", bare[1] if len(bare) > 1 else "")
-        if x == "" or y == "":
-            print("[session] coords needs x and y", file=sys.stderr)
-            raise SystemExit(2)
-        request["x"] = parse_scalar(x, "x")
-        request["y"] = parse_scalar(y, "y")
-        for name in ("dx", "dy"):
-            if name in fields:
-                request[name] = parse_scalar(fields[name], name)
-        return request
-    target = fields.get("target", bare[0] if bare and kind != "type" else "")
-    if kind == "type":
-        target = fields.get("target", "")
-        text = fields.get("text", " ".join(bare))
-        if not target or not text:
-            print("[session] type needs target=<id> and text", file=sys.stderr)
-            raise SystemExit(2)
-        request["text"] = text
-    elif not target:
-        print(f"[session] {kind} needs target=<id>", file=sys.stderr)
-        raise SystemExit(2)
-    request["target"] = target
-    for name in ("dx", "dy", "steps", "x", "y"):
-        if name in fields:
-            request[name] = parse_scalar(fields[name], name)
-    return request
-
-
-def session_command(request: dict) -> int:
-    isolation_gate("webdriver")
-    live = session_live_socket()
-    if live is None:
-        return 1
-    _record, socket_path = live
-    try:
-        response = session_request(socket_path, request)
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"[session] request failed: {error}", file=sys.stderr)
-        return 1
-    print(json.dumps(response, indent=2))
-    return 0 if response.get("ok") else 1
-
-
-def session_shot(args: list[str]) -> int:
-    name = args[0] if args and not args[0].startswith("--") else "shot"
-    if not SESSION_SHOT_NAME.match(name):
-        print(f"[session] shot name must match {SESSION_SHOT_NAME.pattern}: {name!r}", file=sys.stderr)
-        return 2
-    return session_command({"cmd": "shot", "name": name})
-
-
-def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
-    if not rest:
-        print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks/tracker/windows/open-window/focus-window/observe-window/evaluate-window", file=sys.stderr)
-        raise SystemExit(2)
-    verb, args = rest[0], rest[1:]
-    lifetime = SESSION_DEFAULT_LIFETIME_SECONDS
-    if "--max-lifetime" in args:
-        index = args.index("--max-lifetime")
-        if index + 1 >= len(args):
-            print("[session] --max-lifetime needs a value", file=sys.stderr)
-            raise SystemExit(2)
-        lifetime = parse_scalar(args[index + 1], "--max-lifetime")
-        args = args[:index] + args[index + 2 :]
-    if args and verb not in ("input", "observe", "shot", "open-window", "focus-window", "observe-window", "evaluate-window"):
-        print(f"[session] verb {verb!r} takes no positional arguments", file=sys.stderr)
-        raise SystemExit(2)
-    return verb, {"args": args}, lifetime
-
-
 def session_main(rest: list[str], board_arg: str) -> int:
-    try:
-        verb, options, lifetime = parse_session_verb(rest)
-    except SystemExit as exit:
-        return int(exit.code or 2)
-    if verb == "up":
-        return session_up(board_arg, lifetime)
-    if verb == "down":
-        return session_down()
-    if verb == "status":
-        return session_status()
-    if verb == "suite":
-        return session_suite(board_arg, tracker_db_arg)
-    if verb == "inspect":
-        return session_command({"cmd": "inspect"})
-    if verb == "shot":
-        return session_shot(options["args"])
-    if verb == "input":
-        return session_command(build_input_request(options["args"]))
-    if verb == "observe":
-        fields, _bare = parse_verb_fields(options["args"], {"target", "props"})
-        request: dict = {"cmd": "observe"}
-        if "target" in fields:
-            request["target"] = fields["target"]
-        if "props" in fields:
-            request["props"] = [p for p in fields["props"].split(",") if p]
-        return session_command(request)
-    if verb == "windows":
-        return session_command({"cmd": "windows"})
-    if verb == "open-window":
-        fields, _bare = parse_verb_fields(options["args"], {"state"})
-        return session_command({"cmd": "open-window", "state_id": fields.get("state")})
-    if verb == "focus-window":
-        fields, _bare = parse_verb_fields(options["args"], {"label"})
-        if "label" not in fields:
-            print("[session] focus-window needs label=<window label>", file=sys.stderr)
-            return 2
-        return session_command({"cmd": "focus-window", "label": fields["label"]})
-    if verb == "observe-window":
-        fields, _bare = parse_verb_fields(options["args"], {"window", "target", "props"})
-        if "window" not in fields or "target" not in fields:
-            print("[session] observe-window needs window=<label> and target=<id>", file=sys.stderr)
-            return 2
-        request_window: dict = {"cmd": "observe-window", "window": fields["window"], "target": fields["target"]}
-        if "props" in fields:
-            request_window["props"] = [p for p in fields["props"].split(",") if p]
-        return session_command(request_window)
-    if verb == "evaluate-window":
-        fields, bare = parse_verb_fields(options["args"], {"window"})
-        if "window" not in fields or not bare:
-            print("[session] evaluate-window needs window=<label> and a quoted script", file=sys.stderr)
-            return 2
-        return session_command({"cmd": "evaluate-window", "window": fields["window"], "script": " ".join(bare)})
-    print(f"[session] unknown verb: {verb!r}", file=sys.stderr)
-    return 2
+    """The session lane's one verb: suite (the app's vitest native
+    project in the sandbox)."""
+    if rest != ["suite"]:
+        print("[session] the one verb is suite (the native project run)", file=sys.stderr)
+        return 2
+    return session_suite(board_arg, tracker_db_arg)
 
 
 def gated_stub(lane: str) -> int:
