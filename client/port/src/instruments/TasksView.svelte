@@ -71,7 +71,9 @@ import { ageOf } from "../lib/tasks/page.ts";
     );
   }
 
-  const now = $state(Date.now());
+  // the ages are read against the moment the shown page arrived: a
+  // follow refresh moves them with the rows
+  const now = $derived((void content.page, Date.now()));
 let menuElement: HTMLElement | null = $state(null);
   let menuAt = $state({ x: 4, y: 4 });
 

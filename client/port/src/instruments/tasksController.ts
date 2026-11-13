@@ -12,9 +12,11 @@
 // (targets come from the page model; geometry only decides
 // visibility and placement).
 //
-// Deliberately not here (recorded): live reordering mid-display (the
-// page re-resolves on every open; a standing poll is the S12 live
-// clause, a differential-adapter matter), the agents page (a later
+// The shown list follows the record (lib/tasks/follow.ts): a bounded
+// poll re-reads the page and refreshes through the pipeline when its
+// rows changed.
+//
+// Deliberately not here (recorded): the agents page (a later
 // instrument), find (a facility of a shown revision - a task list is
 // not one), and any row cursor (j/k is pure scrolling, the scenario
 // 17 resolution).
@@ -33,6 +35,7 @@ import type { InputContext } from "../lib/contracts/input.ts";
 import { tasksReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
 import { createTasksMenu, type TaskPorts, type TasksMenu } from "../lib/tasks/menu.ts";
+import { createTasksFollow } from "../lib/tasks/follow.ts";
 import type { MenuView } from "../lib/menu/session.ts";
 import type {
   Address,
@@ -123,6 +126,39 @@ function lastFrameStillCarries(model: TasksPageModel, task: string): boolean {
 export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachment<TasksUI, TaskAnchor> {
   const scope = createLoadScope<TasksData>(EMPTY_FRAME);
   let resolved: Location | null = null;
+
+  // The follow (lib/tasks/follow.ts): the asked address while a list
+  // from a tracker is shown, and the shown page's content signature.
+  let followAddress: Address | null = null;
+  let shownSignature: string | null = null;
+  // the latest explicit open: an older one answering late never
+  // starts a follow
+  let openIntent = 0;
+  const follow = createTasksFollow({
+    async current() {
+      if (followAddress === null) return null;
+      try {
+        const source = sourceFor(followAddress.machine);
+        if (!(source instanceof TrackerSource)) return null;
+        return JSON.stringify(tasksPageOf(await source.instrumentPage("tasks")));
+      } catch {
+        return null;
+      }
+    },
+    shown: () => shownSignature,
+    async refresh() {
+      const address = followAddress;
+      if (address === null) return;
+      return buffer.updates.refresh(async () => {
+        const prepared = await load(address);
+        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
+      });
+    },
+    // the DOM timer id and Node's Timeout meet across lib mixes; the
+    // id is opaque to the follow module
+    schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
+    cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+  });
 
   const menuObservers = new Set<(view: MenuView | null) => void>();
 
@@ -261,6 +297,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
     const model = tasksPageOf(viewPage);
     resolved = location;
+    shownSignature = JSON.stringify(model);
     // scenario 12's identity rule: a selection whose task left the
     // page clears - never a silent neighbour
     if (selectedTask !== null && !lastFrameStillCarries(model, selectedTask)) {
@@ -304,10 +341,20 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       return { address, position: { kind: "default" } };
     },
     async request(address: Address): Promise<RefreshOutcome> {
-      return buffer.updates.refresh(async () => {
+      // an explicit open (or a trail restore) ends any running follow
+      // and starts one for the asked address once it has answered
+      const intent = ++openIntent;
+      follow.stop();
+      followAddress = null;
+      const outcome = await buffer.updates.refresh(async () => {
         const prepared = await load(address);
         return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
       });
+      if (!scope.isDestroyed() && intent === openIntent && address.machine.startsWith("tracker:")) {
+        followAddress = { ...address };
+        follow.start();
+      }
+      return outcome;
     },
     acceptsAnchor(data: AnchorData): data is TaskAnchor {
       return (
@@ -352,6 +399,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     places,
     release() {
       scope.destroy();
+      follow.stop();
       selectSession.exit();
       tasksMenu.session.outsidePointerDown();
     },
