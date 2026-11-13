@@ -88,9 +88,18 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
       ]),
       onUnmatched: (stroke: KeyInput): KeyResolution | undefined => {
         if (active === null) return undefined;
-        if (stroke.key.length !== 1) return { kind: "consume" };
+        // the prototype's hintKey (inst16.html:106): a non-letter is
+        // ignored (consumed inert, the session stays)
+        if (!/^[a-zA-Z]$/.test(stroke.key)) return { kind: "consume" };
         const step = narrowStep(narrow, kinds, texts, labels, stroke.key);
         narrow = { alive: step.alive, pendingLabel: step.pendingLabel, query: step.query };
+        // ZERO remaining matches clears the labels and exits (hintKey),
+        // never a session alive with nothing to select that eats every
+        // later key (the human's second trace, m-536)
+        if (step.selected === null && step.pendingLabel === "" && step.alive.length === 0) {
+          exit();
+          return { kind: "consume" };
+        }
         if (step.selected !== null) {
           const chosen = visible[step.selected];
           if (chosen !== undefined) {

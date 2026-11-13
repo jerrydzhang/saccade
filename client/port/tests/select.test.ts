@@ -97,17 +97,20 @@ test("invisible targets get no labels: existence is never visibility", () => {
     { part: "/content/1", kind: "group", text: "the group" },
   ];
   const visible = new Set(["/content/0"]);
-  const { session, context } = harness(targets, (part) => visible.has(part));
+  const { session, context, events } = harness(targets, (part) => visible.has(part));
   session.enter();
   const view = session.view();
   assert.deepEqual(view?.labels.map((l) => l.label), ["a"], "only the visible target is labeled");
-  // 'z' names no label and narrows no text: consumed, session stays,
-  // the invisible group is never labeled and never selects
+  // the invisible group is never labeled; 'z' names no label and
+  // narrows no text: ZERO matches left, so the stroke is consumed and
+  // the session EXITS (the prototype's hintKey, inst16.html:106; the
+  // human's trap, m-536) - never staying alive with nothing to select,
+  // and never selecting the invisible group
   const active = context();
   const step = active?.onUnmatched?.(key("z"));
   assert.equal(step?.kind, "consume");
-  assert.equal(session.view()?.labels.length, 1);
-  assert.equal(session.view()?.labels[0]?.part, "/content/0");
+  assert.equal(session.view(), null);
+  assert.ok(!events.some((event) => event.startsWith("selected:")), "nothing selected");
 });
 
 test("enter is a no-op with nothing visible; escape exits without selecting", () => {
