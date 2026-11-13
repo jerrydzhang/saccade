@@ -185,8 +185,11 @@ body {
   color: var(--port-color-muted);
 }
 
-.port-tasks-row:hover {
-  background: var(--port-color-hover);
+/* the pointer's row (TasksView: real pointer movement only, never
+ * :hover under a resting pointer); the prototype's ledger row: brighter
+ * ink, no shading */
+.port-tasks-row[data-port-hover] {
+  color: var(--port-color-ink-strong);
 }
 
 .port-tasks-none {

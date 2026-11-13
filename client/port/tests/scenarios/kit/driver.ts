@@ -72,6 +72,11 @@ export interface AppDriver {
    * the part's top strip - a group's own hit area, where its center
    * would land on a child. */
   clickPart(part: string, options?: { button?: "left" | "right"; at?: "center" | "header" }): Promise<void>;
+  /** A real pointer move onto a content part's center (no click). */
+  pointAt(part: string): Promise<void>;
+  /** How a rendered part looks: its computed background and text
+   * colour, or null when not rendered. */
+  partLook(part: string): Promise<{ background: string; color: string } | null>;
   /** A real mouse drag from a control's center by (dx, dy). */
   drag(control: string, dx: number, dy: number): Promise<void>;
   /** A real wheel notch over a control (deltaY < 0 is up). The native

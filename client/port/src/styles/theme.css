@@ -22,6 +22,7 @@
 
   /* color: the r16 dark palette */
   --port-color-background: #0d0f13;
+  --port-color-ink-strong: #ffffff;
   --port-color-foreground: #d6dae2;
   --port-color-muted: #8b93a3;
   --port-color-faint: #5b6372;

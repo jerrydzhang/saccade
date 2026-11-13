@@ -99,6 +99,15 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       const element = portWindow().document.querySelector("[data-port-find-active]");
       return element?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     },
+    async pointAt(part) {
+      await inside.getByPart(part).hover();
+    },
+    async partLook(part) {
+      const element = portWindow().document.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
+      if (element === null) return null;
+      const style = portWindow().getComputedStyle(element);
+      return { background: style.backgroundColor, color: style.color };
+    },
     async drag(control, dx, dy) {
       await (commands as unknown as { portDrag(c: string, x: number, y: number): Promise<void> }).portDrag(control, dx, dy);
     },

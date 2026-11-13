@@ -190,6 +190,21 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
     },
+    async pointAt(part) {
+      const box = await browser.execute((path: string) => {
+        const rect = document.querySelector(`[data-port-part=${JSON.stringify(path)}]`)!.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      }, part);
+      await browser.action("pointer").move({ x: box.x, y: box.y, origin: "viewport" }).perform();
+    },
+    async partLook(part) {
+      return browser.execute((path: string) => {
+        const element = document.querySelector(`[data-port-part=${JSON.stringify(path)}]`);
+        if (element === null) return null;
+        const style = getComputedStyle(element);
+        return { background: style.backgroundColor, color: style.color };
+      }, part);
+    },
     async drag(control, dx, dy) {
       const box = await browser.execute((id: string) => {
         const rect = document.querySelector(`[data-port-control=${JSON.stringify(id)}]`)!.getBoundingClientRect();

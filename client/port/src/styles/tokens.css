@@ -13,6 +13,7 @@
 
   /* color: neutral surfaces and text, no palette decisions */
   --port-color-background: #ffffff;
+  --port-color-ink-strong: #000000;
   --port-color-foreground: #111111;
   --port-color-muted: #555555;
   --port-color-line: #cccccc;

@@ -99,6 +99,27 @@ let menuElement: HTMLElement | null = $state(null);
   }
 
   const page = $derived(content.page);
+
+  // The row highlight follows the POINTER'S OWN MOVEMENT, never a row
+  // that scrolls under a resting pointer (m-547 (4); CSS :hover did
+  // exactly that as j/k scrolled). A move that changes the pointer's
+  // coordinates marks the row under it; any scroll clears the mark.
+  // The look is the prototype's ledger row: ink only, no shading.
+  let hovered: string | null = $state(null);
+  let lastPointer: { x: number; y: number } | null = null;
+  function pointerMoved(event: MouseEvent): void {
+    if (lastPointer !== null && lastPointer.x === event.clientX && lastPointer.y === event.clientY) return;
+    lastPointer = { x: event.clientX, y: event.clientY };
+    const row = (event.target as HTMLElement | null)?.closest?.(".port-tasks-row");
+    hovered = row instanceof HTMLElement ? row.getAttribute("data-port-part") : null;
+  }
+  $effect(() => {
+    const clear = (): void => {
+      hovered = null;
+    };
+    document.addEventListener("scroll", clear, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", clear, { capture: true });
+  });
 </script>
 
 <!-- The container's pointer handling is act delegation, not an
@@ -107,7 +128,14 @@ the select session + the act menu (Enter runs the first act), so the
 a11y click advisories do not apply. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="port-tasks-stage">
+<div
+  class="port-tasks-stage"
+  role="presentation"
+  onmousemove={pointerMoved}
+  onmouseleave={() => {
+    hovered = null;
+  }}
+>
 <div class="port-tasks-view" bind:this={host} role="document" onclick={onClick} oncontextmenu={onContextMenu}>
   {#if page !== null && content.status === "loaded"}
     {#each page.groups as group (group.part)}
@@ -131,6 +159,7 @@ a11y click advisories do not apply. -->
               data-port-task={row.task}
               data-port-open={row.location}
               data-port-title={row.title}
+              data-port-hover={hovered === row.part ? "" : undefined}
             >
               <span class="port-tasks-id">{row.task}</span>
               <span class="port-tasks-title">{row.title}</span>
