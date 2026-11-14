@@ -47,6 +47,12 @@ pub enum BoardsFail {
     FigureTooLarge { path: String, size: u64 },
     /// A commit the effect needed does not exist in the repository.
     MissingCommit { task: String, commit: String },
+    /// The committed tree matches its parent's: nothing changed. The
+    /// revision is the parent's `t-N@rK` when the caller knows it.
+    Unchanged {
+        parent: String,
+        revision: Option<String>,
+    },
     /// Repair found logged commits the repository does not hold.
     MissingCommits { missing: Vec<(String, String)> },
     /// The working directory records no base commit.
@@ -84,6 +90,7 @@ impl BoardsFail {
             BoardsFail::MissingFigure { .. } => "boards_figure_missing",
             BoardsFail::FigureTooLarge { .. } => "boards_figure_too_large",
             BoardsFail::MissingCommit { .. } => "boards_missing_commit",
+            BoardsFail::Unchanged { .. } => "boards_unchanged",
             BoardsFail::MissingCommits { .. } => "boards_missing_commit",
             BoardsFail::MissingBase { .. } => "boards_base_unrecorded",
             BoardsFail::BadBase { .. } => "boards_base_unreadable",
@@ -111,6 +118,15 @@ impl BoardsFail {
             BoardsFail::MissingCommit { task, commit } => format!(
                 "the commit {commit} that task {task} needs is not in the boards repository"
             ),
+            BoardsFail::Unchanged { parent, revision } => {
+                let named = match revision {
+                    Some(revision) => format!("{revision} ({parent})"),
+                    None => parent.clone(),
+                };
+                format!(
+                    "the board matches its parent {named}; nothing changed, so there is no revision to publish - edit the board first"
+                )
+            }
             BoardsFail::MissingCommits { missing } => {
                 let listed = missing
                     .iter()
@@ -533,12 +549,23 @@ impl Boards {
                 })?;
             resolved.push((source, cited, selects));
         }
-        let landed = self.commit(
-            ref_key,
-            workdir,
-            parent.as_ref().map(|c| c.as_str()),
-            message,
-        )?;
+        let landed = self
+            .commit(
+                ref_key,
+                workdir,
+                parent.as_ref().map(|c| c.as_str()),
+                message,
+            )
+            .map_err(|fail| match fail {
+                BoardsFail::Unchanged { parent, .. } => BoardsFail::Unchanged {
+                    revision: world
+                        .tasks
+                        .get(task.0)
+                        .map(|ctx| format!("{expected}@r{}", ctx.commits.len())),
+                    parent,
+                },
+                other => other,
+            })?;
         // selector verification against each cited revision
         for (source, cited, selects) in resolved.iter() {
             let name = format!("t-{}", source.0);
@@ -750,6 +777,18 @@ impl Boards {
             files.push((path, self.write_blob(&bytes)?));
         }
         let tree = self.write_tree(&files)?;
+        if let Some(parent) = parent
+            && run_ok(
+                &self.repo,
+                &["rev-parse", &format!("{parent}^{{tree}}")],
+                None,
+            )? == tree
+        {
+            return Err(BoardsFail::Unchanged {
+                parent: parent.to_string(),
+                revision: None,
+            });
+        }
         let mut args: Vec<&str> = vec!["commit-tree", &tree];
         if let Some(parent) = parent {
             args.push("-p");
@@ -1405,6 +1444,41 @@ content:
             "the refusal names the commit: {}",
             error.detail()
         );
+    }
+
+    // a commit whose tree matches its parent's refuses; a changed figure alone is a change
+    #[test]
+    fn a_commit_matching_its_parent_refuses() {
+        let tag = "unchanged";
+        let store = boards(tag);
+        let board = plinth_board("The peak sits near 7 Hz.", "The mat was on.");
+        let parent = first_commit(&store, tag, "first", &board);
+        let dir = workdir(tag, "again");
+        write(&dir, BOARD_FILE, board.as_bytes());
+        write(&dir, "figures/plinth-section.png", ORIGINAL_DRAWING);
+        let error = store
+            .commit(
+                "tone-arm-resonance",
+                &dir,
+                Some(&parent),
+                "the edit script failed before it wrote anything",
+            )
+            .expect_err("the unchanged board refuses");
+        assert_eq!(error.code(), "boards_unchanged");
+        assert!(
+            error.detail().contains(&parent),
+            "the refusal names the parent: {}",
+            error.detail()
+        );
+        write(&dir, "figures/plinth-section.png", REVISED_DRAWING);
+        store
+            .commit(
+                "tone-arm-resonance",
+                &dir,
+                Some(&parent),
+                "the section was redrawn",
+            )
+            .expect("a changed figure is a change");
     }
 
     #[test]

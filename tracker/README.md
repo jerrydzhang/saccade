@@ -157,6 +157,9 @@ them.
 - A commit names the commit it builds on and refuses if the current
   one moved; committing refuses while the task is offered, so an
   offered revision cannot move.
+- A commit whose board matches its parent refuses, naming the parent
+  revision: a published revision is a change (t-26). Revisions already
+  published empty stay; checkpoints are unaffected.
 - Acceptance requires every incorporation to cite exactly its source's
   accepted revision; reconciliation onto an accepted revision is an
   ordinary commit.
