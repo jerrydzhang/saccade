@@ -28,6 +28,8 @@ export type TaskRow = Readonly<{
   agents: string;
   commit: string;
   revision: string;
+  /** The row's latest activity moment as the record carries it: epoch
+   * SECONDS (the wire's `at`); null when the row carries none. */
   at: number | null;
 }>;
 
@@ -77,10 +79,13 @@ function rowsOf(table: TablePart, tablePath: string): TaskRow[] {
 
 /** The row's age (the prototype's ago, inst16 :116): minutes under
  * an hour, hours under two days, else days - from the row's latest
- * activity moment; null when the row carries none. */
+ * activity moment (epoch seconds, as the row carries it) to `now`
+ * (epoch milliseconds, Date.now()); empty when the row carries none.
+ * Reading the seconds as milliseconds aged every row ~20750 days
+ * (t-42). */
 export function ageOf(at: number | null, now: number): string {
   if (at === null) return "";
-  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  const minutes = Math.max(0, Math.round((now - at * 1000) / 60_000));
   if (minutes < 60) return `${minutes}m`;
   if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h`;
   return `${Math.round(minutes / (24 * 60))}d`;

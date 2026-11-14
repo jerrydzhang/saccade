@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.2"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.3"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -157,6 +157,9 @@ them.
 - A commit names the commit it builds on and refuses if the current
   one moved; committing refuses while the task is offered, so an
   offered revision cannot move.
+- A commit whose board matches its parent refuses, naming the parent
+  revision: a published revision is a change (t-26). Revisions already
+  published empty stay; checkpoints are unaffected.
 - Acceptance requires every incorporation to cite exactly its source's
   accepted revision; reconciliation onto an accepted revision is an
   ordinary commit.

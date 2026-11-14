@@ -68,6 +68,10 @@ export type PortObservation = {
        * the page), or null when the window has no focus widget. */
       focusWidget: string | null;
     }> | null;
+    /** The place this window's state receives once it settles
+     * (lib/navigation/window-place.ts): the location as asked and the
+     * part at the reading height; null while nothing settled shows. */
+    place: Readonly<{ location: string; part: string | null }> | null;
   }>;
   board: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
@@ -298,6 +302,7 @@ export function buildReadout(
     link: string | null;
     bound: boolean;
     focus?: PortObservation["window"]["focus"];
+    place?: PortObservation["window"]["place"];
     ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
     state: BufferState<RenderPair>;
     diagnostics: readonly DiagnosticEntryView[];
@@ -318,7 +323,7 @@ export function buildReadout(
   return {
     app: { name: "saccade-app", slice: 1 },
     surface: input.surface,
-    window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound, focus: input.focus ?? null },
+    window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound, focus: input.focus ?? null, place: input.place ?? null },
     board: {
       status: input.surface === "board" ? status : "empty",
       asked: frame && input.surface === "board" ? frame.asked : null,

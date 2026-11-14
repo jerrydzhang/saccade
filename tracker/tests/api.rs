@@ -1610,6 +1610,20 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         "first account",
     ]);
     assert_eq!(reply["revision"], json!(1));
+    // a board matching its parent refuses, naming the parent revision, and records nothing
+    let (ok, _, err) = sac(&[
+        "board",
+        "commit",
+        &source,
+        src.to_str().unwrap(),
+        "-m",
+        "the edit never reached the board",
+    ]);
+    assert!(!ok, "the unchanged board refuses");
+    assert!(
+        err.contains("boards_unchanged") && err.contains("t-0@r1"),
+        "{err}"
+    );
 
     // the consumer incorporates the source's r1 by number; an unknown
     // number refuses with the teaching line
@@ -1679,8 +1693,13 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         .expect("spawn the offer waiter");
     let (ok, out, _) = sac(&["offer", &source]);
     assert!(ok, "{out}");
-    // committing refuses while offered
-    let (ok, _, _err) = sac(&[
+    // committing a changed board refuses while offered
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input, early\n",
+    )
+    .unwrap();
+    let (ok, _, err) = sac(&[
         "board",
         "commit",
         &source,
@@ -1689,6 +1708,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         "too early",
     ]);
     assert!(!ok, "the offered stage refuses a commit");
+    assert!(err.contains("invalid_state_transition"), "{err}");
     let (ok, out, _) = sac(&[
         "reject",
         &source,
@@ -10400,6 +10420,11 @@ async fn the_agents_page_names_each_sessions_last_commit() {
         })
     };
     std::thread::sleep(std::time::Duration::from_millis(400));
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: t-2\ncontent:\n  - text: the second session's waking commit\n",
+    )
+    .unwrap();
     let (ok, _, err) = view_page_sac(
         &url,
         Some(second_seq),

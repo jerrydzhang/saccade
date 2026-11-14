@@ -108,6 +108,14 @@ export interface AppDriver {
   labels(): Promise<{ label: string; part: string }[]>;
   /** Whether an act menu is open now. */
   menuOpen(): Promise<boolean>;
+  /** The open act menu's label as rendered (its target named in full),
+   * or null when no menu is open. */
+  menuLabel(): Promise<string | null>;
+  /** The window's viewport resized to (width, height) CSS pixels, as a
+   * person narrows a window; resolves once the page sees the size. The
+   * native lane's kiosk-shell holds every window at the output's size,
+   * so the native driver refuses it: resize scenarios are browser-only. */
+  resize(width: number, height: number): Promise<void>;
   /** The open act menu's box and its target part's box, in viewport
    * (client) coordinates, with the viewport's size; null when no menu
    * is open. The menu names its target by data-port-menu-part. */

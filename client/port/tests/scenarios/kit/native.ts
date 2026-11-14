@@ -185,6 +185,15 @@ async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver
     async menuOpen() {
       return browser.$("[data-port-menu]").isExisting();
     },
+    async menuLabel() {
+      return browser.execute(() => {
+        const element = document.querySelector("[data-port-menu] .port-menu-label") as HTMLElement | null;
+        return element === null ? null : element.innerText;
+      });
+    },
+    async resize() {
+      throw new Error("the lane's kiosk-shell holds every window at the output's size (client/harness/suite_payload.py): resize scenarios are browser-only");
+    },
     async labels() {
       return browser.execute(() =>
         [...document.querySelectorAll("[data-port-label]")].map((element) => ({

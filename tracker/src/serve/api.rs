@@ -3214,6 +3214,7 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         | BoardsFail::TaskMismatch { .. }
         | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
         BoardsFail::MissingCommit { .. }
+        | BoardsFail::Unchanged { .. }
         | BoardsFail::UnsavedCheckpoints { .. }
         | BoardsFail::Record(_) => StatusCode::CONFLICT,
         BoardsFail::MissingCommits { .. } | BoardsFail::Git(_) | BoardsFail::Io { .. } => {

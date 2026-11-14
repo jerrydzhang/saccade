@@ -126,13 +126,26 @@ test("a page without tables answers an empty model, never an error", () => {
 
 // -- the age column (F4): the prototype's ago rules ------------------
 
+// The row's moment is the record's, in epoch SECONDS (the wire's `at`,
+// as the seeds above carry it); now is Date.now(), in milliseconds.
+// The test once passed milliseconds for both, so every real row aged
+// about 20750 days (t-42).
 test("ageOf renders minutes, hours and days from the activity moment", () => {
   const now = 1_700_000_000_000;
+  const secondsAgo = (seconds: number) => (now - seconds * 1000) / 1000;
   assert.equal(ageOf(null, now), "", "no moment carries no age");
-  assert.equal(ageOf(now - 5 * 60_000, now), "5m");
-  assert.equal(ageOf(now - 59 * 60_000, now), "59m");
-  assert.equal(ageOf(now - 2 * 3_600_000, now), "2h");
-  assert.equal(ageOf(now - 47 * 3_600_000, now), "47h");
-  assert.equal(ageOf(now - 3 * 86_400_000, now), "3d");
-  assert.equal(ageOf(now + 60_000, now), "0m", "the future clamps to now");
+  assert.equal(ageOf(secondsAgo(5 * 60), now), "5m");
+  assert.equal(ageOf(secondsAgo(59 * 60), now), "59m");
+  assert.equal(ageOf(secondsAgo(2 * 3600), now), "2h");
+  assert.equal(ageOf(secondsAgo(47 * 3600), now), "47h");
+  assert.equal(ageOf(secondsAgo(3 * 86_400), now), "3d");
+  assert.equal(ageOf(secondsAgo(-60), now), "0m", "the future clamps to now");
+});
+
+test("a wire row's moment ages from the wall clock (t-42)", () => {
+  const model = tasksPageOf(tasksPage());
+  const row = model.groups[0]!.rows[0]!;
+  // five minutes after the seed row's own moment
+  const now = (row.at! + 5 * 60) * 1000;
+  assert.equal(ageOf(row.at, now), "5m");
 });
