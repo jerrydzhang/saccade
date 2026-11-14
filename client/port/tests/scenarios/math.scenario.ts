@@ -36,3 +36,17 @@ test("t-27 valid LaTeX renders inline and in both display layouts", { tags: ["pe
   // the text after a same-line display block stays text
   expect(await app.partText("/content/2")).toContain("After the block.");
 });
+
+test("invalid math fails visibly with its TeX message, the text around it intact", { tags: ["native"] }, async ({ app, tracker }) => {
+  const task = await tracker.createTask("math: an invalid expression");
+  const board = ["grammar: 1", `task: ${task}`, "content:", "  - text: |", "      Before $\\frac{a$ after."].join("\n") + "\n";
+  await tracker.commit(task, board, "math: an invalid expression");
+  await openLocation(app, spec(tracker, task));
+  await expect.poll(async () => (await app.readout()).render.filter((entry) => entry.kind === "math").map((entry) => entry.status), { timeout: 15_000 }).toEqual(["error"]);
+  const [outcome] = (await app.readout()).render.filter((entry) => entry.kind === "math");
+  expect(outcome!.message).not.toContain("[object Object]");
+  expect(outcome!.message).toMatch(/[Mm]issing close brace|Extra open brace/);
+  const text = await app.partText("/content/0");
+  expect(text).toContain("Before");
+  expect(text).toContain("after.");
+});
