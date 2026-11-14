@@ -129,21 +129,64 @@ effect. One iteration:
    validating; `sac board discard t-N` drops your checkpoint chain, which
    must happen before anything accepts the task.
 
-**Commit granularity is the resolution of the story.** Each commit is one
-chapter of the account; a task committed once at the end has no story.
-Commit when a chapter is complete: an annotation addressed, a finding
-landed, a correction made.
+## What the current board holds
 
-**Name the relaxations before the result.** Every constraint relaxed,
-assumption changed, or unstated freedom you used is written in the board
-before the account presents its result, not after.
+**The current revision tells the current story; the history tells the
+story through time.** Every revision stays readable forever (`sac board
+get t-N@rK`, `sac board diff`, `sac board log`), so the current board
+never has to carry everything. Write it for a reader who wants the
+present state, not the record of how it got there.
+
+- **Rewrite, don't append.** When understanding changes, change the
+  board to say what is now true. A correction replaces the claim it
+  corrects; it is not a new paragraph beside it. Rewriting, folding and
+  deleting are ordinary commits.
+- **The commit message carries the move.** Say what changed and where
+  the old version lives ("folds the r5 scale derivation into one line").
+  A commit is one change in understanding, which may well be a rewrite.
+- **Ideas that fell away shrink to a line** naming the revision that
+  holds the argument: "Two-sided precision: the likelihood already
+  rejects the zero field (r6)." That keeps them from being re-proposed
+  without keeping them on the page.
+- **The brief is the first revision.** A later board need not restate
+  it; keep only what still shapes how the result reads.
+- **Evidence supports a sentence.** Show what the claim needs (the
+  check to run, the decisive rows); a full output dump belongs in a
+  figure, a file in the tree, or an earlier revision.
+- **Side findings are not the account.** A problem found along the way
+  that the task did not ask about becomes its own task or a message.
+- **Name the relaxations before the result.** A constraint relaxed or an
+  unstated freedom used changes how the result reads, so it stays on the
+  board, ahead of the result. Procedure that does not change the reading
+  (defaults kept, files not touched, timings) does not.
+
+Two shapes cover most boards:
+
+- **A change account** (code, a fix, a feature): what changed, in a few
+  sentences; how to check it (the behaviour to look at); its size (the
+  diff); then any decision a reviewer must know about.
+- **A standing account** (research, a design that keeps moving): the
+  question as it now stands; the working position and the decisions
+  behind it; the evidence it rests on; what is open; proposals not
+  adopted; and what was set aside, one line each with its revision.
+  Each revision rewrites these sections rather than adding a new one.
+
+**Resuming a task**: read the current board, then `sac board log t-N`;
+fetch the revisions its pointers name (`sac board get t-N@rK`) when the
+detail matters. `sac board diff t-N@rA..rB` opens with which components
+were added, removed, changed or moved, then the line diff.
+
+**Writing a brief**: ask for checks, not content. "Done when the
+listing tells the runs apart" leaves the account free to stay short;
+"show the listing and state the totals" buys sections that never leave.
 
 Other doors: `sac board get t-N[@rK]:/content/0` prints one component;
 `sac board get t-N[@rK] --file <path> [--out <file>]` prints (or writes)
 one tree file; `sac board get t-N[@rK] --out <dir>` writes a whole
-revision out; `sac board diff t-N@rA..rB`; `sac board log t-N` (the task's
-history: commits with messages interleaved with the decisions); `sac board
-path t-N` (the materialized board's path on the server's machine).
+revision out; `sac board diff t-N@rA..rB` (components first, then
+lines); `sac board log t-N` (the task's history: commits with messages
+interleaved with the decisions); `sac board path t-N` (the materialized
+board's path on the server's machine).
 
 ## Reviewing
 
@@ -159,6 +202,9 @@ The reviewed object is the board revision, so review is a real judgment:
    the commit that addresses it. Publishing refuses while the task is
    offered - reject first, then annotate, then offer again.
 4. `sac accept t-N` when the board is a truthful account.
+
+Reject for a claim that is wrong or unsupported, or for a narrowing the
+board does not state; not for procedure the history already holds.
 
 Wake on the offer instead of polling: `sac wait t-N --after <seq>
 --until offer` returns once a TaskOffered record lands past the cursor
