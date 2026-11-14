@@ -220,8 +220,16 @@ body {
   padding-left: 1rem;
 }
 
-.port-plane-agent:disabled {
+/* the foot group's heading names the group; it is no target */
+.port-plane-group {
   cursor: default;
+  color: var(--port-color-muted);
+}
+
+/* an agent no tracker registered (t-55): marked, never hidden */
+.port-plane-agent[data-port-unregistered] .port-plane-task {
+  color: var(--port-color-muted);
+  font-style: italic;
 }
 
 .port-plane-msg {
