@@ -654,9 +654,14 @@ export class SliceBufferHost<
           // Restore the recorded reading position, not merely the
           // minimum scroll needed to expose an already-visible part.
           // Capture stores viewportOffset = content bounds - scroll.
+          // The top rounds UP: a part's top is often fractional and the
+          // scroller truncates, which left the reading height a
+          // sub-pixel inside the part above - the capture then named
+          // that part, and a relaunch's restore drifted one part back
+          // each time (t-38).
           this.viewport.moveTo({
             left: location.bounds.left - (offset?.left ?? 0),
-            top: location.bounds.top - (offset?.top ?? 0),
+            top: Math.ceil(location.bounds.top - (offset?.top ?? 0)),
           });
           job.finish("restored");
           return;
