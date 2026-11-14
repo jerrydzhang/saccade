@@ -73,6 +73,8 @@ test("the first revision is all added", () => {
 test("list, heading and quote markers stay in front of the marks", () => {
   assert.equal(wordDiffMarkdown("- a\n", "- a\n- b\n"), `- a\n- ${ins("b")}\n`);
   assert.equal(wordDiffMarkdown("## Old\n", "## New\n"), `## ${del("Old")}${ins("New")}\n`);
+  // a run of changed words is one mark, its spaces inside
+  assert.equal(wordDiffMarkdown("a b c d\n", "a x y d\n"), `a ${del("b c")}${ins("x y")} d\n`);
   assert.equal(wordDiffMarkdown("> x\n", "> y\n"), `> ${del("x")}${ins("y")}\n`);
 });
 
