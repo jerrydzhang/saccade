@@ -185,11 +185,8 @@ pub fn send(
             id: body.id,
         })
     } else {
-        let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
-            code: "malformed_response".into(),
-            detail: e.to_string(),
-            message: None,
-        })?;
+        let body: ErrorBody =
+            serde_json::from_str(&text).map_err(|_| unexpected_response(status, &text))?;
         Err(ClientFail::Refused {
             code: body.error.code,
             detail: body.error.detail.to_string(),
@@ -339,7 +336,7 @@ pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
             url: url.to_string(),
         })?;
     if status != 200 {
-        return Err(error_of(&text));
+        return Err(error_of(status, &text));
     }
     #[derive(Deserialize)]
     struct RecordsBody {
@@ -397,7 +394,7 @@ fn post_json<T: serde::de::DeserializeOwned>(
             message: None,
         })
     } else {
-        Err(error_of(&text))
+        Err(error_of(status, &text))
     }
 }
 
@@ -422,11 +419,11 @@ fn post_json_unit(url: &str, path: &str, body: serde_json::Value) -> Result<(), 
     if status == 200 {
         Ok(())
     } else {
-        Err(error_of(&text))
+        Err(error_of(status, &text))
     }
 }
 
-fn error_of(text: &str) -> ClientFail {
+fn error_of(status: u16, text: &str) -> ClientFail {
     #[derive(Deserialize)]
     struct ErrorDetail {
         code: String,
@@ -438,17 +435,28 @@ fn error_of(text: &str) -> ClientFail {
         #[serde(default)]
         message: Option<MessageFacts>,
     }
-    let body: ErrorBody = serde_json::from_str(text).unwrap_or(ErrorBody {
-        error: ErrorDetail {
-            code: "malformed_response".into(),
-            detail: serde_json::Value::String(bound(text)),
-        },
-        message: None,
-    });
+    let Ok(body) = serde_json::from_str::<ErrorBody>(text) else {
+        return unexpected_response(status, text);
+    };
     ClientFail::Refused {
         code: body.error.code,
         detail: bound(&body.error.detail.to_string()),
         message: body.message,
+    }
+}
+
+/// A refusal without the error envelope - a proxy's page, a framework's
+/// plain-text rejection - surfaces as what it is: its status and text.
+fn unexpected_response(status: u16, text: &str) -> ClientFail {
+    let shown = if text.trim().is_empty() {
+        "an empty body".to_string()
+    } else {
+        format!("\"{}\"", bound(text))
+    };
+    ClientFail::Refused {
+        code: "unexpected_response".into(),
+        detail: format!("HTTP {status} without the error envelope: {shown}"),
+        message: None,
     }
 }
 
@@ -603,7 +611,7 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
             url: url.to_string(),
         })?;
     if status != 200 {
-        return Err(error_of(&text));
+        return Err(error_of(status, &text));
     }
     let body: MailboxBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
@@ -823,8 +831,12 @@ fn board_reply<T: serde::de::DeserializeOwned>(
         url: url.to_string(),
     })?;
     let status = response.status().as_u16();
+    // a board reply carries a whole board, as large as the request
+    // that committed it
     let text = response
         .body_mut()
+        .with_config()
+        .limit(2 * crate::serve::board_wire::BOARD_REQUEST_LIMIT as u64)
         .read_to_string()
         .map_err(|_| ClientFail::ServerUnreachable {
             url: url.to_string(),
@@ -836,11 +848,8 @@ fn board_reply<T: serde::de::DeserializeOwned>(
             message: None,
         });
     }
-    let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
-        code: "malformed_response".into(),
-        detail: e.to_string(),
-        message: None,
-    })?;
+    let body: ErrorBody =
+        serde_json::from_str(&text).map_err(|_| unexpected_response(status, &text))?;
     Err(ClientFail::Refused {
         code: body.error.code,
         detail: body.error.detail.to_string(),
@@ -859,6 +868,60 @@ fn board_post<T: serde::de::DeserializeOwned>(
         .build()
         .send_json(serde_json::to_value(body).expect("board requests are plain data"));
     board_reply(url, response)
+}
+
+/// A board write carrying the board's files: a refusal for size - the
+/// server's envelope, an earlier server's plain 413, or the connection
+/// closed mid-send past a limit - names the board's total and the limit.
+fn board_post_files<T: serde::de::DeserializeOwned>(
+    url: &str,
+    route: &str,
+    body: &impl serde::Serialize,
+    files: &crate::serve::board_wire::BoardFiles,
+) -> Result<T, ClientFail> {
+    use crate::serve::board_wire::{BOARD_REQUEST_LIMIT, EARLIER_REQUEST_LIMIT};
+    let bytes = serde_json::to_vec(body).expect("board requests are plain data");
+    let size = bytes.len();
+    let total = files.total_bytes();
+    let response = ureq::post(&format!("{url}{route}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .content_type("application/json")
+        .send(&bytes[..]);
+    let too_large = |said: String| ClientFail::Refused {
+        code: "request_too_large".into(),
+        detail: format!("board files total {total} bytes, a request of {size} bytes; {said}"),
+        message: None,
+    };
+    let mut response = match response {
+        Ok(response) => response,
+        Err(_) if size > EARLIER_REQUEST_LIMIT => {
+            return Err(too_large(format!(
+                "the server closed the connection while receiving it, as a server does with a request far past its limit: servers through sac 0.20.2 accept about {EARLIER_REQUEST_LIMIT} bytes per request, later ones about {BOARD_REQUEST_LIMIT} - shrink or drop figures"
+            )));
+        }
+        Err(_) => {
+            return Err(ClientFail::ServerUnreachable {
+                url: url.to_string(),
+            });
+        }
+    };
+    if response.status().as_u16() == 413 {
+        let text = response.body_mut().read_to_string().unwrap_or_default();
+        let said = match serde_json::from_str::<ErrorBody>(&text) {
+            Ok(body) => match body.error.detail {
+                serde_json::Value::String(detail) => detail,
+                other => other.to_string(),
+            },
+            Err(_) => format!(
+                "the server accepts about {EARLIER_REQUEST_LIMIT} bytes per request (HTTP 413: \"{}\")",
+                bound(&text)
+            ),
+        };
+        return Err(too_large(format!("{said} - shrink or drop figures")));
+    }
+    board_reply(url, Ok(response))
 }
 
 fn board_read<T: serde::de::DeserializeOwned>(url: &str, route: &str) -> Result<T, ClientFail> {
@@ -905,7 +968,7 @@ pub fn board_checkpoint(
     base: &str,
     message: &str,
 ) -> Result<crate::serve::board_wire::CheckpointReply, ClientFail> {
-    board_post(
+    board_post_files(
         url,
         "/api/v1/boards/checkpoint",
         &crate::serve::board_wire::CheckpointRequest {
@@ -916,6 +979,7 @@ pub fn board_checkpoint(
             message: message.to_string(),
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
+        files,
     )
 }
 
@@ -926,7 +990,7 @@ pub fn board_commit(
     files: &crate::serve::board_wire::BoardFiles,
     message: &str,
 ) -> Result<crate::serve::board_wire::CommitReply, ClientFail> {
-    board_post(
+    board_post_files(
         url,
         "/api/v1/boards/commit",
         &crate::serve::board_wire::CommitRequest {
@@ -936,6 +1000,7 @@ pub fn board_commit(
             message: message.to_string(),
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
+        files,
     )
 }
 
@@ -961,7 +1026,7 @@ pub fn board_update(
     base: &str,
     files: &crate::serve::board_wire::BoardFiles,
 ) -> Result<crate::serve::board_wire::UpdateReply, ClientFail> {
-    board_post(
+    board_post_files(
         url,
         "/api/v1/boards/update",
         &crate::serve::board_wire::UpdateRequest {
@@ -969,6 +1034,7 @@ pub fn board_update(
             base: base.to_string(),
             files: files.clone(),
         },
+        files,
     )
 }
 

@@ -204,13 +204,28 @@ fn check_door(cli: &Cli, dir: Option<&Path>) -> Result<String, Fail> {
         code: fail.code(),
         text: fail.detail(),
     })?;
-    let figures = board_grammar::figures(&board).len();
+    let paths = board_grammar::figures(&board);
+    let figures = paths.len();
+    let total = std::iter::once("board.yaml".to_string())
+        .chain(paths)
+        .filter_map(|path| std::fs::metadata(dir.join(path)).ok())
+        .map(|meta| meta.len() as usize)
+        .sum();
+    let warning = saccade::serve::board_wire::request_warning(total);
     if cli.json {
-        return Ok(serde_json::json!({ "ok": true, "figures": figures }).to_string());
+        return Ok(serde_json::json!({
+            "ok": true,
+            "figures": figures,
+            "total": total,
+            "warnings": warning.iter().collect::<Vec<_>>(),
+        })
+        .to_string());
     }
-    Ok(format!(
+    let mut lines = vec![format!(
         "board.yaml parses; {figures} figures within bounds - commit with `sac board commit`"
-    ))
+    )];
+    lines.extend(warning.map(|warning| format!("warning: {warning}")));
+    Ok(lines.join("\n"))
 }
 
 fn edit_door(
