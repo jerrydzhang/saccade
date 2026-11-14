@@ -13,6 +13,8 @@
 //! .saccade-board.json beside board.yaml ({"base": "<commit>"}), written
 //! by `record_base`, read by `recorded_base` and `update`.
 
+pub mod changes;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};

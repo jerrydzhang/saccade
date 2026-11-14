@@ -1813,6 +1813,20 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     let (ok, diff, _) = sac(&["board", "diff", "t-0@r1..r2"]);
     assert!(ok, "{diff}");
     assert!(diff.contains("annotation"), "{diff}");
+    // the component summary leads (t-50): the added annotation, by
+    // place, before the line diff
+    assert!(
+        diff.starts_with("components r1..r2\n  added    annotation  /content/1\n"),
+        "{diff}"
+    );
+    let (ok, json_diff, _) = sac(&["--json", "board", "diff", "t-0@r1..r2"]);
+    assert!(ok, "{json_diff}");
+    let json_diff: serde_json::Value = serde_json::from_str(&json_diff).unwrap();
+    assert_eq!(
+        json_diff["components"],
+        json!([{"change": "added", "label": "annotation", "to": "/content/1"}])
+    );
+    assert!(json_diff["diff"].as_str().unwrap().contains("annotation"));
     let (ok, component, _) = sac(&["board", "get", "t-0@r2:/content/0"]);
     assert!(ok, "{component}");
     assert!(
