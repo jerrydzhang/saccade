@@ -1,12 +1,16 @@
 // t-27: valid LaTeX from stiff-sindy's migrated t-0 board renders.
-// Pending (t-39's triage reproduced two causes on main 484038f):
+// t-39's triage reproduced two causes on main 484038f, both fixed:
 // - a display block whose $$ shares its line with the body
-//   ("$$\begin{aligned}" ... "\end{aligned}$$") parses as a fenced
-//   block whose opening line is meta: \begin{aligned} is dropped, the
-//   closing line never closes, and the block swallows the text after it;
+//   ("$$\begin{aligned}" ... "\end{aligned}$$") parsed as a fenced
+//   block whose opening line is meta: \begin{aligned} was dropped, the
+//   closing line never closed, and the block swallowed the text after it
+//   (src/lib/markdown.ts, bareMathFence);
 // - \mathbb and \mathcal need MathJax 4's dynamic font ranges, which
-//   the synchronous tex2svg cannot wait for ("MathJax retry").
-// The tag comes off when both render; the stored text is not rewritten.
+//   the synchronous tex2svg could not wait for ("MathJax retry"); the
+//   ranges are served from the bundle (vite.config.ts) and conversion is
+//   the promise API (src/lib/mathjax.ts). Native too: the font ranges
+//   load under the app's own protocol and CSP.
+// The stored text is not rewritten.
 import { expect, test } from "#scenario";
 import { openLocation, spec } from "./kit/helpers.ts";
 
@@ -20,7 +24,7 @@ const BLOCKS = [
   "On-support:\n$$\\begin{aligned}\n0 &< \\sigma\\odot\\beta_S\\\\\n0 &< \\sigma\\odot G^{-1}(X_S^\\top y-\\sigma\\odot w_S)\n\\end{aligned}$$\nAfter the block.",
 ];
 
-test("t-27 valid LaTeX renders inline and in both display layouts", { tags: ["pending"] }, async ({ app, tracker }) => {
+test("t-27 valid LaTeX renders inline and in both display layouts", { tags: ["native"] }, async ({ app, tracker }) => {
   const task = await tracker.createTask("math: the t-27 examples");
   const lines = ["grammar: 1", `task: ${task}`, "content:"];
   for (const block of BLOCKS) {

@@ -14,7 +14,7 @@
 // slice, so changeOf reads the (absent) painted mark until then.
 
 import type { Root, RootContent, PhrasingContent } from "mdast";
-import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./markdown.ts";
+import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice, displayDelimited } from "./markdown.ts";
 import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
 import { diagramPart } from "./board/targets.ts";
@@ -663,19 +663,24 @@ export function renderPhrasing(
     }
     case "inlineMath": {
       const id = unitIdAt(hooks, pos?.start.offset);
+      // $$-delimited math inside a paragraph is display math (the stored
+      // same-line layout, "$$\begin{aligned}" ... "\end{aligned}$$")
+      const authored = authoredMathOf(hooks, node);
+      const display = displayDelimited(authored);
+      const delimiter = display ? "$$" : "$";
       return el(
         "span",
         {
-          class: "math-inline",
+          class: display ? "math-display" : "math-inline",
           "data-copy-unit": "math",
-          "data-unit-display": "false",
+          "data-unit-display": String(display),
           ...(id ? { "data-unit-id": id } : {}),
           "data-unit-tex": node.value,
-          "data-unit-source": authoredMathOf(hooks, node) || `$${node.value}$`,
+          "data-unit-source": authored || `$${node.value}$`,
           "data-pending": "math",
           ...lineAttr,
         },
-        `$${node.value}$`,
+        `${delimiter}${node.value}${delimiter}`,
       );
     }
     case "link": {
