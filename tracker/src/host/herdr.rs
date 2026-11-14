@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::host_contract::{
     AttachRefusal, CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness,
-    PlaceRefusal, SubmitRefusal, WaitWake,
+    NameRefusal, PlaceRefusal, SubmitRefusal, WaitWake,
 };
 
 /// The explicit override: set and nonempty, it is the host binary,
@@ -516,6 +516,29 @@ impl HostContract for HerdrCore {
                     Err(PlaceRefusal::AddressNotLive(out.evidence()))
                 }
                 _ => Err(PlaceRefusal::HostRefused(out.evidence())),
+            },
+        }
+    }
+
+    /// The name label: `name=<name>`, or `name=` which removes it, on
+    /// the one address in one bounded ask.
+    fn name(&self, address: &HostAddress, name: Option<&str>) -> Result<(), NameRefusal> {
+        let label = format!("name={}", name.unwrap_or(""));
+        let args: Vec<OsString> = ["label", &address.0, "--json", &label]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        match self.ask_bounded(&args, PLACE_BOUND) {
+            Err(Bound::Expired) => Err(NameRefusal::Unknown(
+                "the name label ask outlived its bound".into(),
+            )),
+            Err(Bound::Spawn(e)) => Err(NameRefusal::Unknown(e.to_string())),
+            Ok(out) if out.ok => Ok(()),
+            Ok(out) => match out.error_kind().as_deref() {
+                Some("not_found") | Some("finished") => {
+                    Err(NameRefusal::AddressNotLive(out.evidence()))
+                }
+                _ => Err(NameRefusal::HostRefused(out.evidence())),
             },
         }
     }
@@ -1153,6 +1176,44 @@ esac
             .place(&HostAddress("t3".into()), "spaA", "tbB")
             .unwrap_err();
         assert!(matches!(err, PlaceRefusal::Unknown(_)), "{err}");
+    }
+
+    #[test]
+    fn name_writes_the_name_label_and_the_clear_removes_it() {
+        let (host, dir) = fake("name-ok", &["label.x=label-ok"]);
+        host.name(&HostAddress("t3".into()), Some("theory agent"))
+            .unwrap();
+        host.name(&HostAddress("t3".into()), None).unwrap();
+        assert_eq!(
+            argv_log(&dir, "label"),
+            vec![
+                "t3".to_string(),
+                "--json".to_string(),
+                "name=theory agent".to_string(),
+                "t3".to_string(),
+                "--json".to_string(),
+                "name=".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn name_routes_not_live_refused_and_unaskable_hosts() {
+        let (host, dir) = fake(
+            "name-refusals",
+            &["label.1=label-notfound", "label.2=label-refused"],
+        );
+        let address = HostAddress("t3".into());
+        let err = host.name(&address, Some("theory")).unwrap_err();
+        assert!(matches!(err, NameRefusal::AddressNotLive(_)), "{err}");
+        let err = host.name(&address, Some("theory")).unwrap_err();
+        assert!(matches!(err, NameRefusal::HostRefused(_)), "{err}");
+        assert!(err.to_string().contains("label refused"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
+        let err = host.name(&address, Some("theory")).unwrap_err();
+        assert!(matches!(err, NameRefusal::Unknown(_)), "{err}");
     }
 
     #[test]

@@ -175,7 +175,8 @@ agent opens its task here -->
               <span class="port-plane-incarnation">{agent.label ?? agent.address}</span>
               <span class="port-plane-task">unregistered</span>
             {:else}
-              <span class="port-plane-incarnation">{agent.incarnation}</span>
+              {#if agent.name !== null}<span class="port-plane-agent-name">{agent.name}</span>{/if}
+              <span class="port-plane-incarnation" class:port-plane-incarnation-aside={agent.name !== null}>{agent.incarnation}</span>
               <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
             {/if}
             {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}

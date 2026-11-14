@@ -8,11 +8,12 @@ import type { ViewPage } from "../src/lib/pages.ts";
 import { NO_WORDS, agentFactsOf, railOf, wordFor, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
 
 function agentsPage(): ViewPage {
-  const agent = (n: number, address: string | null, tasks: string | null) => ({
+  const agent = (n: number, address: string | null, tasks: string | null, name: string | null = null) => ({
     kind: "group" as const,
     location: `i-${n}`,
     content: [
       { kind: "fact" as const, label: "incarnation", value: `i-${n}` },
+      ...(name === null ? [] : [{ kind: "fact" as const, label: "name", value: name }]),
       ...(address === null ? [] : [{ kind: "fact" as const, label: "terminal address", value: address }]),
       { kind: "fact" as const, label: "harness", value: "claude-code" },
       ...(tasks === null ? [] : [{ kind: "fact" as const, label: "tasks", value: tasks }]),
@@ -26,7 +27,7 @@ function agentsPage(): ViewPage {
     content: [
       agent(1, "t10", "t-4 t-9"),
       agent(2, "t11", null),
-      agent(3, "t12", "t-2"),
+      agent(3, "t12", "t-2", "theory"),
       agent(4, null, "t-1"),
       agent(5, "t13", "t-3"),
     ],
@@ -49,8 +50,9 @@ const words: WordsSnapshot = {
 
 test("an agents page restates its incarnations with their terminals and tasks", () => {
   const facts = agentFactsOf(agentsPage());
-  assert.deepEqual(facts[0], { incarnation: "i-1", address: "t10", tasks: ["t-4", "t-9"] });
-  assert.deepEqual(facts[1], { incarnation: "i-2", address: "t11", tasks: [] });
+  assert.deepEqual(facts[0], { incarnation: "i-1", name: null, address: "t10", tasks: ["t-4", "t-9"] });
+  assert.deepEqual(facts[1], { incarnation: "i-2", name: null, address: "t11", tasks: [] });
+  assert.equal(facts[2]?.name, "theory", "a recorded name rides its own fact");
   assert.equal(facts[3]?.address, null);
 });
 
@@ -76,6 +78,11 @@ test("the rail shows running agents only, by Herdr's word in t-14's order, withi
     "no terminal, an ended terminal, or a non-agent terminal never shows",
   );
   assert.equal(saccade.groups[0]?.agents[1]?.msg, "running tests", "the program's own words");
+  assert.deepEqual(
+    saccade.groups[0]?.agents.map((agent) => agent.name),
+    ["theory", null],
+    "a named agent carries its name; an unnamed one shows as its incarnation",
+  );
   assert.equal(saccade.groups[0]?.agents[0]?.msg, null, "nothing shown when nothing was sent");
   assert.deepEqual(rail.projects[0]?.groups, []);
 });
@@ -144,7 +151,7 @@ test("the rail's targets: each project, then its agents, carrying home and shown
     [
       [projectPart("pyrimel"), "project", "pyrimel", null, true, false],
       [projectPart("saccade"), "project", "saccade", null, false, true],
-      [agentPart("saccade", "i-3"), "agent", "i-3 t-2", "t-2", false, true],
+      [agentPart("saccade", "i-3"), "agent", "theory (i-3) t-2", "t-2", false, true],
     ],
   );
 });
@@ -246,7 +253,7 @@ test("a federating core's machine-first addresses join the tracker's bare ones; 
   assert.equal(wordFor({ "a/t81": word("done"), "b/t81": word("idle") }, "t81"), undefined);
   assert.equal(wordFor({ "other/xt81": word("done") }, "t81"), undefined, "only a whole address after the machine");
   const rail = railOf(
-    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: ["t-4"] }], problem: null }],
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", name: null, address: "t88", tasks: ["t-4"] }], problem: null }],
     { generation: 1, connected: true, words: { "other/t88": word("working") } },
     "pyrimel",
   );
@@ -255,7 +262,7 @@ test("a federating core's machine-first addresses join the tracker's bare ones; 
 
 // -- agents no tracker registered (t-55) ----------------------------------
 
-import { stateSlugOf, terminalPart } from "../src/lib/tasks/rail.ts";
+import { railAgentText, stateSlugOf, terminalPart } from "../src/lib/tasks/rail.ts";
 
 test("the worktree home's slug is the tracker's own: basename and the FNV-1a of the repo path", () => {
   // read off the live machine: pyrimel's worktrees live under
@@ -344,7 +351,7 @@ test("a stray agent no project holds shows at the foot, by word then name; shell
 
 test("an address two machines hold is no stray: one of them is registered, so neither shows unregistered", () => {
   const rail = railOf(
-    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: [] }], problem: null, repoPath: "/p" }],
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: [], name: null }], problem: null, repoPath: "/p" }],
     {
       generation: 1,
       connected: true,
@@ -359,7 +366,7 @@ test("an address two machines hold is no stray: one of them is registered, so ne
   assert.deepEqual(rail.unregistered, []);
   // an exact registered address leaves another machine's terminal a stray
   const exact = railOf(
-    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t5", tasks: [] }], problem: null, repoPath: "/p" }],
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t5", tasks: [], name: null }], problem: null, repoPath: "/p" }],
     { generation: 1, connected: true, words: { t5: { state: "idle", app: "pi", at: 1 }, "other/t5": { state: "done", app: "pi", at: 1 } } },
     null,
   );
@@ -375,7 +382,7 @@ test("every agent is a target with y copying hc attach <address> as the local co
     [
       [terminalPart("t80"), "t80", "inner", null, "t80"],
       [terminalPart("other/t4j"), "t-0 / 2 other/t4j", "pyrimel", null, "other/t4j"],
-      [agentPart("saccade", "i-3"), "i-3 t-2", "saccade", "t-2", "t12"],
+      [agentPart("saccade", "i-3"), "theory (i-3) t-2", "saccade", "t-2", "t12"],
       [terminalPart("t63"), "saccade / general t63", "saccade", null, "t63"],
       [terminalPart("t6r"), "pi t6r", "saccade", null, "t6r"],
       [terminalPart("t7q"), "pi run t7q", null, null, "t7q"],
@@ -391,6 +398,7 @@ test("every agent is a target with y copying hc attach <address> as the local co
     rowLink: () => null,
     railTarget: (part: string) => targets.find((entry) => entry.part === part),
     forget: () => {},
+    addProject: () => {},
     ports: () => ({
       open: () => {},
       elsewhere: (spec: string, act: string) => elsewhere.push([spec, act]),
@@ -412,4 +420,10 @@ test("every agent is a target with y copying hc attach <address> as the local co
     taskRowActs({ kind: "agent", label: "t7q", part: terminalPart("t7q") }, { ...deps, ports: () => ({ open: () => {} }) }),
     [],
   );
+});
+
+test("a named agent's menu heading reads by its name, the incarnation beside it (t-56)", () => {
+  const base = { address: "t12", state: "working", msg: null, progress: null, tasks: ["t-2"], at: 1, label: null };
+  assert.equal(railAgentText({ ...base, incarnation: "i-3", name: "theory" }), "theory (i-3) t-2");
+  assert.equal(railAgentText({ ...base, incarnation: "i-3", name: null }), "i-3 t-2");
 });

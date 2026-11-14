@@ -210,6 +210,18 @@ Wake on the offer instead of polling: `sac wait t-N --after <seq>
 --until offer` returns once a TaskOffered record lands past the cursor
 seq (`sac log` or `sac show t-N` names it).
 
+## Names
+
+An incarnation may carry a name, so the human tells sessions apart by
+what they do rather than by i-N. `sac launch --name <name>` names a
+fresh launch; `sac name <name>` names your own session (the declared
+`SACCADE_INCARNATION_SEQ`), changes it any time, and `sac name --clear`
+removes it; `sac identity` shows it. The human names any session with
+`--incarnation i-N`; an agent names only its own. Every naming is
+recorded, and names are never unique: same-named sessions are told
+apart by i-N. A recorded terminal also gets the name as its Herdr
+label; a refused label is reported and the name still stands.
+
 ## Messages
 
 Coordination between participants is `sac send --to i-N "..."` - durable

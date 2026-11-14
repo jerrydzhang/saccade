@@ -2466,6 +2466,9 @@ struct IncarnationRegisterRequest {
     /// The harness the fresh session runs under; absent folds as pi.
     #[serde(default)]
     harness: crate::Harness,
+    /// The launch's name, recorded as the birth's first naming.
+    #[serde(default)]
+    name: Option<crate::IncarnationName>,
     #[serde(default)]
     client: Option<String>,
 }
@@ -2489,6 +2492,7 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
             request.address,
             request.adopted,
             request.harness,
+            request.name,
         ),
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     };
@@ -2512,8 +2516,34 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
 
 /// Recovery is the attach-born unaddressed case only: an addressed
 /// session keeps the fold's registration refusal - address moves
-/// belong to the relaunch door.
+/// belong to the relaunch door. A launch's name lands right after,
+/// on whichever incarnation the registration resolved.
 fn incarnation_register_operation(
+    inner: &mut Inner,
+    native_id: crate::NativeSessionId,
+    address: String,
+    adopted: bool,
+    harness: crate::Harness,
+    name: Option<crate::IncarnationName>,
+) -> Result<(Vec<StoredRecord>, usize, bool), ApiFail> {
+    let (mut stored, incarnation, registered) =
+        register_or_recover(inner, native_id, address, adopted, harness)?;
+    if let Some(name) = name {
+        let (named, _) = db::record(
+            &mut inner.conn,
+            &Context::system(),
+            Command::NameIncarnation {
+                incarnation: crate::IncarnationId(RecordId(incarnation)),
+                name: Some(name),
+            },
+            db::now_epoch(),
+        )?;
+        stored.extend(named);
+    }
+    Ok((stored, incarnation, registered))
+}
+
+fn register_or_recover(
     inner: &mut Inner,
     native_id: crate::NativeSessionId,
     address: String,

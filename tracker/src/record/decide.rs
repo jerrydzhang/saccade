@@ -18,7 +18,10 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskRejected { .. }
         | Event::TaskAccepted { .. }
         | Event::TaskWorkspaceCheckpointed { .. }
-        | Event::MessageSent { .. } => Authority::AnyTier,
+        | Event::MessageSent { .. }
+        // naming: any tier; the store arm holds an agent to its own
+        // declared incarnation
+        | Event::IncarnationNamed { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
         // the human's chosen root destination: an explicit act about
@@ -146,6 +149,9 @@ pub fn decide(command: Command) -> Vec<Event> {
             address,
             adopted,
         }],
+        Command::NameIncarnation { incarnation, name } => {
+            vec![Event::IncarnationNamed { incarnation, name }]
+        }
         Command::SendMessage {
             from,
             to,
@@ -169,7 +175,7 @@ pub fn decide(command: Command) -> Vec<Event> {
 mod test {
     use super::*;
     use crate::harness::Harness;
-    use crate::objects::incarnation::IncarnationId;
+    use crate::objects::incarnation::{IncarnationId, IncarnationName};
     use crate::objects::message::MessageId;
     use crate::types::actor::ActorName;
     use crate::types::pointers::{
@@ -203,7 +209,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 21] = [
+        let events: [(Event, Authority); 22] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -335,6 +341,14 @@ mod test {
                 },
                 Require(Tier::System),
             ),
+            // naming is any tier's act; the own-incarnation guard is the store's
+            (
+                Event::IncarnationNamed {
+                    incarnation: IncarnationId(RecordId(0)),
+                    name: Some(IncarnationName::new("theory".into()).unwrap()),
+                },
+                AnyTier,
+            ),
             (
                 Event::MessageSent {
                     from: IncarnationId(RecordId(0)),
@@ -432,6 +446,10 @@ mod test {
                 address: None,
                 adopted: false,
                 harness: Harness::Pi,
+            },
+            Command::NameIncarnation {
+                incarnation: IncarnationId(RecordId(0)),
+                name: None,
             },
             Command::SendMessage {
                 from: IncarnationId(RecordId(0)),

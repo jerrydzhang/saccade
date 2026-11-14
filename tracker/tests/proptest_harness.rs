@@ -86,6 +86,12 @@ enum Action {
     Submit {
         message: u8,
     },
+    /// A naming of the drawn native incarnation: the human, the
+    /// session itself, or another session (the own-incarnation guard)
+    Name {
+        draw: u8,
+        by: u8,
+    },
 }
 
 impl Action {
@@ -107,7 +113,8 @@ impl Action {
             | Action::CleanWorkspace { .. }
             | Action::RestoreWorkspace { .. }
             | Action::Send { .. }
-            | Action::Submit { .. } => false,
+            | Action::Submit { .. }
+            | Action::Name { .. } => false,
         }
     }
 
@@ -358,6 +365,12 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             task: None,
             body: saccade::Prose::new("generated message".into()).unwrap(),
         },
+        Action::Name { draw, by } => Command::NameIncarnation {
+            incarnation: native_at(world, *draw)
+                .unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            name: (by % 4 != 3)
+                .then(|| saccade::IncarnationName::new(format!("generated-{}", by % 3)).unwrap()),
+        },
         Action::Submit { message } => {
             let id = message_at(world, *message);
             let by = id
@@ -384,6 +397,26 @@ fn context(action: &Action, world: &World) -> Context {
     | Action::Submit { .. } = action
     {
         return Context::system();
+    }
+    // a naming rides the human, the named session's own scope, or a
+    // neighbouring draw's scope
+    if let Action::Name { draw, by } = action {
+        return match by % 3 {
+            0 => Context {
+                actor: ActorName::new("jerry".into()).unwrap(),
+                tier: Tier::Human,
+                scope: None,
+            },
+            pick => Context {
+                actor: ActorName::new("saccade bot".into()).unwrap(),
+                tier: Tier::Agent,
+                scope: Some(Scope {
+                    task: None,
+                    incarnation: native_at(world, draw.wrapping_add(pick - 1)),
+                    workspace: None,
+                }),
+            },
+        };
     }
     // a send rides its sender's registered native identity
     if let Action::Send { from, .. } = action {
@@ -459,6 +492,7 @@ fn action_strategy() -> BoxedStrategy<Action> {
             reply,
         }),
         2 => any::<u8>().prop_map(|message| Action::Submit { message }),
+        4 => (any::<u8>(), any::<u8>()).prop_map(|(draw, by)| Action::Name { draw, by }),
     ]
     .boxed()
 }
@@ -634,6 +668,9 @@ fn generator_reaches_deep_states() {
                         Action::Submit { .. } if last.kind == "message_submitted" => {
                             *milestones.entry("message submitted").or_default() += 1;
                         }
+                        Action::Name { .. } if last.kind == "incarnation_named" => {
+                            *milestones.entry("incarnation named").or_default() += 1;
+                        }
                         _ => {}
                     }
                 }
@@ -652,6 +689,8 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::DuplicateNativeSession => "DuplicateNativeSession",
                         saccade::Reject::SavedSessionMismatch => "SavedSessionMismatch",
                         saccade::Reject::LocatorAlreadyBound => "LocatorAlreadyBound",
+                        saccade::Reject::InvalidIncarnationName => "InvalidIncarnationName",
+                        saccade::Reject::NotOwnIncarnation => "NotOwnIncarnation",
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
@@ -688,6 +727,7 @@ fn generator_reaches_deep_states() {
         ("native registered", 0.15),
         ("message sent", 0.01),
         ("message submitted", 0.005),
+        ("incarnation named", 0.01),
         ("workspace established", 0.10),
         ("workspace created", 0.10),
         ("workspace changed", 0.01),
@@ -707,6 +747,7 @@ fn generator_reaches_deep_states() {
         "UnrecordedSourceCommit",
         "InvalidStateTransition",
         "InvalidIncarnationId",
+        "NotOwnIncarnation",
     ] {
         assert!(
             reject_kinds.get(kind).copied().unwrap_or(0) > 0,

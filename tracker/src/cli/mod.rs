@@ -4,6 +4,7 @@ pub mod board;
 pub mod completions;
 pub mod launch;
 pub mod message;
+pub mod name;
 pub mod root;
 pub mod serve;
 pub mod skill;
@@ -24,6 +25,7 @@ use self::board::{BoardVerb, board_door};
 use self::completions::{FISH, Kind, complete_candidates};
 use self::launch::{ask_door, harness_choice, launch_door, launch_here_door, launch_new_door};
 use self::message::{messages_door, send_door};
+use self::name::name_door;
 use self::root::{root_bind_door, root_clear_door, root_show_door};
 use self::serve::serve_door;
 use self::skill::skill_door;
@@ -132,6 +134,21 @@ enum Cmd {
         /// The incarnation (i-<n>); defaults to the declared scope
         mailbox: Option<String>,
     },
+    /// Name an incarnation, change its name, or clear it: one line,
+    /// never unique; every naming is recorded. The incarnation
+    /// defaults to this session's declared one; its terminal's Herdr
+    /// name label follows when the record carries the address
+    Name {
+        /// The name
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        name: Option<String>,
+        /// The incarnation (i-<n>); defaults to the declared scope
+        #[arg(long)]
+        incarnation: Option<String>,
+        /// Clear the name: the incarnation shows as i-<n> again
+        #[arg(long)]
+        clear: bool,
+    },
     /// List objects (world projection)
     List {
         #[arg(value_enum, default_value_t = ObjKind::Task)]
@@ -232,6 +249,11 @@ enum Cmd {
         /// kind refuses
         #[arg(long)]
         harness: Option<String>,
+        /// Name the fresh incarnation: recorded with its birth and set
+        /// as its terminal's Herdr name label. Names are never unique;
+        /// `sac name` changes it later
+        #[arg(long, conflicts_with = "resume")]
+        name: Option<String>,
         /// The initial prompt, quoted; native human input when omitted
         #[arg(last = true)]
         prompt: Vec<String>,
@@ -570,6 +592,7 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Reopen { .. } => "reopen".into(),
         Cmd::Send { .. } => "send".into(),
         Cmd::Messages { .. } => "messages".into(),
+        Cmd::Name { .. } => "name".into(),
         Cmd::List { .. } => "list".into(),
         Cmd::Log => "log".into(),
         Cmd::Show { .. } => "show".into(),
@@ -656,6 +679,16 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                 push(&mut flags, "--stdin");
             }
         }
+        Cmd::Name {
+            incarnation, clear, ..
+        } => {
+            if incarnation.is_some() {
+                push(&mut flags, "--incarnation");
+            }
+            if *clear {
+                push(&mut flags, "--clear");
+            }
+        }
         Cmd::Search {
             history, within, ..
         } => {
@@ -687,8 +720,12 @@ fn flag_names(command: &Cmd) -> Vec<String> {
             ask,
             here,
             harness,
+            name,
             prompt,
         } => {
+            if name.is_some() {
+                push(&mut flags, "--name");
+            }
             if workspace.is_some() {
                 push(&mut flags, "--workspace");
             }
@@ -1022,6 +1059,19 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             );
         }
         Cmd::Messages { mailbox } => return messages_door(cli, &destination, mailbox.as_deref()),
+        Cmd::Name {
+            name,
+            incarnation,
+            clear,
+        } => {
+            return name_door(
+                cli,
+                &destination,
+                name.as_deref(),
+                incarnation.as_deref(),
+                *clear,
+            );
+        }
         Cmd::Launch {
             workspace,
             resume,
@@ -1033,8 +1083,12 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             // --here dispatches in main before run: the child's own
             // status is the command's, which this face cannot express
             here: _,
+            // the fresh doors read the name themselves; a bad one
+            // refuses here, before --new provisions anything
+            name: _,
         } => {
             let harness = harness_choice(harness)?;
+            self::launch::launch_name(cli)?;
             if let Some(labeled) = new.as_deref().map(str::to_owned) {
                 let label = (!labeled.is_empty()).then_some(labeled.as_str());
                 return launch_new_door(
@@ -1466,12 +1520,36 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             ),
         }
     };
+    // the declared incarnation's name, read best-effort from the
+    // destination's fold: an unreadable fold is disclosed, never fatal
+    let naming = scope.as_ref().and_then(|s| s.incarnation).map(|id| {
+        let destination = match (&cli.db, &server) {
+            _ if mode == "conflict" => None,
+            (Some(db), None) => Some(Destination::Local { db: db.clone() }),
+            (None, Some(url)) => Some(Destination::Server { url: url.clone() }),
+            _ => None,
+        };
+        let Some(destination) = destination else {
+            return Err("no destination resolved".to_string());
+        };
+        match loadout_of(&destination).map(|l| l.state) {
+            Ok(LoadState::Full(world)) => Ok(world
+                .incarnations
+                .get(&id)
+                .and_then(|ctx| ctx.name.as_ref())
+                .map(|n| n.as_str().to_string())),
+            Ok(LoadState::Degraded(reason)) => Err(reason),
+            Err(fail) => Err(fail.to_string()),
+        }
+    });
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "actor": context.actor.as_str(),
             "tier": saccade::wire::tier_of(&context.tier),
             "task": scope.as_ref().and_then(|s| s.task).map(|t| format!("t-{}", t.0)),
             "incarnation_seq": scope.as_ref().and_then(|s| s.incarnation).map(|i| i.0 .0),
+            "name": naming.as_ref().and_then(|n| n.as_ref().ok().cloned().flatten()),
+            "name_detail": naming.as_ref().and_then(|n| n.as_ref().err().cloned()),
             "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
             "repo": repo.map(|p| p.display().to_string()),
             "db": db_path.map(|p| p.display().to_string()),
@@ -1494,6 +1572,11 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             });
             if let Some(incarnation) = scope.incarnation {
                 out.push(format!("incarnation seq {}", incarnation.0.0));
+                out.push(match &naming {
+                    Some(Ok(Some(name))) => format!("name  {name}"),
+                    Some(Ok(None)) | None => "name  none recorded".into(),
+                    Some(Err(detail)) => format!("name  unread: {detail}"),
+                });
             }
             if let Some(workspace) = &scope.workspace {
                 out.push(format!("workspace  {}", workspace.as_path().display()));

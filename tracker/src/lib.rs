@@ -23,7 +23,7 @@ pub use harness::Harness;
 pub use launch::{
     Composition, FreshBirth, LaunchArm, LaunchFail, LaunchRequest, ResumeTarget, Submitted,
 };
-pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
+pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, IncarnationName};
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use objects::workspace::{
@@ -63,6 +63,10 @@ pub enum Reject {
         "this incarnation already carries its saved session; the attach binds a launch-door birth's locator once"
     )]
     LocatorAlreadyBound,
+    #[error("an incarnation name is one non-empty line with no surrounding whitespace")]
+    InvalidIncarnationName,
+    #[error("an agent names only the incarnation its declared scope names")]
+    NotOwnIncarnation,
     #[error("no such message for this recipient")]
     InvalidMessageId,
     #[error(
@@ -107,6 +111,8 @@ impl Reject {
             Reject::DuplicateNativeSession => "duplicate_native_session",
             Reject::SavedSessionMismatch => "saved_session_mismatch",
             Reject::LocatorAlreadyBound => "locator_already_bound",
+            Reject::InvalidIncarnationName => "invalid_incarnation_name",
+            Reject::NotOwnIncarnation => "not_own_incarnation",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
@@ -146,6 +152,8 @@ mod test {
             Reject::DuplicateNativeSession,
             Reject::SavedSessionMismatch,
             Reject::LocatorAlreadyBound,
+            Reject::InvalidIncarnationName,
+            Reject::NotOwnIncarnation,
             Reject::InvalidMessageId,
             Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,

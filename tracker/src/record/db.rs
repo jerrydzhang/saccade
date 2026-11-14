@@ -909,6 +909,40 @@ mod test {
         )
         .unwrap();
 
+        // the naming family rides the same round-trip: the launch's
+        // name, the session naming itself, the human's clear
+        let name = |n: &str| Some(crate::IncarnationName::new(n.into()).unwrap());
+        record(
+            &mut conn,
+            &system,
+            Command::NameIncarnation {
+                incarnation: IncarnationId(RecordId(13)),
+                name: name("th\u{e9}orie"),
+            },
+            40,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &sender,
+            Command::NameIncarnation {
+                incarnation: IncarnationId(RecordId(12)),
+                name: name("empirical"),
+            },
+            40,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::NameIncarnation {
+                incarnation: IncarnationId(RecordId(13)),
+                name: None,
+            },
+            40,
+        )
+        .unwrap();
+
         // asserted after the last write of the story
         let (_, returned) = record(
             &mut conn,
@@ -926,7 +960,19 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 34);
+        assert_eq!(loadout.rows.len(), 37);
+        // the namings: the latest one stands, the log keeps the rest
+        assert_eq!(loadout.rows[33].kind, "incarnation_named");
+        assert!(loadout.rows[33].payload.contains("th\u{e9}orie"));
+        assert_eq!(loadout.rows[35].kind, "incarnation_named");
+        assert_eq!(
+            world.incarnations[&IncarnationId(RecordId(12))]
+                .name
+                .as_ref()
+                .map(|n| n.as_str()),
+            Some("empirical")
+        );
+        assert_eq!(world.incarnations[&IncarnationId(RecordId(13))].name, None);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1025,8 +1071,8 @@ mod test {
         assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
         assert_eq!(loadout.rows[19].kind, "workspace_restored");
         // the board family rode its own kinds with the declared pairs:
-        // the eight rows before the closing checkpoint
-        let board = |back: usize| &loadout.rows[loadout.rows.len() - 9 + back];
+        // the eight rows before the three namings and the closing checkpoint
+        let board = |back: usize| &loadout.rows[loadout.rows.len() - 12 + back];
         assert_eq!(board(0).kind, "task_committed");
         assert!(
             board(0)

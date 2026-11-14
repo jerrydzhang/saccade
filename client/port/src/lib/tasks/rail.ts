@@ -52,8 +52,9 @@ export type WordsSnapshot = {
 
 export const NO_WORDS: WordsSnapshot = { generation: 0, words: {}, connected: false };
 
-/** One incarnation as a project's agents page records it. */
-export type AgentFacts = { incarnation: string; address: string | null; tasks: string[] };
+/** One incarnation as a project's agents page records it; the name is
+ * the recorded one (t-56), null when it carries none. */
+export type AgentFacts = { incarnation: string; name: string | null; address: string | null; tasks: string[] };
 
 export type RailAgent = {
   /** The tracker's incarnation; null for an agent no tracker
@@ -66,6 +67,9 @@ export type RailAgent = {
    * terminal's title; null when the core sent neither (and on a
    * registered agent, which its incarnation names). */
   label: string | null;
+  /** Shown in place of the incarnation, which stays small beside it
+   * (t-56); null when unnamed or unregistered. */
+  name: string | null;
   state: string;
   msg: string | null;
   progress: string | null;
@@ -123,6 +127,7 @@ export function agentFactsOf(page: ViewPage): AgentFacts[] {
     const tasks = fact("tasks");
     out.push({
       incarnation,
+      name: fact("name"),
       address: fact("terminal address"),
       tasks: tasks === null ? [] : tasks.split(/\s+/).filter((task) => task.length > 0),
     });
@@ -228,6 +233,7 @@ export function railOf(
     if (word.app === undefined || word.app.length === 0) continue;
     const agent: RailAgent = {
       incarnation: null,
+      name: null,
       address,
       // an empty label or title (a fresh terminal's) names nothing
       label: [word.where, word.terminalTitle].find((name) => name !== undefined && name.length > 0) ?? null,
@@ -270,6 +276,7 @@ export function railOf(
           incarnation: agent.incarnation,
           address: key,
           label: null,
+          name: agent.name,
           state,
           msg: word.msg ?? null,
           progress: word.progress ?? null,
@@ -341,7 +348,9 @@ export const railAgentPart = (project: string | null, agent: RailAgent): string 
 /** The words an agent entry is named by. */
 export function railAgentText(agent: RailAgent): string {
   if (agent.incarnation === null) return [agent.label, agent.address].filter((part) => part !== null).join(" ");
-  return [agent.incarnation, agent.tasks[0]].filter((part) => part !== undefined).join(" ");
+  // a named agent reads by its name, the incarnation beside it (t-56)
+  const who = agent.name !== null ? `${agent.name} (${agent.incarnation})` : agent.incarnation;
+  return [who, agent.tasks[0]].filter((part) => part !== undefined).join(" ");
 }
 
 /** The rail's targets in its own order: each project, then its

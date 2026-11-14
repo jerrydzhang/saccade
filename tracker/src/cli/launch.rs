@@ -47,6 +47,56 @@ pub(super) fn placement_lines(
     }
 }
 
+/// The launch's --name, validated before anything launches.
+pub(super) fn launch_name(cli: &Cli) -> Result<Option<saccade::IncarnationName>, Fail> {
+    match &cli.command {
+        Cmd::Launch {
+            name: Some(name), ..
+        } => Ok(Some(saccade::IncarnationName::new(name.clone())?)),
+        _ => Ok(None),
+    }
+}
+
+/// The fresh birth's registration, its name riding along, then the
+/// name label on the launched terminal - a refused label is disclosed
+/// on the face, never a failed launch.
+fn register_fresh(
+    url: &str,
+    submitted: &mut saccade::launch::Submitted,
+    name: Option<&saccade::IncarnationName>,
+) -> Result<(), Fail> {
+    let Some(fresh) = &submitted.fresh else {
+        return Ok(());
+    };
+    client::register_incarnation(
+        url,
+        &fresh.native_id,
+        &submitted.terminal,
+        false,
+        fresh.harness,
+        name,
+    )
+    .map_err(Fail::Client)?;
+    if let Some(name) = name {
+        submitted.name = Some(name.as_str().to_string());
+        submitted.name_refusal =
+            saccade::launch::label_name(&submitted.terminal, Some(name.as_str()));
+    }
+    Ok(())
+}
+
+/// The face line a named launch adds: the name, and the label's
+/// refusal when the host refused it.
+pub(super) fn name_line(name: &Option<String>, refusal: &Option<String>) -> Option<String> {
+    let name = name.as_ref()?;
+    Some(match refusal {
+        Some(evidence) => format!(
+            "  named {name}; the Herdr name label was refused: {evidence} - the name is recorded"
+        ),
+        None => format!("  named {name}, the terminal's Herdr name label set"),
+    })
+}
+
 /// The launch door: the composed native session in an explicit
 /// existing workspace, task-free. A fresh launch registers a new
 /// incarnation at session start; --resume continues a saved one,
@@ -72,8 +122,11 @@ pub(super) fn launch_door(
     } else {
         "  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
     };
+    let named = name_line(&submitted.name, &submitted.name_refusal)
+        .map(|line| format!("\n{line}"))
+        .unwrap_or_default();
     Ok(format!(
-        "integrated {h} launching at {ws} - address {t}\n{place}\n{association}",
+        "integrated {h} launching at {ws} - address {t}\n{place}\n{association}{named}",
         h = launch_harness_name(&submitted),
         ws = submitted.workspace,
         t = submitted.terminal,
@@ -100,6 +153,8 @@ pub(super) fn submitted_face(submitted: &saccade::launch::Submitted) -> serde_js
         "harness": launch_harness_name(submitted),
         "native_id": fresh.map(|f| f.native_id.clone()),
         "resumed": submitted.resume.as_ref().map(|r| r.id.0.0),
+        "name": submitted.name,
+        "name_refusal": submitted.name_refusal,
     })
 }
 
@@ -127,6 +182,7 @@ pub(super) fn submitted_launch(
     prompt: &[String],
 ) -> Result<saccade::launch::Submitted, Fail> {
     let url = server_url(destination, "launch")?;
+    let name = launch_name(cli)?;
     let repo = resolve_repo(cli)?;
     let loadout = loadout_of(destination)?;
     let LoadState::Full(world) = loadout.state else {
@@ -145,20 +201,11 @@ pub(super) fn submitted_launch(
         // unplaced
         declare_placement: true,
     })?;
-    let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
+    let mut submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
     // first save; a resume's association moves when the session
     // attaches
-    if let Some(fresh) = &submitted.fresh {
-        client::register_incarnation(
-            &url,
-            &fresh.native_id,
-            &submitted.terminal,
-            false,
-            fresh.harness,
-        )
-        .map_err(Fail::Client)?;
-    }
+    register_fresh(&url, &mut submitted, name.as_ref())?;
     Ok(submitted)
 }
 
@@ -257,6 +304,8 @@ pub(super) fn launch_here_door(cli: &Cli) -> ExitCode {
                         "harness": outcome.harness,
                         "resumed": outcome.resumed_num,
                         "native_id": outcome.native_id,
+                        "name": outcome.name,
+                        "name_refusal": outcome.name_refusal,
                         "exit": outcome.attach.status(),
                     })
                 );
@@ -267,6 +316,9 @@ pub(super) fn launch_here_door(cli: &Cli) -> ExitCode {
                     ws = outcome.workspace,
                     t = outcome.terminal,
                 );
+                if let Some(line) = name_line(&outcome.name, &outcome.name_refusal) {
+                    println!("{line}");
+                }
             }
             match outcome.attach.status() {
                 0 => ExitCode::SUCCESS,
@@ -285,6 +337,8 @@ pub(super) struct HereRun {
     harness: &'static str,
     resumed_num: Option<usize>,
     native_id: Option<String>,
+    name: Option<String>,
+    name_refusal: Option<String>,
     attach: host::ChildExit,
 }
 
@@ -304,6 +358,7 @@ pub(super) fn launch_here_run(
 ) -> Result<HereRun, Fail> {
     let destination = resolve_destination(cli)?;
     let url = server_url(&destination, "launch")?;
+    let name = launch_name(cli)?;
     let repo = resolve_repo(cli)?;
     let loadout = loadout_of(&destination)?;
     let LoadState::Full(world) = loadout.state else {
@@ -353,20 +408,11 @@ pub(super) fn launch_here_run(
             "launch --here attaches the session in this terminal: stdin must be a real terminal, and this one is not; run the launch without --here for a host terminal".into(),
         ));
     }
-    let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
+    let mut submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
     // first save; a resume's association moves when the session
     // attaches - a launched terminal either way, never this pane
-    if let Some(fresh) = &submitted.fresh {
-        client::register_incarnation(
-            &url,
-            &fresh.native_id,
-            &submitted.terminal,
-            false,
-            fresh.harness,
-        )
-        .map_err(Fail::Client)?;
-    }
+    register_fresh(&url, &mut submitted, name.as_ref())?;
     // the foreground attach: this terminal views the launched session
     // until detach; the launch stands regardless of the attach's fate
     let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
@@ -396,6 +442,8 @@ pub(super) fn launch_here_run(
         },
         resumed_num,
         native_id: submitted.fresh.map(|f| f.native_id),
+        name: submitted.name,
+        name_refusal: submitted.name_refusal,
         attach,
     })
 }
@@ -419,6 +467,8 @@ pub(super) struct AskOutcome {
     creator: String,
     /// None means the queue confirmed the question's acceptance
     submission: Option<String>,
+    name: Option<String>,
+    name_refusal: Option<String>,
 }
 
 /// The ask door: cheap peer creation with an initial question. The
@@ -615,6 +665,8 @@ pub(super) fn ask_run(
         message_num: sent_message_num,
         creator: creator_num,
         submission,
+        name: submitted.name,
+        name_refusal: submitted.name_refusal,
     })
 }
 
@@ -636,6 +688,8 @@ pub(super) fn ask_door(
             "incarnation": {"seq": outcome.birth, "num": outcome.num},
             "question": {"num": outcome.message_num, "seq": outcome.message_seq},
             "submission": outcome.submission,
+            "name": outcome.name,
+            "name_refusal": outcome.name_refusal,
         }))
         .expect("plain data"));
     }
@@ -650,8 +704,11 @@ pub(super) fn ask_door(
         .submission
         .map(|line| format!("; {line}"))
         .unwrap_or_default();
+    let named = name_line(&outcome.name, &outcome.name_refusal)
+        .map(|line| format!("\n{line}"))
+        .unwrap_or_default();
     Ok(format!(
-        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it through their session's input queue{disclosure}\n{place}",
+        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it through their session's input queue{disclosure}\n{place}{named}",
         num = outcome.num,
         workspace = outcome.workspace,
         terminal = outcome.terminal,
@@ -707,6 +764,8 @@ pub(super) fn launch_new_door(
                         "place_refusal": outcome.place_refusal,
                         "incarnation": {"seq": outcome.birth, "num": outcome.num},
                         "question": {"num": outcome.message_num, "seq": outcome.message_seq},
+                        "name": outcome.name,
+                        "name_refusal": outcome.name_refusal,
                     }),
                     Err(e) => return Err(launch_failed(&provisioned, e)),
                 }
@@ -743,11 +802,14 @@ pub(super) fn launch_new_door(
             prompt,
         ) {
             Ok(launch) => format!(
-                "integrated {h} launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+                "integrated {h} launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one{named}",
                 h = launch_harness_name(&launch),
                 ws = launch.workspace,
                 t = launch.terminal,
                 place = placement_lines(&launch.terminal, &launch.space, &launch.place_refusal),
+                named = name_line(&launch.name, &launch.name_refusal)
+                    .map(|line| format!("\n{line}"))
+                    .unwrap_or_default(),
             ),
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },

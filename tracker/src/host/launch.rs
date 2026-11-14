@@ -83,6 +83,11 @@ pub struct Submitted {
     pub place_refusal: Option<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
+    /// The name the door recorded with the fresh birth, and the name
+    /// label's refusal when the host refused it: the door's own
+    /// follow-on, None from the submission itself.
+    pub name: Option<String>,
+    pub name_refusal: Option<String>,
 }
 
 /// A launch construction or host-submission refusal. `Refused` carries
@@ -367,7 +372,22 @@ pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
         place_refusal,
         fresh: composed.fresh,
         resume: composed.resume,
+        name: None,
+        name_refusal: None,
     })
+}
+
+/// The name label on a recorded terminal address, after the naming
+/// landed: the refusal's evidence when the host could not be resolved
+/// or refused, never a failure of the naming itself.
+pub fn label_name(address: &str, name: Option<&str>) -> Option<String> {
+    let host = match HerdrCore::resolved() {
+        Ok(host) => host,
+        Err(e) => return Some(e.to_string()),
+    };
+    host.name(&HostAddress(address.to_string()), name)
+        .err()
+        .map(|e| e.to_string())
 }
 
 /// The routing environment words: the acting label (the harness's own

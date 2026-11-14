@@ -1,4 +1,4 @@
-//! The host contract: the six verbs every persistent-session host
+//! The host contract: the verbs every persistent-session host
 //! answers, with the shared payload and refusal types they speak.
 //! Each host is one compiled-in dialect implementing the interface;
 //! doors consume the interface, never a host's specifics, so a host
@@ -91,6 +91,19 @@ pub enum PlaceRefusal {
     Unknown(String),
 }
 
+/// A name-label refusal, naming the evidence. The name is recorded
+/// either way; the caller discloses and never fails the naming.
+#[derive(Debug)]
+pub enum NameRefusal {
+    /// The host named the address absent or finished.
+    AddressNotLive(String),
+    /// The host was asked and refused for its own reasons.
+    HostRefused(String),
+    /// The host could not be asked, its answer could not be read, or
+    /// the bounded ask expired.
+    Unknown(String),
+}
+
 /// A foreground attach refusal, naming the evidence. The attach only
 /// views the session in the caller's terminal; a refusal leaves the
 /// session itself untouched, and the address stands for a manual
@@ -115,7 +128,7 @@ impl std::fmt::Display for AttachRefusal {
     }
 }
 
-/// The five verbs. dyn-compatible: doors hold the dialect behind the
+/// The verbs. dyn-compatible: doors hold the dialect behind the
 /// interface, never a host type.
 /// The host contract's verbs are the entire host boundary. One
 /// dialect disclosure is named beside them: the pinned herdr core
@@ -135,6 +148,10 @@ pub trait HostContract: Sync {
     /// shows where the author says it lives. One ask, right after the
     /// launch's address returns; ids are local to that machine.
     fn place(&self, address: &HostAddress, space: &str, tab: &str) -> Result<(), PlaceRefusal>;
+    /// One name label on a terminal the record addresses, so the
+    /// host's own listings show what the incarnation is called; None
+    /// removes the label. One ask, right after the naming lands.
+    fn name(&self, address: &HostAddress, name: Option<&str>) -> Result<(), NameRefusal>;
     /// Liveness gates submission and nothing else; no liveness fact
     /// ever enters the log.
     fn live(&self, address: &HostAddress) -> Liveness;
@@ -210,6 +227,20 @@ impl std::fmt::Display for PlaceRefusal {
             }
             PlaceRefusal::Unknown(detail) => {
                 write!(f, "the placement could not be asked: {detail}")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for NameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NameRefusal::AddressNotLive(detail) => write!(f, "the address is not live: {detail}"),
+            NameRefusal::HostRefused(detail) => {
+                write!(f, "the host refused the name label: {detail}")
+            }
+            NameRefusal::Unknown(detail) => {
+                write!(f, "the name label could not be asked: {detail}")
             }
         }
     }
