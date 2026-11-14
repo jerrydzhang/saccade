@@ -79,6 +79,9 @@ export type PortObservation = {
     location: string | null;
     task: string | null;
     pinnedRevision: number | null;
+    /** History mode (t-49): the revision shown against its
+     * predecessor, the newest, the changed parts; null outside it. */
+    history: Readonly<{ revision: number; latest: number; changed: readonly string[]; at: number }> | null;
   }>;
   errors: readonly StructuredIssue[];
   render: readonly RenderOutcome[];
@@ -330,6 +333,15 @@ export function buildReadout(
       location: frame && input.surface === "board" ? frame.location : null,
       task: board && board.task.length > 0 ? board.task : null,
       pinnedRevision: pinnedRevisionOf(frame && input.surface === "board" ? frame.location : null),
+      history:
+        frame && input.surface === "board" && frame.history
+          ? {
+              revision: frame.history.revision,
+              latest: frame.history.latest,
+              changed: frame.history.changed,
+              at: frame.history.at,
+            }
+          : null,
     },
     errors: frame && input.surface === "board" ? frame.errors : [],
     render: frame && input.surface === "board" ? frame.renderOutcomes : [],

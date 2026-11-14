@@ -395,6 +395,68 @@ body {
   color: var(--port-world-foreground);
 }
 
+/* history mode (t-49): the words a revision added and removed, the
+ * parts it changed (a rule at the part's edge: the change ruler), the
+ * commit beside the board in the right margin, above it when narrow */
+.port-diff-ins {
+  color: var(--port-diff-added);
+  background: var(--port-diff-added-background);
+  text-decoration: none;
+}
+
+.port-diff-del {
+  color: var(--port-diff-removed);
+  background: var(--port-diff-removed-background);
+  text-decoration: line-through;
+}
+
+.port-board-view .chg-add,
+.port-board-view .chg-mod,
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-color-accent);
+}
+
+.port-board-view .chg-add {
+  box-shadow: inset 3px 0 0 var(--port-diff-added);
+}
+
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-diff-removed);
+  opacity: 0.8;
+}
+
+.port-history {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  width: 18rem;
+  margin-left: 1rem;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--port-color-foreground);
+  border-left: 1px solid var(--port-color-line);
+}
+
+.port-history-head {
+  color: var(--port-color-muted);
+  margin-bottom: 0.5rem;
+}
+
+.port-history-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 80rem) {
+  .port-history {
+    position: static;
+    width: auto;
+    margin: 0 0 0.5rem 0;
+    border-left: 0;
+    border-bottom: 1px solid var(--port-color-line);
+  }
+}
+
 /* the board renderer's minimal block layout (placement only) */
 .block {
   padding: var(--port-space-block);

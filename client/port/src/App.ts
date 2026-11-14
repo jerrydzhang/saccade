@@ -845,6 +845,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
           (instruments.board.presentation as BoardUI).enterFind();
         }
       },
+      toggleHistory: () => {
+        if (activeSurface === "board" && instruments.board !== undefined) {
+          (instruments.board.presentation as BoardUI).toggleHistory();
+        }
+      },
       linkByLabels: () => {
         void beginLinkAsk();
       },
