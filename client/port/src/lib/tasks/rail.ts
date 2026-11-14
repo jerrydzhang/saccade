@@ -31,11 +31,14 @@ export type WordsSnapshot = {
 
 export const NO_WORDS: WordsSnapshot = { generation: 0, words: {}, connected: false };
 
-/** One incarnation as a project's agents page records it. */
-export type AgentFacts = { incarnation: string; address: string | null; tasks: string[] };
+/** One incarnation as a project's agents page records it; the name is
+ * the recorded one (t-56), null when it carries none. */
+export type AgentFacts = { incarnation: string; name: string | null; address: string | null; tasks: string[] };
 
 export type RailAgent = {
   incarnation: string;
+  /** Shown in place of the incarnation, which stays small beside it. */
+  name: string | null;
   state: string;
   msg: string | null;
   progress: string | null;
@@ -90,6 +93,7 @@ export function agentFactsOf(page: ViewPage): AgentFacts[] {
     const tasks = fact("tasks");
     out.push({
       incarnation,
+      name: fact("name"),
       address: fact("terminal address"),
       tasks: tasks === null ? [] : tasks.split(/\s+/).filter((task) => task.length > 0),
     });
@@ -141,6 +145,7 @@ export function railOf(
         const list = sections.get(state) ?? [];
         list.push({
           incarnation: agent.incarnation,
+          name: agent.name,
           state,
           msg: word.msg ?? null,
           progress: word.progress ?? null,

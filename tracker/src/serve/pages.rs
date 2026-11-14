@@ -668,14 +668,16 @@ fn cursor(snapshot: &Snapshot) -> Option<usize> {
 }
 
 /// The record kinds whose landing can change the agents page: the
-/// registration family (who the sessions are, where their terminals
-/// and saved sessions live), the claims that move ownership, and the
+/// registration family (who the sessions are, what they are called,
+/// where their terminals and saved sessions live), the claims that
+/// move ownership, and the
 /// board commits whose recorded scope names a session - the page
 /// carries each session's last commit, so a commit landing wakes it.
 const AGENTS_WATCH: &[&str] = &[
     "incarnation_registered",
     "saved_session_bound",
     "host_address_assigned",
+    "incarnation_named",
     "task_claimed",
     "task_committed",
 ];
@@ -701,8 +703,8 @@ fn owned_tasks(world: &World, id: IncarnationId) -> Vec<usize> {
 }
 
 /// The agents page (t-24@r4): one group per registered native session,
-/// its location the incarnation, facts inside naming the terminal
-/// address, the harness, the owned tasks and the workspace. The
+/// its location the incarnation, facts inside naming its recorded name
+/// (t-56; absent when it carries none), the terminal address, the harness, the owned tasks and the workspace. The
 /// workspace derives here, server-side, from the saved session file
 /// with the tracker's own header readers - the Pi header's cwd, the
 /// first cwd-bearing Claude Code transcript entry - never from Claude
@@ -729,6 +731,9 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
                 .expect("an iteration over the fold's own incarnations is resident",)
         );
         let mut facts = vec![fact("incarnation", incarnation.clone())];
+        if let Some(name) = &ctx.name {
+            facts.push(fact("name", name.as_str().to_string()));
+        }
         if let Some(address) = ctx.incarnation.address() {
             facts.push(fact("terminal address", address.to_string()));
         }

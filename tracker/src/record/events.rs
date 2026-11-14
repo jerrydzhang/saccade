@@ -1,5 +1,5 @@
 use crate::harness::Harness;
-use crate::objects::incarnation::IncarnationId;
+use crate::objects::incarnation::{IncarnationId, IncarnationName};
 use crate::objects::message::MessageId;
 use crate::objects::task::TaskId;
 use crate::types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
@@ -158,6 +158,13 @@ pub enum Event {
         #[serde(default)]
         adopted: bool,
     },
+    /// What the incarnation is called from this record on: a name, or
+    /// None for the clear. Never unique; the session itself or the
+    /// human names it, and a launch's name rides its registration.
+    IncarnationNamed {
+        incarnation: IncarnationId,
+        name: Option<IncarnationName>,
+    },
     /// A durable addressed message. The sender is the sending
     /// session's registered identity, never authored prose; the body
     /// is the only caller-authored field. Task context may ride
@@ -292,6 +299,12 @@ pub enum Command {
         address: Option<String>,
         #[serde(default)]
         adopted: bool,
+    },
+    /// An agent names only the incarnation its declared scope names;
+    /// the human names any native incarnation.
+    NameIncarnation {
+        incarnation: IncarnationId,
+        name: Option<IncarnationName>,
     },
     /// The sending side: `from` is the registered session's own
     /// identity, matched against the caller's declared scope at the

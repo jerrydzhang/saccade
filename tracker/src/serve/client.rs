@@ -771,18 +771,21 @@ pub fn register_incarnation(
     address: &str,
     adopted: bool,
     harness: crate::Harness,
+    name: Option<&crate::IncarnationName>,
 ) -> Result<(), ClientFail> {
-    post_json_unit(
-        url,
-        "/api/v1/incarnations/register",
-        serde_json::json!({
-            "native_id": native_id,
-            "address": address,
-            "adopted": adopted,
-            "harness": harness,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
+    let mut body = serde_json::json!({
+        "native_id": native_id,
+        "address": address,
+        "adopted": adopted,
+        "harness": harness,
+        "client": env!("CARGO_PKG_VERSION"),
+    });
+    // the name rides only when the launch carries one, so a server
+    // that predates naming still answers an unnamed launch
+    if let Some(name) = name {
+        body["name"] = serde_json::json!(name);
+    }
+    post_json_unit(url, "/api/v1/incarnations/register", body)
 }
 
 /// The association's address moves with a relaunch: the same

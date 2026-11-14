@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 21] = [
+const KINDS: [&str; 22] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -46,6 +46,7 @@ const KINDS: [&str; 21] = [
     "incarnation_registered",
     "saved_session_bound",
     "host_address_assigned",
+    "incarnation_named",
     "message_sent",
     "message_submitted",
 ];
@@ -166,6 +167,14 @@ mod test {
                 adopted: false,
                 // the kebab token rides the same round-trip as the name
                 harness: Harness::ClaudeCode,
+            },
+            Event::IncarnationNamed {
+                incarnation: IncarnationId(RecordId(16)),
+                name: Some(crate::IncarnationName::new("th\u{e9}orie".into()).unwrap()),
+            },
+            Event::IncarnationNamed {
+                incarnation: IncarnationId(RecordId(16)),
+                name: None,
             },
             Event::MessageSent {
                 from: IncarnationId(RecordId(16)),

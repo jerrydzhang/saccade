@@ -8,11 +8,12 @@ import type { ViewPage } from "../src/lib/pages.ts";
 import { NO_WORDS, agentFactsOf, railOf, wordFor, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
 
 function agentsPage(): ViewPage {
-  const agent = (n: number, address: string | null, tasks: string | null) => ({
+  const agent = (n: number, address: string | null, tasks: string | null, name: string | null = null) => ({
     kind: "group" as const,
     location: `i-${n}`,
     content: [
       { kind: "fact" as const, label: "incarnation", value: `i-${n}` },
+      ...(name === null ? [] : [{ kind: "fact" as const, label: "name", value: name }]),
       ...(address === null ? [] : [{ kind: "fact" as const, label: "terminal address", value: address }]),
       { kind: "fact" as const, label: "harness", value: "claude-code" },
       ...(tasks === null ? [] : [{ kind: "fact" as const, label: "tasks", value: tasks }]),
@@ -26,7 +27,7 @@ function agentsPage(): ViewPage {
     content: [
       agent(1, "t10", "t-4 t-9"),
       agent(2, "t11", null),
-      agent(3, "t12", "t-2"),
+      agent(3, "t12", "t-2", "theory"),
       agent(4, null, "t-1"),
       agent(5, "t13", "t-3"),
     ],
@@ -49,8 +50,9 @@ const words: WordsSnapshot = {
 
 test("an agents page restates its incarnations with their terminals and tasks", () => {
   const facts = agentFactsOf(agentsPage());
-  assert.deepEqual(facts[0], { incarnation: "i-1", address: "t10", tasks: ["t-4", "t-9"] });
-  assert.deepEqual(facts[1], { incarnation: "i-2", address: "t11", tasks: [] });
+  assert.deepEqual(facts[0], { incarnation: "i-1", name: null, address: "t10", tasks: ["t-4", "t-9"] });
+  assert.deepEqual(facts[1], { incarnation: "i-2", name: null, address: "t11", tasks: [] });
+  assert.equal(facts[2]?.name, "theory", "a recorded name rides its own fact");
   assert.equal(facts[3]?.address, null);
 });
 
@@ -76,6 +78,11 @@ test("the rail shows running agents only, by Herdr's word in t-14's order, withi
     "no terminal, an ended terminal, or a non-agent terminal never shows",
   );
   assert.equal(saccade.groups[0]?.agents[1]?.msg, "running tests", "the program's own words");
+  assert.deepEqual(
+    saccade.groups[0]?.agents.map((agent) => agent.name),
+    ["theory", null],
+    "a named agent carries its name; an unnamed one shows as its incarnation",
+  );
   assert.equal(saccade.groups[0]?.agents[0]?.msg, null, "nothing shown when nothing was sent");
   assert.deepEqual(rail.projects[0]?.groups, []);
 });
@@ -226,7 +233,7 @@ test("a federating core's machine-first addresses join the tracker's bare ones; 
   assert.equal(wordFor({ "a/t81": word("done"), "b/t81": word("idle") }, "t81"), undefined);
   assert.equal(wordFor({ "other/xt81": word("done") }, "t81"), undefined, "only a whole address after the machine");
   const rail = railOf(
-    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: ["t-4"] }], problem: null }],
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", name: null, address: "t88", tasks: ["t-4"] }], problem: null }],
     { generation: 1, connected: true, words: { "other/t88": word("working") } },
     "pyrimel",
   );

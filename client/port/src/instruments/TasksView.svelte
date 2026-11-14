@@ -154,7 +154,8 @@ agent opens its task here -->
             disabled={agent.tasks.length === 0}
             title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
           >
-            <span class="port-plane-incarnation">{agent.incarnation}</span>
+            {#if agent.name !== null}<span class="port-plane-agent-name">{agent.name}</span>{/if}
+            <span class="port-plane-incarnation" class:port-plane-incarnation-aside={agent.name !== null}>{agent.incarnation}</span>
             <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
             {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
           </button>

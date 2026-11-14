@@ -193,10 +193,11 @@ nothing writes through `/view/v1`.
   repository path; plain read-only host facts, the root stays no-Herdr -
   the view grammar majors and board grammar range, and the page
   families), `agents` (the registered native sessions: one group per
-  session with its terminal address, harness, owned tasks, the workspace
+  session with its recorded name when it carries one, its terminal
+  address, harness, owned tasks, the workspace
   derived from the saved session's own header, and the session's last
   board commit from the scope recorded on each commit; waiting wakes on
-  the registration family, the claims and the commits), `tasks` (the
+  the registration family, the namings, the claims and the commits), `tasks` (the
   pipeline: one table per recorded state - waiting, in flight,
   awaiting judgment, concluded last 24h - each row task, title,
   agents, latest commit, latest revision (rN, the revision that commit

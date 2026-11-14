@@ -8121,6 +8121,216 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
 }
 
 #[test]
+fn the_naming_doors_record_every_name_and_label_the_terminal() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-api-naming-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let db = saccade::paths::state_dir_in(&suite_state(), &dir).join("saccade.db");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // the fake host: every verb's argv lands beside it; the first two
+    // launches answer t1, a later one t2; a label refuses on demand
+    let fake_dir = dir.join("fake");
+    std::fs::create_dir_all(&fake_dir).unwrap();
+    let fake = fake_dir.join("hc");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+printf '%s\n' "$@" >> "$here/argv-$1.log"
+if [ "$1" = label ] && [ -n "${FAKE_LABEL_REFUSES:-}" ]; then
+  printf '{"error":{"kind":"refused","message":"labels are off"}}\n' >&2
+  exit 5
+fi
+if [ "$1" = run ]; then
+  n=$(($(cat "$here/.runs" 2>/dev/null || echo 0) + 1))
+  echo "$n" > "$here/.runs"
+  addr=t1; [ "$n" -gt 2 ] && addr=t2
+  printf '{"address":"%s","cwd":"x","state":"live","turn":0}\n' "$addr"
+  exit 0
+fi
+printf '{}\n'
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (mut serve, url) = spawn_serve(bin, &db, &[], &[]);
+    let pi = dir.join("pi");
+    std::fs::write(&pi, b"#!/bin/sh\n").unwrap();
+    let sac = |args: &[&str], envs: &[(&str, &str)]| {
+        let out = scrubbed(std::process::Command::new(bin))
+            .args(args)
+            .env("SACCADE_SERVER", &url)
+            .env("SACCADE_HERDR", &fake)
+            .env("SACCADE_PI", &pi)
+            .env("SACCADE_REPO", &dir)
+            .envs(envs.iter().copied())
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let world = || {
+        let conn = saccade::db::open_read(&db).unwrap();
+        match saccade::db::load(&conn).unwrap().state {
+            saccade::db::LoadState::Full(world) => world,
+            _ => panic!("the log will not fold"),
+        }
+    };
+    let name_at = |world: &saccade::World, address: &str| {
+        world
+            .incarnations
+            .iter()
+            .filter(|(_, ctx)| ctx.incarnation.address() == Some(address))
+            .map(|(id, ctx)| (*id, ctx.name.as_ref().map(|n| n.as_str().to_string())))
+            .next_back()
+            .expect("a birth carries the address")
+    };
+    let labels = || hc_argv_all(&fake_dir, "label");
+    let ws = workspace.to_str().unwrap();
+
+    // a bad name refuses before the host is ever asked
+    let (ok, _, err) = sac(&["launch", "--workspace", ws, "--name", " padded"], &[]);
+    assert!(!ok, "a padded name refuses");
+    assert!(err.contains("invalid_incarnation_name"), "{err}");
+    assert!(
+        !fake_dir.join("argv-run.log").exists(),
+        "no launch was asked"
+    );
+
+    // a named fresh launch records the name with its birth and labels
+    // the launched terminal
+    let (ok, out, err) = sac(
+        &["launch", "--json", "--workspace", ws, "--name", "theory"],
+        &[],
+    );
+    assert!(ok, "{out}{err}");
+    let reply: Value = serde_json::from_str(&out).expect("the launch face is json");
+    assert_eq!(reply["name"], "theory", "{out}");
+    assert_eq!(reply["name_refusal"], Value::Null, "{out}");
+    assert_eq!(labels(), ["label", "t1", "--json", "name=theory"]);
+    let (first, name) = name_at(&world(), "t1");
+    assert_eq!(name.as_deref(), Some("theory"));
+    let first_seq = first.0.0.to_string();
+    let as_first = [
+        ("SACCADE_ACTOR", "pi"),
+        ("SACCADE_INCARNATION_SEQ", first_seq.as_str()),
+    ];
+
+    // the session reads its own name, then renames itself
+    let (ok, out, err) = sac(&["identity", "--json"], &as_first);
+    assert!(ok, "{out}{err}");
+    assert_eq!(json_of(&out)["name"], "theory", "{out}");
+    let (ok, out, err) = sac(&["name", "empirical"], &as_first);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("is named empirical"), "{out}");
+    assert!(out.contains("label is set on t1"), "{out}");
+    assert_eq!(&labels()[4..], ["label", "t1", "--json", "name=empirical"]);
+    assert_eq!(name_at(&world(), "t1").1.as_deref(), Some("empirical"));
+
+    // the agents page carries the name fact beside the number
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let page = json_of(&body);
+    let group = page["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["kind"] == "group")
+        .expect("the named session's group");
+    assert!(
+        group["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["label"] == "name" && f["value"] == "empirical"),
+        "{body}"
+    );
+
+    // a refused label never fails the naming: the evidence rides the
+    // face and the name is recorded
+    let (ok, out, err) = sac(
+        &["name", "--json", "theory"],
+        &[as_first[0], as_first[1], ("FAKE_LABEL_REFUSES", "1")],
+    );
+    assert!(ok, "{out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(reply["name"], "theory");
+    assert_eq!(reply["label"]["address"], "t1");
+    assert!(
+        reply["label"]["refusal"]
+            .as_str()
+            .is_some_and(|r| r.contains("labels are off")),
+        "{out}"
+    );
+    assert_eq!(name_at(&world(), "t1").1.as_deref(), Some("theory"));
+
+    // a second session at the same terminal supersedes the first: names
+    // need not be unique, and the superseded holder's old address is
+    // never labeled again
+    let (ok, out, err) = sac(&["launch", "--workspace", ws, "--name", "theory"], &[]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("named theory"), "{out}");
+    let (second, name) = name_at(&world(), "t1");
+    assert_ne!(second, first);
+    assert_eq!(name.as_deref(), Some("theory"));
+    let before = labels().len();
+    let (ok, out, err) = sac(&["name", "--clear"], &as_first);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("no live terminal address"), "{out}");
+    assert_eq!(
+        labels().len(),
+        before,
+        "the superseded address is not labeled"
+    );
+    assert_eq!(world().incarnations[&first].name, None);
+
+    // an agent names only its own incarnation
+    let second_num = format!("i-{}", world().incarnation_num(second).unwrap());
+    let (ok, _, err) = sac(
+        &["name", "--incarnation", &second_num, "taken over"],
+        &as_first,
+    );
+    assert!(!ok, "an agent cannot name another session");
+    assert!(err.contains("not_own_incarnation"), "{err}");
+    // the human names any session, the clear included, through the wire
+    let (status, body) = post_command(
+        &url,
+        &envelope(
+            "jerry",
+            "human",
+            json!({"name_incarnation": {"incarnation": second.0.0, "name": null}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(world().incarnations[&second].name, None);
+    let namings = world()
+        .incarnations
+        .values()
+        .filter(|ctx| ctx.name.is_some())
+        .count();
+    assert_eq!(namings, 0);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = serve.kill();
+}
+
+/// Every argv line the fake hc logged for one verb, the op line kept.
+fn hc_argv_all(bin_dir: &std::path::Path, verb: &str) -> Vec<String> {
+    std::fs::read_to_string(bin_dir.join(format!("argv-{verb}.log")))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
 fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("root-bind");

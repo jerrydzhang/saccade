@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::Reject;
 use crate::objects::task::TaskId;
 use crate::store::RecordId;
 use crate::types::pointers::{NativeSessionId, SessionLocator, WorktreePath};
@@ -95,6 +96,42 @@ pub struct IncarnationContext {
     pub incarnation: Incarnation,
     /// Event time of the birth record
     pub born_at: u64,
+    /// The latest recorded name, None before any naming or after a
+    /// clear; the log keeps every earlier one.
+    pub name: Option<IncarnationName>,
+}
+
+/// What an incarnation is called: one line of text, never unique -
+/// same-named incarnations are told apart by id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct IncarnationName(String);
+
+impl IncarnationName {
+    pub fn new(text: String) -> Result<Self, Reject> {
+        if text.trim().is_empty() || text.trim() != text || text.chars().any(char::is_control) {
+            return Err(Reject::InvalidIncarnationName);
+        }
+        Ok(Self(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for IncarnationName {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        IncarnationName::new(text).map_err(|e| e.to_string())
+    }
+}
+
+impl From<IncarnationName> for String {
+    fn from(name: IncarnationName) -> String {
+        name.0
+    }
 }
 
 /// The law of one live holder: when an attach assigns an address
@@ -108,4 +145,25 @@ pub struct Supersession {
     pub by: IncarnationId,
     pub at: RecordId,
     pub address: String,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn a_name_is_one_trimmed_line_and_unicode_stays_data() {
+        for bad in ["", "   ", " theory", "theory ", "two\nlines", "tab\there"] {
+            assert!(
+                matches!(
+                    IncarnationName::new(bad.into()),
+                    Err(Reject::InvalidIncarnationName)
+                ),
+                "{bad:?} must refuse"
+            );
+        }
+        for good in ["theory", "empirical agent", "th\u{e9}orie", "a=b"] {
+            assert_eq!(IncarnationName::new(good.into()).unwrap().as_str(), good);
+        }
+    }
 }

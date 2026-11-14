@@ -63,6 +63,9 @@ pub enum Reason {
     /// A bind names an incarnation that already carries its saved
     /// locator: the attach completes a launch-door birth exactly once.
     LocatorAlreadyBound,
+    /// An agent-tier naming names an incarnation other than the one
+    /// its declared scope names.
+    NotOwnIncarnation,
     /// A message's reply or submit names a message the record never
     /// birthed, or a submission by an incarnation it does not
     /// address.
@@ -116,6 +119,7 @@ impl From<Reason> for Reject {
             Reason::InvalidWorkspaceId => Reject::InvalidWorkspaceId,
             Reason::WorkspaceStageMismatch => Reject::WorkspaceStageMismatch,
             Reason::LocatorAlreadyBound => Reject::LocatorAlreadyBound,
+            Reason::NotOwnIncarnation => Reject::NotOwnIncarnation,
         }
     }
 }
@@ -648,6 +652,7 @@ impl World {
                             workspace: worktree.clone(),
                         },
                         born_at: record.timestamp,
+                        name: None,
                     },
                 );
                 task_ctx.last_updated = record.id;
@@ -813,6 +818,7 @@ impl World {
                             harness,
                         },
                         born_at: record.timestamp,
+                        name: None,
                     },
                 );
             }
@@ -866,6 +872,28 @@ impl World {
                 };
                 *carried = address.clone();
                 *carried_kind = adopted;
+            }
+            Event::IncarnationNamed {
+                incarnation,
+                ref name,
+            } => {
+                // the session names itself, the human any session; the
+                // incarnation must stand and be native
+                if record.context.tier == Tier::Agent
+                    && record.context.scope.as_ref().and_then(|s| s.incarnation)
+                        != Some(incarnation)
+                {
+                    return Err(Reason::NotOwnIncarnation);
+                }
+                let ctx = self
+                    .incarnations
+                    .get_mut(&incarnation)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                if ctx.incarnation.native_id().is_none() {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                self.provenance.insert(record.id, None);
+                ctx.name = name.clone();
             }
             Event::MessageSent {
                 from,
@@ -1322,6 +1350,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::LocatorAlreadyBound),
             Reject::LocatorAlreadyBound
+        ));
+        assert!(matches!(
+            Reject::from(Reason::NotOwnIncarnation),
+            Reject::NotOwnIncarnation
         ));
     }
 
@@ -2595,6 +2627,90 @@ mod test {
             4,
         );
         assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+    }
+
+    fn named(id: usize, name: Option<&str>) -> Command {
+        Command::NameIncarnation {
+            incarnation: IncarnationId(RecordId(id)),
+            name: name.map(|n| crate::IncarnationName::new(n.into()).unwrap()),
+        }
+    }
+
+    /// A name is the latest naming record's: the session names itself,
+    /// the human any native session, a clear removes it, and names
+    /// never need be unique.
+    #[test]
+    fn a_name_is_the_latest_naming_and_never_unique() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute_system(registered("bbbb2222"), 1).unwrap();
+        let (first, second) = (IncarnationId(RecordId(0)), IncarnationId(RecordId(1)));
+        let name_of = |log: &Log, id| {
+            log.world().incarnations[&id]
+                .name
+                .as_ref()
+                .map(|n: &crate::IncarnationName| n.as_str().to_string())
+        };
+        // a registration carries no name
+        assert_eq!(name_of(&log, first), None);
+
+        log.execute(native_session(0), named(0, Some("theory")), 2)
+            .unwrap();
+        assert_eq!(name_of(&log, first).as_deref(), Some("theory"));
+        // the human renames any session, to a name another one carries
+        log.execute(human(), named(1, Some("theory")), 3).unwrap();
+        assert_eq!(name_of(&log, second).as_deref(), Some("theory"));
+        log.execute(human(), named(0, Some("empirical")), 4)
+            .unwrap();
+        assert_eq!(name_of(&log, first).as_deref(), Some("empirical"));
+        // the clear is a naming too, and the log keeps every earlier one
+        log.execute(native_session(1), named(1, None), 5).unwrap();
+        assert_eq!(name_of(&log, second), None);
+        let namings = log
+            .records()
+            .iter()
+            .filter(|r| matches!(r.event, Event::IncarnationNamed { .. }))
+            .count();
+        assert_eq!(namings, 4);
+        // the launch machinery names the birth it registered
+        log.execute_system(named(1, Some("launched")), 6).unwrap();
+        assert_eq!(name_of(&log, second).as_deref(), Some("launched"));
+
+        // an agent names only its own declared incarnation
+        for ctx in [native_session(1), agent()] {
+            let refused = log.execute(ctx, named(0, Some("taken over")), 7);
+            assert!(matches!(refused, Err(Reject::NotOwnIncarnation)));
+        }
+        assert_eq!(name_of(&log, first).as_deref(), Some("empirical"));
+        // an unborn reference and a historical establishment are no
+        // naming target
+        assert!(matches!(
+            log.execute(human(), named(9, Some("ghost")), 8),
+            Err(Reject::InvalidIncarnationId)
+        ));
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("story"),
+            },
+            9,
+        )
+        .unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            10,
+        )
+        .unwrap();
+        let established = IncarnationId(RecordId(log.records().len() - 1));
+        assert!(matches!(
+            log.execute(human(), named(established.0.0, Some("history")), 11),
+            Err(Reject::InvalidIncarnationId)
+        ));
     }
 
     /// A message's guards: the sender is the session's own registered
