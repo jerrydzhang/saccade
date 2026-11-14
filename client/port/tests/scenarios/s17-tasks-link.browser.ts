@@ -7,7 +7,7 @@
 // birth needs a second live webview, native S18's; here a second window
 // exists, so the first Enter asks and the answer records the link.)
 import { expect, test } from "./kit/browser.ts";
-import { answerAsk, spec, submitLocation, whenBound } from "./kit/helpers.ts";
+import { answerAsk, whenBound, openPlane } from "./kit/helpers.ts";
 import type { AppDriver } from "./kit/driver.ts";
 
 async function rowMenu(app: AppDriver): Promise<void> {
@@ -21,7 +21,7 @@ async function rowMenu(app: AppDriver): Promise<void> {
 
 test("S17 the row menu is o i w y; a second Enter reuses the link; the list holds", async ({ bridged, tracker }) => {
   const { app, shell } = await bridged({ others: ["w-b"] });
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null).toBe("loaded");
   await whenBound(app);
   const depth = (await app.readout()).trail.depth;

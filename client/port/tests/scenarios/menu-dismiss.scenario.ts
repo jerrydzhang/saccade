@@ -5,7 +5,7 @@
 // right-click only moved it, and scrolling carried it off screen. The
 // session had the outside-pointer close; nothing on the page called it.
 import { expect, test } from "#scenario";
-import { longBoard, openLocation, spec, submitLocation } from "./kit/helpers.ts";
+import { longBoard, openLocation, spec, openPlane } from "./kit/helpers.ts";
 import type { AppDriver } from "./kit/driver.ts";
 
 async function twoVisibleParts(app: AppDriver): Promise<[string, string]> {
@@ -47,7 +47,7 @@ test("scrolling the board with the wheel closes the open menu", async ({ app, tr
 });
 
 test("a left click outside a task row's menu closes it", { tags: ["native"] }, async ({ app, tracker }) => {
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.rows.length ?? 0).toBeGreaterThan(1);
   await app.press("Escape");
   const { rows, groups } = (await app.readout()).tasks!;

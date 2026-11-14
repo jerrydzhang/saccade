@@ -304,7 +304,7 @@ export async function trackerCoreMachine(): Promise<string> {
   if (homeTracker() === null && serverHost() === null) {
     throw new SourceUnavailableError(
       "lane-unavailable",
-      "a bare path reads on the tracker's machine; no tracker has been reached from this device yet - type a tracker location with its host once (host:8811/saccade/tasks), or set tracker-machine in the client configuration",
+      "a bare path reads on the tracker's machine; no tracker has been reached from this device yet - add one on the plane (a, then host:8811/saccade) or type a board location with its host once (host:8811/saccade/t-1), or set tracker-machine in the client configuration",
     );
   }
   const hub = await trackerIsThisMachine(async () => ownId);

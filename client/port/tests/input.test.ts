@@ -245,11 +245,11 @@ test("the picker controller: Shift+Enter submits to the new-window path, Enter t
     (spec) => fresh.push(spec),
   );
   picker.open();
-  picker.submit("repo/tasks", true);
+  picker.submit("repo/t-1", true);
   assert.equal(picker.snapshot().open, false, "the picker closes either way");
   picker.open();
   picker.submit("repo/t-2");
-  assert.deepEqual(fresh, ["repo/tasks"]);
+  assert.deepEqual(fresh, ["repo/t-1"]);
   assert.deepEqual(here, ["repo/t-2"]);
 });
 

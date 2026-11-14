@@ -139,13 +139,19 @@ export type PortObservation = {
   /** The window's board reading layout (lib/board/reading-layout.ts):
    * the text zoom and the column-width scale. */
   reading: Readonly<{ zoom: number; width: number }>;
-  /** The tasks surface's shown page (the pipeline): the rows with
-   * their tasks and links, the label selection, and the groups'
-   * titles. Null on every other surface. */
+  /** The tasks surface - the control plane (t-54) - and its shown
+   * project's page (the pipeline): the rows with their tasks and
+   * links, the label selection, the groups' titles, and the add
+   * field. Null on every other surface. invalid: the shown project's
+   * list could not be read (problem says why). */
   tasks: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
     asked: string | null;
     location: string | null;
+    /** The project the plane shows; null when none is known. */
+    project: string | null;
+    problem: string | null;
+    add: Readonly<{ open: boolean; value: string; problem: string | null }>;
     rows: readonly {
       part: string;
       task: string;
@@ -286,12 +292,17 @@ export function tasksViewOf(
   const controller = (state.kind === "alive" ? state.content : null);
   const pair = controller?.kind === "available" ? controller.value
     : controller?.kind === "pending" ? controller.previous : null;
-  const face = pair?.props["controller"] as Pick<TasksUI, "getSelection"> | undefined;
+  const face = pair?.props["controller"] as Pick<TasksUI, "getSelection" | "addView"> | undefined;
   const selection = typeof face?.getSelection === "function" ? face.getSelection() : null;
+  const add = typeof face?.addView === "function" ? face.addView() : { open: false, value: "", problem: null };
+  const status = statusOf(state);
   return {
-    status: statusOf(state),
+    status: status === "loaded" && frame?.status === "invalid" ? "invalid" : status,
     asked: frame ? frame.asked : null,
     location: frame ? frame.location : null,
+    project: frame ? frame.project : null,
+    problem: frame ? frame.problem : null,
+    add: { open: add.open, value: add.value, problem: add.problem },
     rows,
     selection,
     groups,

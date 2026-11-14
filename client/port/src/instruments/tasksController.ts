@@ -1,8 +1,10 @@
-// The Tasks instrument's controller (svelte-free): the tracker's
-// pipeline page (the "tasks" location of a tracker location) served
-// as rows with identities, label selection over visible rows, the
-// task-row act menu, and the return places scenario 17 needs - the
-// departed row's identity plus viewport offset, restored by Back.
+// The Tasks instrument's controller (svelte-free): the control
+// plane (t-54: the "plane" location, which names no tracker) showing
+// one project's pipeline page - the project is the window's own state,
+// carried in the plane address's path - served as rows with
+// identities, label selection over visible rows, the task-row act
+// menu, and the return places scenario 17 needs - the departed row's
+// identity plus viewport offset, restored by Back.
 //
 // The pattern is the Board instrument's, end to end: the controller
 // loads through the source/transport layer (TrackerSource's
@@ -17,7 +19,7 @@
 // rows changed.
 //
 // The control plane (t-48): beside the list, a rail of the projects
-// this device has reached (switching opens a project's tasks here) and,
+// this device has reached (switching shows a project's tasks here) and,
 // under each, its running agents grouped by Herdr's word - the agents
 // pages joined with the shell's Herdr word feed (lib/tasks/rail.ts).
 // The rail is the instrument's chrome, published to its component
@@ -29,12 +31,17 @@
 // label runs the same acts. Rows label first, so a row's label is the
 // one it had before the rail.
 //
+// Registering a project is its own act (t-54, lib/tasks/add.ts): `a`
+// opens the plane's add field, Enter registers host:port/name and the
+// rail lists it; nothing opens. With no project known, the plane says
+// so and names `a` - an empty plane, never an error.
+//
 // Deliberately not here (recorded): find (a facility of a shown
 // revision - a task list is not one) and any row cursor (j/k is pure
 // scrolling, the scenario 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
-import { createLoadScope, failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
+import { createLoadScope, failureIssue, readyFrame } from "../lib/instruments/scaffold.ts";
 import { knownIssue } from "../lib/contracts/buffer.ts";
 import type {
   KnownIssue,
@@ -61,10 +68,10 @@ import type { AnchorData, AnchorLocation } from "../lib/contracts/places.ts";
 import type { InstrumentProps } from "../lib/instruments/contract.ts";
 import type { StructuredIssue } from "../lib/board/errors.ts";
 import { SourceUnavailableError } from "../lib/board/errors.ts";
-import { instrumentPath } from "../lib/location.ts";
-import { formatLocation } from "../lib/location.ts";
+import { PLANE_MACHINE, formatLocation, isPlane } from "../lib/location.ts";
+import { createAddProject, type AddView } from "../lib/tasks/add.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
-import { TrackerSource, forgetTracker, homeTracker, knownTrackers } from "../lib/tracker.ts";
+import { TrackerSource, forgetTracker, homeTracker, knownTrackers, registerTracker } from "../lib/tracker.ts";
 import { tauriInvoke } from "../lib/sources.ts";
 import {
   NO_WORDS,
@@ -96,13 +103,20 @@ export type TasksData = Readonly<{
   generation: number;
   /** The location the open ASKED for, formatted. */
   asked: string;
-  /** The location that answered (the tasks location of the tracker). */
+  /** The location that answered: the plane. */
   location: string;
-  /** The raw location the shown frame was read at: the row acts
-   * compose their specs against this machine. Null when nothing
-   * resolved. */
+  /** The project the plane shows (its tracker's name), the window's
+   * own state; null when no project is known yet. */
+  project: string | null;
+  /** The raw location the shown list was read at (the project's
+   * tracker): the row acts compose their specs against this machine.
+   * Null when nothing resolved. */
   resolved: Location | null;
+  /** invalid: the shown project's list could not be read (problem
+   * says why); the rail stays, so another project is one act away. */
   status: "loading" | "loaded" | "invalid";
+  /** Why the shown project's list could not be read; null otherwise. */
+  problem: string | null;
   page: TasksPageModel | null;
   /** The page's selectable targets: the rows, with their task ids and
    * links (TaskTarget is a SelectableTarget plus the act facts). */
@@ -132,6 +146,10 @@ export interface TasksUI {
   setTaskPorts(ports: TaskPorts): void;
   /** The control plane's rail: projects and their running agents. */
   subscribeRail(observer: (rail: Rail) => void): () => void;
+  /** The add field (t-54): its live view, and the typing path. */
+  subscribeAdd(observer: (view: AddView) => void): () => void;
+  addView(): AddView;
+  typeAdd(value: string): void;
 }
 
 /** How often a shown list re-reads its page (a named tunable,
@@ -142,8 +160,10 @@ const EMPTY_FRAME: TasksData = {
   generation: 0,
   asked: "",
   location: "",
+  project: null,
   resolved: null,
   status: "loading",
+  problem: null,
   page: null,
   targets: [],
   errors: [],
@@ -156,7 +176,6 @@ function lastFrameStillCarries(model: TasksPageModel, task: string): boolean {
 
 export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachment<TasksUI, TaskAnchor> {
   const scope = createLoadScope<TasksData>(EMPTY_FRAME);
-  let resolved: Location | null = null;
 
   // The follow (lib/instruments/follow.ts): the asked address while a
   // list from a tracker is shown, and the shown page's content
@@ -170,7 +189,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     intervalMs: TASKS_FOLLOW_POLL_MS,
     async current(address) {
       try {
-        const source = sourceFor(address.machine);
+        const source = sourceFor(`tracker:${address.path}`);
         if (!(source instanceof TrackerSource)) return null;
         return JSON.stringify(tasksPageOf(await source.instrumentPage("tasks")));
       } catch {
@@ -203,8 +222,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   let railTimer: ReturnType<typeof setTimeout> | null = null;
 
   function currentProject(): string | null {
-    const machine = scope.frame().resolved?.machine ?? null;
-    return machine !== null && machine.startsWith("tracker:") ? machine.slice("tracker:".length) : null;
+    return scope.frame().project;
   }
 
   // projects forgotten this session: the shown one stays off the rail
@@ -341,11 +359,28 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     notifyRail();
   }
 
+  // -- the add field (t-54): registering opens nothing ----------------
+  const addObservers = new Set<(view: AddView) => void>();
+  const add = createAddProject({
+    capture: (context) => buffer.interactions.capture(context),
+    register(tracker, host) {
+      registerTracker(tracker, host);
+      forgotten.delete(tracker);
+      notifyRail();
+      // its agents read now rather than at the next poll
+      if (railRunning) void readAgentPages().then(() => railRunning && notifyRail());
+    },
+  });
+  add.subscribe((view) => {
+    for (const observer of [...addObservers]) observer(view);
+  });
+
   const tasksMenu: TasksMenu = createTasksMenu({
     machine,
     rowLink: (part) => taskRowOf(scope.frame().page ?? { groups: [] }, part)?.location ?? null,
     railTarget,
     forget,
+    addProject: () => add.enter(),
     ports: () => ports,
     capture: (context) => buffer.interactions.capture(context),
   });
@@ -413,7 +448,28 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
         railObservers.delete(observer);
       };
     },
+    subscribeAdd(observer) {
+      addObservers.add(observer);
+      observer(add.view());
+      return () => {
+        addObservers.delete(observer);
+      };
+    },
+    addView: () => add.view(),
+    typeAdd: (value) => add.type(value),
   };
+
+  /** The project a plane address shows: the one it names, else the
+   * one this plane already shows, else the home, else any reached -
+   * only a project this device still knows, for a bare "plane". */
+  function projectFor(address: Address): string | null {
+    const named = address.path.trim();
+    if (named.length > 0) return named;
+    const known = knownTrackers();
+    const current = currentProject();
+    if (current !== null && known[current] !== undefined) return current;
+    return homeTracker() ?? Object.keys(known)[0] ?? null;
+  }
 
   async function load(address: Address): Promise<PreparedContent<TasksData>> {
     if (scope.isDestroyed())
@@ -424,43 +480,63 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     const token = scope.begin();
     const asked = formatLocation({ machine: address.machine, path: address.path });
     scope.setAsked(asked);
-    const location: Location = { machine: address.machine, path: address.path };
-    const page = instrumentPath(location.path);
-    if (page !== "tasks") {
-      // this buffer serves the tasks page; other entry pages are other
-      // instruments (the agents page is a later slice) - the gap is
-      // named, never guessed
-      const message =
-        page === null
-          ? `${location.path} is not an instrument page; this surface serves a tracker's tasks page`
-          : `the ${page} page has no instrument in this build yet`;
-      return { kind: "failed", issue: failureIssue("asset-denied", message) };
+    if (!isPlane(address)) {
+      // this buffer serves the control plane; a tracker's pages are
+      // no location of their own (t-54) - the gap is named, never
+      // guessed
+      return {
+        kind: "failed",
+        issue: failureIssue("asset-denied", `${asked} is not the plane; this surface serves the control plane`),
+      };
     }
+    const project = projectFor(address);
+    const adoptEmpty = (shown: string | null, problem: string | null): PreparedContent<TasksData> => {
+      shownSignature = null;
+      selectedTask = null;
+      startRail();
+      scope.adopt({
+        generation: token,
+        asked: scope.asked(),
+        location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
+        project: shown,
+        resolved: shown === null ? null : { machine: `tracker:${shown}`, path: "tasks" },
+        status: problem === null ? "loaded" : "invalid",
+        problem,
+        page: null,
+        targets: [],
+        errors: [],
+      });
+      notifyRail();
+      return { kind: "ready", value: scope.frame() };
+    };
+    // no project known yet: the plane says how to add one (a), never
+    // an error
+    if (project === null) {
+      return adoptEmpty(null, null);
+    }
+    const location: Location = { machine: `tracker:${project}`, path: "tasks" };
+    const problemOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
     let source: unknown;
     try {
       source = sourceFor(location.machine);
     } catch (error) {
       if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
-      resolved = null;
-      return { kind: "failed", issue: issueOf(error) };
+      return adoptEmpty(project, problemOf(error));
     }
     if (!(source instanceof TrackerSource)) {
-      return {
-        kind: "failed",
-        issue: failureIssue("asset-denied", `'${location.machine}' is not a tracker`),
-      };
+      return adoptEmpty(project, `'${project}' is not a tracker`);
     }
     let viewPage;
     try {
       viewPage = await source.instrumentPage("tasks");
     } catch (error) {
       if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
-      resolved = null;
-      return { kind: "failed", issue: issueOf(error) };
+      // the shown project is unreachable: the plane keeps its rail
+      // and says why, so another project stays one act away
+      return adoptEmpty(project, problemOf(error));
     }
     if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
     const model = tasksPageOf(viewPage);
-    resolved = location;
     shownSignature = JSON.stringify(model);
     // scenario 12's identity rule: a selection whose task left the
     // page clears - never a silent neighbour
@@ -471,9 +547,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     scope.adopt({
       generation: token,
       asked: scope.asked(),
-      location: formatLocation(location),
+      location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
+      project,
       resolved: location,
       status: "loaded",
+      problem: null,
       page: model,
       targets: tasksTargetsOf(model),
       errors: [],
@@ -485,9 +563,9 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
 
   const places: ContentPlaces<TaskAnchor> = {
     captureDisplayed(viewport: ViewportMetrics): ContentCapture<TaskAnchor> {
-      const address: Address = resolved
-        ? { machine: resolved.machine, path: resolved.path }
-        : { machine: "", path: "" };
+      // the plane's address carries the project it shows: Back
+      // returns to that project, a relaunch reopens it
+      const address: Address = { machine: PLANE_MACHINE, path: scope.frame().project ?? "" };
       // The reading anchor (the hybrid default, r49): the row the
       // reading position sits inside, else the default position.
       // Geometry is live measurement; a row with no measurable
@@ -517,8 +595,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
         const prepared = await load(address);
         return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
       });
-      if (!scope.isDestroyed() && intent === openIntent && address.machine.startsWith("tracker:")) {
-        followAddress = { ...address };
+      const shown = scope.frame().project;
+      // a shown project follows even while unreachable: its list
+      // returns when its tracker answers again
+      if (!scope.isDestroyed() && intent === openIntent && shown !== null) {
+        followAddress = { machine: PLANE_MACHINE, path: shown };
         follow.start(followAddress);
       }
       return outcome;
@@ -558,6 +639,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     scrollToTop: () => buffer.viewport.start(),
     scrollToBottom: () => buffer.viewport.end(),
     enterSelect: () => selectSession.enter(),
+    addProject: () => add.enter(),
   });
 
   return {
@@ -569,6 +651,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       follow.stop();
       stopRail();
       selectSession.exit();
+      add.close();
       tasksMenu.session.outsidePointerDown();
     },
   };

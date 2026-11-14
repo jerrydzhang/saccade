@@ -127,7 +127,7 @@ export function trackerBase(name: string): URL {
   if (!host || host.trim().length === 0) {
     throw new SourceUnavailableError(
       "lane-unavailable",
-      `tracker '${name}' has not been reached from this device; type its location once with the host, e.g. host:8811/${name}/tasks`,
+      `tracker '${name}' has not been reached from this device; add it on the plane (a, then host:8811/${name}) or type one of its boards once with the host, e.g. host:8811/${name}/t-1`,
     );
   }
   return baseOrRefusal(host, `the host for tracker '${name}'`);
@@ -141,7 +141,7 @@ export function serverBase(): URL {
   if (!host || host.trim().length === 0) {
     throw new SourceUnavailableError(
       "lane-unavailable",
-      "no tracker reached yet; type a location with its host once, e.g. host:8811/saccade/tasks",
+      "no tracker reached yet; add one on the plane (a, then host:8811/saccade) or type a board location with its host once, e.g. host:8811/saccade/t-1",
     );
   }
   return baseOrRefusal(host, "the tracker server");

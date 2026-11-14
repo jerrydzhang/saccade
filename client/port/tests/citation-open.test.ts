@@ -36,6 +36,37 @@ test("the colon join of a tracker machine is not a location", () => {
   assert.equal(parseOpenSpec("tracker:seedtracker:t-0@r1"), null);
 });
 
+// The control plane's address (t-54): "plane" names no tracker; a
+// tracker's pipeline is no location of its own, with no alias; a
+// machine named plane is still reached as plane:/path.
+import { isPlane, projectAddress } from "../src/lib/location.ts";
+
+test("plane is the control plane's location and names no tracker", () => {
+  assert.deepEqual(parseLocation("plane"), { machine: "plane", path: "" });
+  assert.equal(formatLocation({ machine: "plane", path: "" }), "plane");
+  // the project it shows rides the address, never the location string
+  assert.equal(formatLocation({ machine: "plane", path: "saccade" }), "plane");
+  assert.ok(isPlane({ machine: "plane", path: "saccade" }));
+  assert.ok(!isPlane({ machine: "plane", path: "/etc/board.yaml" }), "a machine named plane keeps its paths");
+  assert.deepEqual(parseLocation("plane:/x/board.yaml"), { machine: "plane", path: "/x/board.yaml" });
+});
+
+test("a tracker's tasks page is no location, bare or with its host", () => {
+  assert.equal(parseLocation("saccade/tasks"), null);
+  assert.equal(parseOpenSpec("localhost:8811/saccade/tasks"), null);
+  // board locations keep both forms
+  assert.deepEqual(parseLocation("localhost:8813/pyrimel/t-3"), { machine: "tracker:pyrimel", path: "t-3" });
+});
+
+test("the plane's add field takes host[:port]/name; the port defaults to sac serve's", () => {
+  assert.deepEqual(projectAddress("localhost:8813/pyrimel"), { host: "localhost:8813", tracker: "pyrimel" });
+  assert.deepEqual(projectAddress(" t81/saccade/ "), { host: "t81:8811", tracker: "saccade" });
+  assert.deepEqual(projectAddress("[::1]:8812/repo"), { host: "[::1]:8812", tracker: "repo" });
+  assert.equal(projectAddress("saccade"), null);
+  assert.equal(projectAddress("localhost:8813/pyrimel/t-3"), null, "a board location is the picker's");
+  assert.equal(projectAddress(""), null);
+});
+
 // The citation span's attributes (the S08 anchor finding): the select
 // path rides the span so hydration's link opens the citation anchored
 // at the named part - display text alone loses the anchor.

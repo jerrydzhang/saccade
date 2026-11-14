@@ -237,6 +237,24 @@ body {
   font-size: 0.85em;
 }
 
+.port-plane-add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+.port-plane-add input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--port-color-muted);
+  padding: 0.125rem 0;
+  min-width: 0;
+}
+
 /* the tasks stage: the label overlay's positioning context, exactly
  * the host's box */
 .port-tasks-stage {
