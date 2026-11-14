@@ -1900,6 +1900,153 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
 }
 
 #[test]
+fn board_size_refusals_name_the_total_and_the_request_limit() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("board-size");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    saccade::boards::git_command()
+        .args(["init", "--quiet", project.to_str().unwrap()])
+        .output()
+        .expect("git init");
+    let (mut serve, url) = spawn_serve(
+        bin,
+        scratch.db.as_path(),
+        &["--repo", project.to_str().unwrap()],
+        &[],
+    );
+    let sac = |args: &[&str]| {
+        let out = scrubbed(std::process::Command::new(bin))
+            .arg("--repo")
+            .arg(&project)
+            .arg("--server")
+            .arg(&url)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let figure = |seed: u8, len: usize| -> Vec<u8> {
+        (0..len)
+            .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+            .collect()
+    };
+    // a working directory naming each figure; the answer is the files' total
+    let stage = |dir: &Path, figures: &[(&str, Vec<u8>)]| -> usize {
+        let mut board = String::from("grammar: 1\ntask: t-0\ncontent:\n  - text: the survey\n");
+        let mut total = 0;
+        for (path, bytes) in figures {
+            std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(path), bytes).unwrap();
+            total += bytes.len();
+            board.push_str(&format!(
+                "  - figure:\n      input: {path}\n      caption: {path}\n"
+            ));
+        }
+        std::fs::write(dir.join("board.yaml"), &board).unwrap();
+        total + board.len()
+    };
+    let (ok, _, err) = sac(&["create", "task", "show the survey"]);
+    assert!(ok, "{err}");
+    let dir = project.join("survey");
+    let (ok, _, err) = sac(&["board", "edit", "t-0", dir.to_str().unwrap()]);
+    assert!(ok, "{err}");
+
+    // the reported board (a 1,987,615-byte file) beside one at the per-file bound publishes
+    let figures = [
+        ("figures/ux-study.png", figure(1, 1_987_615)),
+        ("figures/survey-map.png", figure(2, 8 * 1024 * 1024)),
+    ];
+    stage(&dir, &figures);
+    let (ok, out, err) = sac(&[
+        "board",
+        "commit",
+        "t-0",
+        dir.to_str().unwrap(),
+        "-m",
+        "the survey",
+    ]);
+    assert!(ok, "the board within one request publishes: {err}");
+    assert!(out.contains("published t-0@r1"), "{out}");
+    // and reads back whole
+    let back = project.join("survey-back");
+    let (ok, _, err) = sac(&["board", "edit", "t-0", back.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    for (path, bytes) in &figures {
+        assert!(
+            std::fs::read(back.join(path)).unwrap() == *bytes,
+            "{path} round-trips"
+        );
+    }
+
+    // a board past one request: check warns with the total, commit refuses naming it and the limit
+    let big = [
+        ("figures/a.png", figure(3, 7_000_000)),
+        ("figures/b.png", figure(4, 7_000_000)),
+        ("figures/c.png", figure(5, 7_000_000)),
+        ("figures/d.png", figure(6, 7_000_000)),
+    ];
+    let total = stage(&dir, &big);
+    let (ok, out, err) = sac(&["board", "check", dir.to_str().unwrap()]);
+    assert!(ok, "the warning does not fail the check: {err}");
+    assert!(
+        out.contains("warning") && out.contains(&total.to_string()),
+        "{out}"
+    );
+    let (ok, _, err) = sac(&[
+        "board",
+        "commit",
+        "t-0",
+        dir.to_str().unwrap(),
+        "-m",
+        "too much",
+    ]);
+    assert!(!ok, "the oversized request refuses");
+    assert!(
+        err.contains(&total.to_string()) && err.contains("per request"),
+        "{err}"
+    );
+    assert!(!err.contains("malformed_response"), "{err}");
+
+    // a body just past the limit refuses in the error envelope
+    let mut response = ureq::post(&format!("{url}/api/v1/boards/commit"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .content_type("application/json")
+        .send(" ".repeat(32 * 1024 * 1024 + 1).as_str())
+        .expect("the server answers");
+    let status = response.status().as_u16();
+    let body = response.body_mut().read_to_string().unwrap();
+    assert_eq!(status, 413, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        json!("request_too_large"),
+        "{body}"
+    );
+
+    // a non-JSON refusal surfaces with its status and text
+    let error =
+        saccade::serve::client::board_get_component(&url, 0, None, "/content/0&revision=zz")
+            .err()
+            .expect("the bad query refuses");
+    let shown = format!("{error:?}");
+    assert!(!shown.contains("malformed_response"), "{shown}");
+    assert!(
+        shown.contains("400") && shown.contains("revision"),
+        "{shown}"
+    );
+
+    serve.kill().unwrap();
+    let _ = serve.wait();
+}
+
+#[test]
 fn omitted_prose_refuses_without_a_terminal_and_names_the_move() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("prose-door");

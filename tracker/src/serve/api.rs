@@ -853,10 +853,19 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/diff", get(board_diff))
         .route("/api/v1/boards/log", get(board_log))
         .route("/api/v1/boards/search", post(board_search))
-        .route("/api/v1/boards/checkpoint", post(board_checkpoint))
-        .route("/api/v1/boards/commit", post(board_commit))
+        .route(
+            "/api/v1/boards/checkpoint",
+            post(board_checkpoint).layer(board_body_limit()),
+        )
+        .route(
+            "/api/v1/boards/commit",
+            post(board_commit).layer(board_body_limit()),
+        )
         .route("/api/v1/boards/discard", post(board_discard))
-        .route("/api/v1/boards/update", post(board_update))
+        .route(
+            "/api/v1/boards/update",
+            post(board_update).layer(board_body_limit()),
+        )
         .route("/api/v1/version", get(version))
         // the pages: the instruments' read surface, one door per route
         // tail, every answer a view document or raw file bytes
@@ -3170,7 +3179,33 @@ use crate::serve::board_wire::{
     DiffQuery, DiffReply, DiscardReply, DiscardRequest, EditQuery, EditReply, GetQuery, GetReply,
     MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
 };
+use axum::extract::rejection::BytesRejection;
 use base64::Engine as _;
+
+/// The board doors that carry a whole board take one request's limit.
+fn board_body_limit() -> axum::extract::DefaultBodyLimit {
+    axum::extract::DefaultBodyLimit::max(crate::serve::board_wire::BOARD_REQUEST_LIMIT)
+}
+
+/// A board door's body, or the refusal its rejection earns: past the
+/// limit is the error envelope naming it, never the extractor's text.
+fn board_body(body: Result<Bytes, BytesRejection>) -> Result<Bytes, ApiFail> {
+    use crate::serve::board_wire::BOARD_REQUEST_LIMIT;
+    body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiFail::Refused(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_too_large",
+                format!(
+                    "this server accepts about {BOARD_REQUEST_LIMIT} bytes per request; a board's files ride inside it as base64, so about {} bytes of files fit",
+                    BOARD_REQUEST_LIMIT / 4 * 3
+                ),
+            )
+        } else {
+            ApiFail::Malformed(rejection.body_text())
+        }
+    })
+}
 
 static BOARD_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -3241,7 +3276,14 @@ fn board_ready(guard: &mut ServerState) -> Result<&mut crate::serve::api::Inner,
     }
 }
 
-async fn board_checkpoint(State(app): State<AppState>, body: Bytes) -> Response {
+async fn board_checkpoint(
+    State(app): State<AppState>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = match board_body(body) {
+        Ok(body) => body,
+        Err(fail) => return api_failure(fail),
+    };
     let raw = String::from_utf8_lossy(&body).into_owned();
     let request: CheckpointRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -3295,7 +3337,14 @@ fn board_checkpoint_operation(
     outcome
 }
 
-async fn board_commit(State(app): State<AppState>, body: Bytes) -> Response {
+async fn board_commit(
+    State(app): State<AppState>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = match board_body(body) {
+        Ok(body) => body,
+        Err(fail) => return api_failure(fail),
+    };
     let raw = String::from_utf8_lossy(&body).into_owned();
     let request: CommitRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -3433,7 +3482,14 @@ fn board_discard_operation(
         .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
 }
 
-async fn board_update(State(app): State<AppState>, body: Bytes) -> Response {
+async fn board_update(
+    State(app): State<AppState>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = match board_body(body) {
+        Ok(body) => body,
+        Err(fail) => return api_failure(fail),
+    };
     let request: UpdateRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),

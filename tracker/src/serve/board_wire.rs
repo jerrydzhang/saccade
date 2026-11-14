@@ -15,6 +15,35 @@ use crate::store::World;
 use crate::wire;
 
 pub const MAX_BOARD_FILE_BYTES: usize = 8 * 1024 * 1024;
+/// The body limit of one board request (commit, checkpoint, update):
+/// the whole board rides inline, its files base64.
+pub const BOARD_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
+/// The body limit servers through sac 0.20.2 apply: axum's default.
+pub const EARLIER_REQUEST_LIMIT: usize = 2 * 1024 * 1024;
+
+/// The bytes one board request carries for files totalling `total`:
+/// base64 plus room for the envelope.
+pub fn request_bytes(total: usize) -> usize {
+    4 * total.div_ceil(3) + 4096
+}
+
+/// What a board's size means for one commit request, when it is near
+/// or past a limit a server may apply; None when it fits either way.
+pub fn request_warning(total: usize) -> Option<String> {
+    let request = request_bytes(total);
+    let near = |limit: usize| request > limit / 10 * 9;
+    if near(BOARD_REQUEST_LIMIT) {
+        Some(format!(
+            "board files total {total} bytes, about {request} bytes as one commit request; a server accepts about {BOARD_REQUEST_LIMIT} bytes per request (servers through sac 0.20.2 about {EARLIER_REQUEST_LIMIT}), so the commit will likely refuse - shrink or drop figures"
+        ))
+    } else if near(EARLIER_REQUEST_LIMIT) {
+        Some(format!(
+            "board files total {total} bytes, about {request} bytes as one commit request; servers through sac 0.20.2 accept about {EARLIER_REQUEST_LIMIT} bytes per request and will refuse it, later servers about {BOARD_REQUEST_LIMIT}"
+        ))
+    } else {
+        None
+    }
+}
 pub const BOARD_FILE_NAME: &str = "board.yaml";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,6 +66,22 @@ pub fn fresh_board_text(task: usize) -> String {
 }
 
 impl BoardFiles {
+    /// The files' decoded total, read from their base64 lengths.
+    pub fn total_bytes(&self) -> usize {
+        self.files
+            .iter()
+            .map(|file| {
+                let padding = file
+                    .content
+                    .bytes()
+                    .rev()
+                    .take_while(|b| *b == b'=')
+                    .count();
+                (file.content.len() / 4 * 3).saturating_sub(padding)
+            })
+            .sum()
+    }
+
     /// Collect board.yaml and its referenced figures from a working
     /// directory. A board.yaml that does not parse rides alone: the
     /// server's validator, not the collect step, refuses it.
