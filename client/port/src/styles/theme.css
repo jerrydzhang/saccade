@@ -36,6 +36,23 @@
   --port-world-background: #f4f1ea;
   --port-world-foreground: #1c1b19;
 
+  /* code on the paper (t-40; not in r16, chosen for this pass): a
+   * slightly deeper paper with a hairline, and a light IDE palette,
+   * every colour at least 4.5:1 on the code surface */
+  --port-code-background: #ebe7dd;
+  --port-code-foreground: #24221e;
+  --port-code-line: rgba(28, 27, 25, 0.08);
+  --port-code-keyword: #8a2f8f;
+  --port-code-string: #3b6e23;
+  --port-code-number: #9a4f00;
+  --port-code-comment: #67635a;
+  --port-code-title: #1d56b0;
+  --port-code-type: #0d6b72;
+  --port-code-attribute: #9a3a22;
+  --port-code-meta: #5d5591;
+  --port-code-addition: #2f6a1d;
+  --port-code-deletion: #a32a2a;
+
   /* space and line: the prototype's world rhythm */
   --port-space-strip: 0.25rem 0.75rem;
   --port-space-block: 0.85rem 0;

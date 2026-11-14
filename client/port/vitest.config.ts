@@ -89,7 +89,20 @@ export default mergeConfig(
           resolve: { alias: { "#scenario": here("./tests/scenarios/kit/browser.ts") } },
           // pre-bundled up front: a mid-run optimize reloads the page
           optimizeDeps: {
-            include: ["yaml", "remark-gfm", "remark-math", "remark-parse", "unified", "mermaid", "mathjax/tex-svg.js"],
+            include: [
+              "yaml",
+              "remark-gfm",
+              "remark-math",
+              "remark-parse",
+              "unified",
+              "mermaid",
+              "mathjax/tex-svg.js",
+              // src/lib/highlight.ts's core and its language set
+              "highlight.js/lib/core",
+              ...["bash", "css", "diff", "ini", "javascript", "json", "markdown", "nix", "python", "rust", "shell", "sql", "typescript", "xml", "yaml"].map(
+                (language) => `highlight.js/lib/languages/${language}`,
+              ),
+            ],
           },
           test: {
             name: "browser",

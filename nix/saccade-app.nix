@@ -48,7 +48,7 @@
     pname = "saccade-app-web";
     version = "0.2.2";
     inherit src;
-    npmDepsHash = "sha256-R8etgZ6kMuP5ouj+Wf9tWZj5wDnR98aX10ootr50OYQ=";
+    npmDepsHash = "sha256-4hZV6m7XY7uNAENLSKrHesg3JgnvCGuMKo4Rfi62SvY=";
   };
   webDist = buildNpmPackage (npm
     // {

@@ -8,6 +8,7 @@ import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import type { Root, RootContent } from "mdast";
+import type { Code, Construct, Extension, State } from "micromark-util-types";
 import type { Diagnostic, SourceRange } from "./board/errors.ts";
 
 export type MathNode = {
@@ -44,7 +45,79 @@ export type ParsedMarkdown = {
   diagnostics: Diagnostic[];
 };
 
-const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
+const DOLLAR = 36;
+
+/**
+ * A $$ fence opens display math only when nothing but whitespace follows
+ * it on its line (t-27). remark-math reads the rest of an opening line as
+ * the fence's meta, and a closing fence must stand alone, so the stored
+ * layout "$$\begin{aligned}" ... "\end{aligned}$$" lost its \begin and
+ * ran on through the prose after it. Declined here, the same bytes parse
+ * as $$-delimited text math, which may span lines: one display expression,
+ * its TeX exact, the prose around it untouched. The stored text is never
+ * rewritten; nothing on the boards uses fence meta.
+ */
+function bareMathFence(mathFlow: Construct): Construct {
+  const bareOpening: Construct = {
+    partial: true,
+    tokenize(effects, ok, nok) {
+      // a lookahead (effects.check): the token only holds the bytes it
+      // reads and is discarded with them
+      let dollars = 0;
+      const sequence: State = (code: Code) => {
+        if (code === DOLLAR) {
+          if (dollars === 0) effects.enter("data");
+          dollars += 1;
+          effects.consume(code);
+          return sequence;
+        }
+        return dollars < 2 ? nok(code) : rest(code);
+      };
+      // a line ending is a code below -2; a space, tab or virtual space
+      // is 32, -2 or -1 (micromark's character codes)
+      const rest: State = (code: Code) => {
+        if (code === null || code < -2) {
+          effects.exit("data");
+          return ok(code);
+        }
+        if (code === 32 || code === -2 || code === -1) {
+          effects.consume(code);
+          return rest;
+        }
+        return nok(code);
+      };
+      return sequence;
+    },
+  };
+  // the original construct, renamed so disabling it by name below does
+  // not disable this attempt of it
+  const fence: Construct = { ...mathFlow, name: "mathFlowBare" };
+  return {
+    name: "mathFlowBareOpening",
+    concrete: true,
+    tokenize(effects, ok, nok) {
+      return (code: Code) => effects.check(bareOpening, effects.attempt(fence, ok, nok), nok)(code);
+    },
+  };
+}
+
+function remarkMathBareFence(this: { data(): { micromarkExtensions?: Extension[] } }): void {
+  const extensions = (this.data().micromarkExtensions ??= []);
+  const mathFlow = extensions
+    .map((extension) => extension.flow?.[DOLLAR])
+    .find((construct): construct is Construct => construct !== undefined && !Array.isArray(construct) && construct.name === "mathFlow");
+  if (mathFlow === undefined) throw new Error("remark-math's mathFlow construct is not registered");
+  extensions.push({ disable: { null: ["mathFlow"] }, flow: { [DOLLAR]: bareMathFence(mathFlow) } });
+}
+
+const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkMathBareFence);
+
+/** $$-delimited math is display math wherever it sits: as a fence, as a
+ * paragraph of its own, or inside a paragraph (the authored bytes decide,
+ * as the TeX convention has it). */
+export function displayDelimited(authored: string): boolean {
+  return authored.startsWith("$$");
+}
 
 /**
  * A lone single-line $$...$$ in its own paragraph is authored display math:
@@ -110,11 +183,12 @@ export function parseMarkdown(
     if (!node) return;
     const pos = docRange(node.position, blockOffset, blockLine);
     if (node.type === "inlineMath" || node.type === "math") {
+      const authored = authoredSlice(markdown, node.position);
       mathNodes.push({
-        type: node.type,
+        type: node.type === "math" || displayDelimited(authored) ? "math" : "inlineMath",
         value: node.value,
         pos: pos ?? zeroRange(),
-        authored: authoredSlice(markdown, node.position),
+        authored,
       });
       return;
     }
