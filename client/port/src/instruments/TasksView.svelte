@@ -14,14 +14,14 @@ import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
-  import { agentPart, projectPart, type Rail } from "../lib/tasks/rail.ts";
+  import { projectPart, railAgentPart, railAgentText, type Rail } from "../lib/tasks/rail.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
 
   let host: HTMLElement | null = $state(null);
   let select: SelectSessionView | null = $state(null);
   let menu: MenuView | null = $state(null);
-  let rail: Rail = $state({ projects: [], herdr: null });
+  let rail: Rail = $state({ projects: [], unregistered: [], herdr: null });
 
   $effect(() => controller.subscribeRail((next) => {
     rail = next;
@@ -144,24 +144,55 @@ agent opens its task here -->
       {/if}
       {#each project.groups as group (group.state)}
         <div class="port-plane-word" data-port-word={group.state}>{group.state === "" ? "no word" : group.state}</div>
-        {#each group.agents as agent (agent.incarnation)}
+        {#each group.agents as agent (agent.address)}
+          <!-- every agent carries y (copy its attach command, t-55), so
+          none is disabled; an unregistered one is marked so -->
           <button
             class="port-plane-agent"
-            data-port-control={`agent-${project.name}-${agent.incarnation}`}
-            data-port-part={agentPart(project.name, agent.incarnation)}
+            data-port-control={`agent-${project.name}-${agent.incarnation ?? agent.address}`}
+            data-port-part={railAgentPart(project.name, agent)}
             data-port-kind="agent"
-            data-port-title={[agent.incarnation, agent.tasks[0]].filter((part) => part !== undefined).join(" ")}
-            disabled={agent.tasks.length === 0}
+            data-port-title={railAgentText(agent)}
+            data-port-unregistered={agent.incarnation === null ? "" : undefined}
             title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
           >
-            <span class="port-plane-incarnation">{agent.incarnation}</span>
-            <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
+            {#if agent.incarnation === null}
+              <span class="port-plane-incarnation">{agent.label ?? agent.address}</span>
+              <span class="port-plane-task">unregistered</span>
+            {:else}
+              <span class="port-plane-incarnation">{agent.incarnation}</span>
+              <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
+            {/if}
             {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
           </button>
         {/each}
       {/each}
     </section>
   {/each}
+  {#if rail.unregistered.length > 0}
+    <!-- agents no tracker registered and no project's repo holds
+    (t-55): named by Herdr's where label (else the terminal's title)
+    and the address, each with its word as the core reports it -->
+    <section class="port-plane-project" data-port-control="unregistered">
+      <div class="port-plane-name port-plane-group">unregistered</div>
+      {#each rail.unregistered as agent (agent.address)}
+        <button
+          class="port-plane-agent"
+          data-port-control={`unregistered-${agent.address}`}
+          data-port-part={railAgentPart(null, agent)}
+          data-port-kind="agent"
+          data-port-title={railAgentText(agent)}
+          data-port-unregistered=""
+          data-port-word={agent.state}
+          title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
+        >
+          <span class="port-plane-incarnation">{agent.label ?? ""}</span>
+          <span class="port-plane-task">{agent.address}</span>
+          <span class="port-plane-msg">{[agent.state === "" ? "no word" : agent.state, agent.msg].filter((part) => part !== null).join(" ")}</span>
+        </button>
+      {/each}
+    </section>
+  {/if}
   {#if rail.herdr !== null}
     <div class="port-plane-note" data-port-control="herdr-note">{rail.herdr}</div>
   {/if}

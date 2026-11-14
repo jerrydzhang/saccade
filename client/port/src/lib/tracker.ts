@@ -355,6 +355,13 @@ export class TrackerSource implements BoardSource {
     return this.instrumentPage("agents");
   }
 
+  /** The tracker's identity facts (its root page, read once per
+   * contract): the rail places an agent no tracker registered by the
+   * repo path (t-55). */
+  async identity(): Promise<TrackerIdentity> {
+    return (await this.checkContract()).identity;
+  }
+
   async loadText(location: Location): Promise<LoadedText> {
     if (instrumentPath(location.path)) {
       throw new SourceUnavailableError(

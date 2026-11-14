@@ -487,3 +487,90 @@ test("the control plane: rail entries are targets - s labels them after the rows
   })();
   assert.ok(!after.projects.some((entry) => entry.name === "tasks-test"), "the forgotten shown project leaves the rail");
 });
+
+test("an agent no tracker registered is a rail target: s labels it, its menu is y alone, Enter copies hc attach <address> (t-55)", async (t) => {
+  const { terminalPart } = await import("../src/lib/tasks/rail.ts");
+  const source = sourceFor(MACHINE) as TrackerSource;
+  // the tracker's root names its repo; its agents page registers no one
+  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: "/srv/tasks-test" }));
+  vi.spyOn(source, "agentsPage").mockImplementation(async () => ({
+    view: { major: 1 },
+    kind: "document",
+    location: "agents",
+    seq: null,
+    content: [],
+  }));
+  // the shell's feed: a stray agent in the repo through a federating
+  // core, one nowhere a project knows, and a plain shell
+  const snapshot = {
+    generation: 1,
+    connected: true,
+    words: {
+      "other/t63": { state: "working", app: "claude-code", cwd: "/srv/tasks-test", where: "tasks-test / general", at: 1 },
+      t7r: { state: "done", app: "claude-code", cwd: "/elsewhere", at: 2 },
+      t3k: { cwd: "/srv/tasks-test", where: "tasks-test / service", at: 3 },
+    },
+  };
+  vi.stubGlobal("window", {
+    __TAURI_INTERNALS__: {
+      invoke: (command: string, args: { since: number }) =>
+        command === "words_wait" && args.since < 1 ? Promise.resolve(snapshot) : new Promise(() => {}),
+    },
+  });
+  // the project is one this device reached: the rail's first read
+  // covers it
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const { registerTracker } = await import("../src/lib/tracker.ts");
+  registerTracker("tasks-test", "localhost:8811");
+  const stray = terminalPart("other/t63");
+  const foot = terminalPart("t7r");
+  const bounds = new Map([
+    ...ROW_BOUNDS,
+    [projectPart("tasks-test"), { top: 0, bottom: 20 }],
+    [stray, { top: 20, bottom: 40 }],
+    [foot, { top: 40, bottom: 60 }],
+  ]);
+  const h = harness(t, [{ task: "t-0", title: "x" }], bounds);
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
+  let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
+  const off = h.attachment.presentation.subscribeRail((next) => {
+    rail = next;
+  });
+  for (let tries = 0; tries < 50; tries++) {
+    const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
+    if (shown !== null && shown.unregistered.length > 0 && shown.projects.some((p) => p.groups.length > 0)) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  off();
+  const shown = rail as unknown as import("../src/lib/tasks/rail.ts").Rail;
+  const project = shown.projects.find((entry) => entry.name === "tasks-test");
+  assert.deepEqual(
+    project?.groups.map((group) => [group.state, group.agents.map((agent) => [agent.incarnation, agent.address, agent.label])]),
+    [["working", [[null, "other/t63", "tasks-test / general"]]]],
+    "under its project, unregistered, named by Herdr's where label; the shell never shows",
+  );
+  assert.deepEqual(shown.unregistered.map((agent) => agent.address), ["t7r"]);
+  h.press("s");
+  const view = h.selectView() as { labels: { part: string; label: string }[] };
+  const label = view.labels.find((entry) => entry.part === stray)?.label;
+  assert.ok(label !== undefined, "the stray is labelled with the rail");
+  assert.ok(view.labels.some((entry) => entry.part === foot), "the foot group's agent too");
+  for (const key of label) h.press(key);
+  const menu = h.menuView() as { label: string; acts: { key: string; label: string }[] };
+  assert.equal(menu.label, "tasks-test / general other/t63");
+  assert.deepEqual(menu.acts.map((act) => [act.key, act.label]), [["y", "copy hc attach other/t63"]]);
+  h.press("Enter");
+  assert.deepEqual(h.copied, ["hc attach other/t63"]);
+  assert.deepEqual(h.opened, [], "copying opens nothing");
+  // a plain click on the foot group's entry runs its one act
+  h.attachment.presentation.rowPrimaryClick(foot);
+  assert.deepEqual(h.copied, ["hc attach other/t63", "hc attach t7r"]);
+});

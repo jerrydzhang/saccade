@@ -21,7 +21,9 @@
 // under each, its running agents grouped by Herdr's word - the agents
 // pages joined with the shell's Herdr word feed (lib/tasks/rail.ts).
 // The rail is the instrument's chrome, published to its component
-// beside the menu, never through the buffer's frames.
+// beside the menu, never through the buffer's frames. Agents no
+// tracker registered show too (t-55): under the project whose repo
+// path (each tracker's root page) holds their cwd, else at the foot.
 //
 // The rail's entries are targets of the list's own selection and act
 // menu (lib/tasks/rail.ts railTargetsOf, lib/tasks/menu.ts): s labels
@@ -198,7 +200,12 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   // -- the control plane's rail (t-48) ---------------------------------
   const railObservers = new Set<(rail: Rail) => void>();
   let words: WordsSnapshot = NO_WORDS;
-  let agentPages: { name: string; agents: AgentFacts[] | null; problem: string | null }[] = [];
+  let agentPages: {
+    name: string;
+    agents: AgentFacts[] | null;
+    problem: string | null;
+    repoPath: string | null;
+  }[] = [];
   let railRunning = false;
   let railTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -226,7 +233,8 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     const current = railCurrent();
     if (current !== null) names.add(current);
     const projects = [...names].map(
-      (name) => agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null },
+      (name) =>
+        agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null, repoPath: null },
     );
     return railOf(projects, words, currentProject(), homeTracker(), known);
   }
@@ -244,10 +252,25 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       names.map(async (name) => {
         try {
           const source = sourceFor(`tracker:${name}`);
-          if (!(source instanceof TrackerSource)) return { name, agents: null, problem: "not a tracker" };
-          return { name, agents: agentFactsOf(await source.agentsPage()), problem: null };
+          if (!(source instanceof TrackerSource)) {
+            return { name, agents: null, problem: "not a tracker", repoPath: null };
+          }
+          const agents = agentFactsOf(await source.agentsPage());
+          // the agents page read through the contract, so the root's
+          // identity is in hand; a tracker that cannot say its repo
+          // path still lists its agents, and places no stray
+          const repoPath = await source.identity().then(
+            (identity) => identity.repoPath,
+            () => null,
+          );
+          return { name, agents, problem: null, repoPath };
         } catch (error) {
-          return { name, agents: null, problem: error instanceof Error ? error.message : String(error) };
+          return {
+            name,
+            agents: null,
+            problem: error instanceof Error ? error.message : String(error),
+            repoPath: null,
+          };
         }
       }),
     );

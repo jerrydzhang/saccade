@@ -15,7 +15,9 @@
 // The control plane's rail entries (t-48) are targets of this same
 // menu: a project's f shows its tasks here (its first act - Enter and a
 // plain click switch) and d forgets it, any project; an agent's acts are its first
-// task's, a task row's.
+// task's, a task row's, with y copying `hc attach <address>` - the
+// address as the local core names it (t-55) - in place of the row's
+// copy reference. An agent no tracker registered has y alone.
 //
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
 // window-wide since ea51669): they appear only when the window has
@@ -77,7 +79,7 @@ export interface TasksMenu {
 
 /** The acts on a task's board, composed spec in hand: a task row's, and
  * an agent's for its first task (t-14: tasks and agents have no here). */
-function boardActs(spec: string, ports: TaskPorts): MenuAct[] {
+function boardActs(spec: string, ports: TaskPorts, reference = true): MenuAct[] {
   // F6 (the ratified primary, t-36 r109): the FIRST act is o 'open
   // board through the link' - Enter and a plain click run it. With one
   // window and no link, the elsewhere surface's one-window rule opens a
@@ -104,7 +106,7 @@ function boardActs(spec: string, ports: TaskPorts): MenuAct[] {
     );
   }
   const copy = ports.copy;
-  if (copy !== undefined) {
+  if (copy !== undefined && reference) {
     acts.push({
       key: "y",
       action: {
@@ -117,19 +119,44 @@ function boardActs(spec: string, ports: TaskPorts): MenuAct[] {
   return acts;
 }
 
+/** An agent's acts: its first task's board acts, when it owns one,
+ * then y - the attach command for its terminal, the address exactly
+ * as the local core names it (t-55). */
+function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
+  const acts =
+    target.project !== null && target.task !== null
+      ? boardActs(formatLocation({ machine: `tracker:${target.project}`, path: target.task }), ports, false)
+      : [];
+  const copy = ports.copy;
+  const address = target.address;
+  if (copy !== undefined && address !== null) {
+    acts.push({
+      key: "y",
+      action: {
+        id: "tasks.agent.attach",
+        label: `copy hc attach ${address}`,
+        run: () => copy(`hc attach ${address}`),
+      },
+    });
+  }
+  return acts;
+}
+
 /** A project's acts (t-48): f shows its tasks in this window - the
  * first act, so Enter and a plain click switch, as the picker's Enter
  * does - and d forgets it. Any project may be forgotten, the home and
  * the shown one included (the human, 2026-11-14: with one project,
  * forgetting it must be possible). */
 function projectActs(target: RailTarget, deps: Pick<TasksMenuDeps, "ports" | "forget">, ports: TaskPorts): MenuAct[] {
+  const project = target.project;
+  if (project === null) return [];
   const acts: MenuAct[] = [
     {
       key: "f",
       action: {
         id: "tasks.project.show",
         label: "show its tasks here",
-        run: () => ports.open(formatLocation({ machine: `tracker:${target.project}`, path: "tasks" })),
+        run: () => ports.open(formatLocation({ machine: `tracker:${project}`, path: "tasks" })),
       },
     },
   ];
@@ -138,7 +165,7 @@ function projectActs(target: RailTarget, deps: Pick<TasksMenuDeps, "ports" | "fo
     action: {
       id: "tasks.project.forget",
       label: "forget this project (type its host to reach it again)",
-      run: () => deps.forget(target.project),
+      run: () => deps.forget(project),
     },
   });
   return acts;
@@ -161,8 +188,7 @@ export function taskRowActs(
     const rail = deps.railTarget(target.part);
     if (rail === undefined) return [];
     if (rail.kind === "project") return projectActs(rail, deps, ports);
-    if (rail.task === null) return [];
-    return boardActs(formatLocation({ machine: `tracker:${rail.project}`, path: rail.task }), ports);
+    return agentActs(rail, ports);
   }
   const machine = deps.machine();
   if (machine === null) return [];

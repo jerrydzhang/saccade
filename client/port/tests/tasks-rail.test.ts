@@ -42,7 +42,7 @@ const words: WordsSnapshot = {
     t12: { state: "working", at: 80 },
     // ended: the reason, no word - not running
     t13: { finished: "exited", at: 70 },
-    // a terminal no project's agent holds: never shown
+    // a terminal no project's agent holds and no program named: never shown
     t99: { state: "working", at: 60 },
   },
 };
@@ -98,13 +98,21 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
     words: { t1: { state: "blocked", msg: "permission", at: 5, extra: 1 }, bad: "x" },
   });
   assert.equal(decoded.generation, 3);
-  assert.deepEqual(decoded.words.t1, {
-    state: "blocked",
-    msg: "permission",
-    progress: undefined,
-    title: undefined,
-    finished: undefined,
-    at: 5,
+  assert.deepEqual(decoded.words.t1, { state: "blocked", msg: "permission", at: 5 }, "an absent field stays absent");
+  const placed = wordsOf({
+    generation: 4,
+    connected: true,
+    words: {
+      t63: { state: "working", app: "claude-code", cwd: "/home/jerry/Projects/saccade", where: "saccade / general", terminal_title: "Envision", at: 6 },
+    },
+  });
+  assert.deepEqual(placed.words.t63, {
+    state: "working",
+    app: "claude-code",
+    cwd: "/home/jerry/Projects/saccade",
+    where: "saccade / general",
+    terminalTitle: "Envision",
+    at: 6,
   });
   assert.equal(decoded.words.bad, undefined);
 });
@@ -154,6 +162,7 @@ test("a project's acts: f shows its tasks here first; d forgets any project, the
     home,
     current,
     host: name === "jernerics" ? "localhost:8814" : null,
+    address: null,
   });
   const rail = [target("jernerics", false, false), target("pyrimel", true, false), target("saccade", false, true)];
   const deps = {
@@ -231,4 +240,165 @@ test("a federating core's machine-first addresses join the tracker's bare ones; 
     "pyrimel",
   );
   assert.deepEqual(rail.projects[0]?.groups.map((group) => [group.state, group.agents.map((agent) => agent.incarnation)]), [["working", ["i-9"]]]);
+});
+
+// -- agents no tracker registered (t-55) ----------------------------------
+
+import { stateSlugOf, terminalPart } from "../src/lib/tasks/rail.ts";
+
+test("the worktree home's slug is the tracker's own: basename and the FNV-1a of the repo path", () => {
+  // read off the live machine: pyrimel's worktrees live under
+  // ~/.local/state/saccade/pyrimel-11f6a386/worktrees/
+  assert.equal(stateSlugOf("/home/jerry/Projects/pyrimel"), "pyrimel-11f6a386");
+  assert.equal(stateSlugOf("/home/jerry/Projects/pyrimel/"), "pyrimel-11f6a386", "a trailing slash is the same repo");
+  // tracker/src/host/paths.rs pins the hue as the same hash mod 360
+  assert.equal(Number.parseInt(stateSlugOf("/srv/hornet").split("-")[1]!, 16) % 360, 324);
+});
+
+function strayWords(): WordsSnapshot {
+  return {
+    generation: 9,
+    connected: true,
+    words: {
+      // registered: i-3 of saccade (bare t12), never doubled as a stray
+      t12: { state: "working", app: "claude-code", cwd: "/home/jerry/Projects/saccade", at: 1 },
+      // in the saccade repo, unregistered
+      t63: { state: "working", app: "claude-code", msg: "editing", cwd: "/home/jerry/Projects/saccade", where: "saccade / general", at: 2 },
+      // in a subdirectory of the repo
+      t6r: { state: "idle", app: "pi", cwd: "/home/jerry/Projects/saccade/nix", terminalTitle: "pi", at: 3 },
+      // in a pyrimel worktree, through a federating core
+      "other/t4j": { state: "done", app: "claude-code", cwd: "/home/jerry/.local/state/saccade/pyrimel-11f6a386/worktrees/t-0", where: "t-0 / 2", at: 4 },
+      // nowhere a project knows: the foot group, by word then name
+      t7x: { state: "done", app: "claude-code", cwd: "/srv/elsewhere", where: "elsewhere / 1", at: 5 },
+      t7r: { state: "working", app: "claude-code", cwd: "/srv/other", terminalTitle: "", at: 6 },
+      t7q: { state: "error", app: "pi", where: "", terminalTitle: "pi run", at: 7 },
+      // a shell: no app, never shown
+      t3k: { cwd: "/home/jerry/Projects/saccade", where: "saccade / service", at: 8 },
+      // ended: not running
+      t9: { app: "claude-code", finished: "exited", cwd: "/home/jerry/Projects/saccade", at: 9 },
+      // a nested repo inside saccade: the deeper project holds it
+      t80: { state: "idle", app: "claude-code", cwd: "/home/jerry/Projects/saccade/vendor/inner/src", at: 10 },
+    },
+  };
+}
+
+function strayRail() {
+  return railOf(
+    [
+      { name: "saccade", agents: agentFactsOf(agentsPage()), problem: null, repoPath: "/home/jerry/Projects/saccade" },
+      { name: "pyrimel", agents: [], problem: null, repoPath: "/home/jerry/Projects/pyrimel" },
+      { name: "inner", agents: [], problem: null, repoPath: "/home/jerry/Projects/saccade/vendor/inner" },
+      // a tracker whose repo path is unknown places nothing
+      { name: "jernerics", agents: [], problem: null, repoPath: null },
+    ],
+    strayWords(),
+    "saccade",
+  );
+}
+
+test("a stray agent shows under the project whose repo or worktree holds its cwd, marked unregistered, after the registered", () => {
+  const rail = strayRail();
+  const project = (name: string) => rail.projects.find((entry) => entry.name === name)!;
+  assert.deepEqual(
+    project("saccade").groups.map((group) => [group.state, group.agents.map((agent) => [agent.incarnation, agent.address, agent.label])]),
+    [
+      ["working", [["i-3", "t12", null], [null, "t63", "saccade / general"]]],
+      ["idle", [[null, "t6r", "pi"]]],
+    ],
+    "the where label names it, else the terminal's title; the registered t12 is not doubled",
+  );
+  assert.equal(project("saccade").groups[0]?.agents[1]?.msg, "editing", "the program's own words");
+  assert.deepEqual(
+    project("pyrimel").groups.map((group) => [group.state, group.agents.map((agent) => agent.address)]),
+    [["done", ["other/t4j"]]],
+    "a worktree under the tracker's state slug is the project's; the address as the local core names it",
+  );
+  assert.deepEqual(project("inner").groups.map((group) => group.agents.map((agent) => agent.address)), [["t80"]], "the deepest repo wins");
+  assert.deepEqual(project("jernerics").groups, []);
+});
+
+test("a stray agent no project holds shows at the foot, by word then name; shells and ended terminals never show", () => {
+  const rail = strayRail();
+  assert.deepEqual(
+    rail.unregistered.map((agent) => [agent.state, agent.label, agent.address]),
+    [
+      ["error", "pi run", "t7q"],
+      ["working", null, "t7r"],
+      ["done", "elsewhere / 1", "t7x"],
+    ],
+  );
+  const shown = [...rail.projects.flatMap((p) => p.groups.flatMap((g) => g.agents)), ...rail.unregistered].map((a) => a.address);
+  assert.ok(!shown.includes("t3k") && !shown.includes("t9") && !shown.includes("t99"));
+});
+
+test("an address two machines hold is no stray: one of them is registered, so neither shows unregistered", () => {
+  const rail = railOf(
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: [] }], problem: null, repoPath: "/p" }],
+    {
+      generation: 1,
+      connected: true,
+      words: {
+        "a/t88": { state: "working", app: "pi", cwd: "/p", at: 1 },
+        "b/t88": { state: "idle", app: "pi", cwd: "/p", at: 1 },
+      },
+    },
+    null,
+  );
+  assert.deepEqual(rail.projects[0]?.groups, []);
+  assert.deepEqual(rail.unregistered, []);
+  // an exact registered address leaves another machine's terminal a stray
+  const exact = railOf(
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t5", tasks: [] }], problem: null, repoPath: "/p" }],
+    { generation: 1, connected: true, words: { t5: { state: "idle", app: "pi", at: 1 }, "other/t5": { state: "done", app: "pi", at: 1 } } },
+    null,
+  );
+  assert.deepEqual(exact.unregistered.map((agent) => agent.address), ["other/t5"]);
+});
+
+test("every agent is a target with y copying hc attach <address> as the local core names it; a stray's only act is y", () => {
+  const rail = strayRail();
+  const targets = railTargetsOf(rail);
+  const agents = targets.filter((target) => target.kind === "agent");
+  assert.deepEqual(
+    agents.map((target) => [target.part, target.text, target.project, target.task, target.address]),
+    [
+      [terminalPart("t80"), "t80", "inner", null, "t80"],
+      [terminalPart("other/t4j"), "t-0 / 2 other/t4j", "pyrimel", null, "other/t4j"],
+      [agentPart("saccade", "i-3"), "i-3 t-2", "saccade", "t-2", "t12"],
+      [terminalPart("t63"), "saccade / general t63", "saccade", null, "t63"],
+      [terminalPart("t6r"), "pi t6r", "saccade", null, "t6r"],
+      [terminalPart("t7q"), "pi run t7q", null, null, "t7q"],
+      [terminalPart("t7r"), "t7r", null, null, "t7r"],
+      [terminalPart("t7x"), "elsewhere / 1 t7x", null, null, "t7x"],
+    ],
+    "projects in name order, each followed by its agents; the foot group last",
+  );
+  const copied: string[] = [];
+  const elsewhere: [string, string][] = [];
+  const deps = {
+    machine: () => "tracker:saccade",
+    rowLink: () => null,
+    railTarget: (part: string) => targets.find((entry) => entry.part === part),
+    forget: () => {},
+    ports: () => ({
+      open: () => {},
+      elsewhere: (spec: string, act: string) => elsewhere.push([spec, act]),
+      copy: (text: string) => copied.push(text),
+    }),
+  };
+  const acts = (part: string, label: string) => taskRowActs({ kind: "agent", label, part }, deps);
+  const registered = acts(agentPart("saccade", "i-3"), "i-3 t-2");
+  assert.deepEqual(registered.map((act) => act.key), ["o", "i", "w", "y"], "the task's acts, y the attach - not the copy reference");
+  registered[3]!.action.run();
+  const stray = acts(terminalPart("other/t4j"), "t-0 / 2 other/t4j");
+  assert.deepEqual(stray.map((act) => [act.key, act.action.label]), [["y", "copy hc attach other/t4j"]]);
+  stray[0]!.action.run();
+  acts(terminalPart("t7q"), "pi run t7q")[0]!.action.run();
+  assert.deepEqual(copied, ["hc attach t12", "hc attach other/t4j", "hc attach t7q"]);
+  assert.deepEqual(elsewhere, []);
+  // with no clipboard injected, a stray has no act at all
+  assert.deepEqual(
+    taskRowActs({ kind: "agent", label: "t7q", part: terminalPart("t7q") }, { ...deps, ports: () => ({ open: () => {} }) }),
+    [],
+  );
 });
