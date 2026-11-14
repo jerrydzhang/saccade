@@ -126,7 +126,7 @@ a11y click advisories do not apply. -->
           {/if}
         {:else}
           <div class="port-tasks-columns" aria-hidden="true">
-            <span>task</span><span>title</span><span>agents</span><span>latest commit</span><span>age</span>
+            <span>task</span><span>title</span><span class="port-tasks-agents">agents</span><span class="port-tasks-commit">latest commit</span><span>age</span>
           </div>
           {#each group.rows as row (row.part)}
             <div
