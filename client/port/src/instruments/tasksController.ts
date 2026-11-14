@@ -16,10 +16,17 @@
 // poll re-reads the page and refreshes through the pipeline when its
 // rows changed.
 //
-// Deliberately not here (recorded): the agents page (a later
-// instrument), find (a facility of a shown revision - a task list is
-// not one), and any row cursor (j/k is pure scrolling, the scenario
-// 17 resolution).
+// The control plane (t-48): beside the list, a rail of the projects
+// this device has reached (switching opens a project's tasks here) and,
+// under each, its running agents grouped by Herdr's word - the agents
+// pages joined with the shell's Herdr word feed (lib/tasks/rail.ts).
+// The rail is the instrument's chrome, published to its component
+// beside the menu, never through the buffer's frames.
+//
+// Deliberately not here (recorded): find (a facility of a shown
+// revision - a task list is not one), any row cursor (j/k is pure
+// scrolling, the scenario 17 resolution), and label selection over the
+// rail (the picker switches projects by keys: name/tasks).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
 import { createLoadScope, failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
@@ -52,7 +59,17 @@ import { SourceUnavailableError } from "../lib/board/errors.ts";
 import { instrumentPath } from "../lib/location.ts";
 import { formatLocation } from "../lib/location.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
-import { TrackerSource } from "../lib/tracker.ts";
+import { TrackerSource, knownTrackers } from "../lib/tracker.ts";
+import { tauriInvoke } from "../lib/sources.ts";
+import {
+  NO_WORDS,
+  agentFactsOf,
+  railOf,
+  wordsOf,
+  type AgentFacts,
+  type Rail,
+  type WordsSnapshot,
+} from "../lib/tasks/rail.ts";
 import {
   taskRowOf,
   tasksPageOf,
@@ -105,6 +122,14 @@ export interface TasksUI {
    * the elsewhere surface); injected by the window, and no act is
    * offered before then. */
   setTaskPorts(ports: TaskPorts): void;
+  /** The control plane's rail: projects and their running agents. */
+  subscribeRail(observer: (rail: Rail) => void): () => void;
+  /** Switch this window to a project's task list (opens name/tasks
+   * here through the open funnel). */
+  openProject(name: string): void;
+  /** An agent row's act: its first task's board through the link, as
+   * a task row's (t-14: tasks and agents have no here). */
+  openAgentTask(project: string, task: string): void;
 }
 
 /** How often a shown list re-reads its page (a named tunable,
@@ -167,6 +192,97 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   });
 
   const menuObservers = new Set<(view: MenuView | null) => void>();
+
+  // -- the control plane's rail (t-48) ---------------------------------
+  const railObservers = new Set<(rail: Rail) => void>();
+  let words: WordsSnapshot = NO_WORDS;
+  let agentPages: { name: string; agents: AgentFacts[] | null; problem: string | null }[] = [];
+  let railRunning = false;
+  let railTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function currentProject(): string | null {
+    const machine = scope.frame().resolved?.machine ?? null;
+    return machine !== null && machine.startsWith("tracker:") ? machine.slice("tracker:".length) : null;
+  }
+
+  function railNow(): Rail {
+    // every reached project is listed, read or not yet
+    const names = new Set([...Object.keys(knownTrackers()), ...agentPages.map((entry) => entry.name)]);
+    const current = currentProject();
+    if (current !== null) names.add(current);
+    const projects = [...names].map(
+      (name) => agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null },
+    );
+    return railOf(projects, words, current);
+  }
+
+  function notifyRail(): void {
+    const rail = railNow();
+    for (const observer of [...railObservers]) observer(rail);
+  }
+
+  async function readAgentPages(): Promise<void> {
+    const names = Object.keys(knownTrackers());
+    const current = currentProject();
+    if (current !== null && !names.includes(current)) names.push(current);
+    agentPages = await Promise.all(
+      names.map(async (name) => {
+        try {
+          const source = sourceFor(`tracker:${name}`);
+          if (!(source instanceof TrackerSource)) return { name, agents: null, problem: "not a tracker" };
+          return { name, agents: agentFactsOf(await source.agentsPage()), problem: null };
+        } catch (error) {
+          return { name, agents: null, problem: error instanceof Error ? error.message : String(error) };
+        }
+      }),
+    );
+  }
+
+  async function agentsLoop(): Promise<void> {
+    if (!railRunning) return;
+    await readAgentPages();
+    if (!railRunning) return;
+    notifyRail();
+    railTimer = setTimeout(() => void agentsLoop(), TASKS_FOLLOW_POLL_MS);
+  }
+
+  // Herdr's word feed: the shell's bounded hold wakes on a change or
+  // answers quiet; outside the native shell there is no feed
+  async function wordsLoop(): Promise<void> {
+    let invoke;
+    try {
+      invoke = tauriInvoke();
+    } catch {
+      words = { ...NO_WORDS, problem: "Herdr words reach only the native app" };
+      notifyRail();
+      return;
+    }
+    while (railRunning) {
+      try {
+        const next = wordsOf(await invoke("words_wait", { since: words.generation, timeout: 25 }));
+        if (!railRunning) return;
+        if (next.generation !== words.generation || next.connected !== words.connected) {
+          words = next;
+          notifyRail();
+        }
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, TASKS_FOLLOW_POLL_MS));
+      }
+    }
+  }
+
+  function startRail(): void {
+    if (railRunning || scope.isDestroyed()) return;
+    railRunning = true;
+    void agentsLoop();
+    void wordsLoop();
+  }
+
+  function stopRail(): void {
+    railRunning = false;
+    if (railTimer !== null) clearTimeout(railTimer);
+    railTimer = null;
+  }
 
   // -- the row acts' window services -----------------------------------
   let ports: TaskPorts | null = null;
@@ -255,6 +371,20 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     setTaskPorts(injected) {
       ports = injected;
     },
+    subscribeRail(observer) {
+      railObservers.add(observer);
+      observer(railNow());
+      return () => {
+        railObservers.delete(observer);
+      };
+    },
+    openProject(name) {
+      ports?.open(formatLocation({ machine: `tracker:${name}`, path: "tasks" }));
+    },
+    openAgentTask(project, task) {
+      const spec = formatLocation({ machine: `tracker:${project}`, path: task });
+      if (ports?.elsewhere !== undefined) ports.elsewhere(spec, "link");
+    },
   };
 
   async function load(address: Address): Promise<PreparedContent<TasksData>> {
@@ -309,6 +439,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     if (selectedTask !== null && !lastFrameStillCarries(model, selectedTask)) {
       selectedTask = null;
     }
+    startRail();
     scope.adopt({
       generation: token,
       asked: scope.asked(),
@@ -319,6 +450,8 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       targets: tasksTargetsOf(model),
       errors: [],
     });
+    // the shown project moves the rail's mark
+    notifyRail();
     return { kind: "ready", value: scope.frame() };
   }
 
@@ -406,6 +539,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     release() {
       scope.destroy();
       follow.stop();
+      stopRail();
       selectSession.exit();
       tasksMenu.session.outsidePointerDown();
     },

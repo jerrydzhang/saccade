@@ -434,3 +434,22 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
     "t-0 left the page: the selection clears, never a silent neighbour",
   );
 });
+
+test("the control plane: a project switches this window in place; an agent's task opens through the link (t-48)", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
+  h.attachment.presentation.openProject("jernerics");
+  assert.deepEqual(h.opened, ["jernerics/tasks"]);
+  h.attachment.presentation.openAgentTask("jernerics", "t-23");
+  assert.deepEqual(h.elsewhere, [["jernerics/t-23", "link"]]);
+  // the rail marks the shown project; outside the native shell it
+  // says Herdr's words are not here rather than showing nobody
+  let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
+  const off = h.attachment.presentation.subscribeRail((next) => {
+    rail = next;
+  });
+  off();
+  const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
+  assert.ok(shown !== null);
+  assert.ok(shown.projects.some((project) => project.name === "tasks-test" && project.current));
+});
