@@ -172,13 +172,52 @@ body {
 
 /* F4 as information: the five-column grid (tid, title, agents,
  * latest commit, age). The sparklane's future column rides UNDER a
- * row, never a sixth column - the grid leaves it alone. */
+ * row, never a sixth column - the grid leaves it alone. Every cell is
+ * one line, cut with an ellipsis (t-41: the human keeps the list
+ * narrow); the fr tracks may shrink below their text. */
+.port-tasks-view {
+  container-type: inline-size;
+}
+
 .port-tasks-columns,
 .port-tasks-row {
   display: grid;
-  grid-template-columns: 3em 1.4fr 7em 1fr 3em;
+  grid-template-columns: 3em minmax(0, 1.4fr) 7em minmax(0, 1fr) 3em;
   gap: 0.5rem;
   padding: 0.125rem 0.5rem;
+}
+
+.port-tasks-columns > *,
+.port-tasks-row > * {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* as the list narrows the lesser columns drop out before the title is
+ * squeezed - agents first, then the latest commit - from the header
+ * and the rows alike, so the two stay aligned; id, title and age stay */
+@container (max-width: 44rem) {
+  .port-tasks-columns,
+  .port-tasks-row {
+    grid-template-columns: 3em minmax(0, 1.4fr) minmax(0, 1fr) 3em;
+  }
+
+  .port-tasks-agents {
+    display: none;
+  }
+}
+
+@container (max-width: 30rem) {
+  .port-tasks-columns,
+  .port-tasks-row {
+    grid-template-columns: 3em minmax(0, 1fr) 3em;
+  }
+
+  .port-tasks-commit {
+    display: none;
+  }
 }
 
 .port-tasks-columns {

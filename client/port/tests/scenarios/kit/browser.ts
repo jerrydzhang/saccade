@@ -96,6 +96,16 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
     async menuOpen() {
       return portWindow().document.querySelector("[data-port-menu]") !== null;
     },
+    async menuLabel() {
+      const element = portWindow().document.querySelector("[data-port-menu] .port-menu-label") as HTMLElement | null;
+      return element === null ? null : element.innerText;
+    },
+    async resize(width, height) {
+      // the app's window is the iframe: its box is the app's viewport
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      await expect.poll(() => [portWindow().innerWidth, portWindow().innerHeight]).toEqual([width, height]);
+    },
     async labels() {
       return [...portWindow().document.querySelectorAll("[data-port-label]")].map((element) => ({
         label: element.getAttribute("data-port-label") ?? "",
