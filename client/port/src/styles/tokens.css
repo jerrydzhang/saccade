@@ -26,6 +26,23 @@
   --port-world-background: #ffffff;
   --port-world-foreground: #111111;
 
+  /* code: a fenced block's surface and its syntax colours (t-40,
+   * lib/highlight.ts kinds); neutral here - every kind reads in the
+   * block's own ink until a theme assigns a colour */
+  --port-code-background: #f4f4f4;
+  --port-code-foreground: #111111;
+  --port-code-line: #dddddd;
+  --port-code-keyword: currentColor;
+  --port-code-string: currentColor;
+  --port-code-number: currentColor;
+  --port-code-comment: #555555;
+  --port-code-title: currentColor;
+  --port-code-type: currentColor;
+  --port-code-attribute: currentColor;
+  --port-code-meta: currentColor;
+  --port-code-addition: currentColor;
+  --port-code-deletion: currentColor;
+
   /* space and line */
   --port-space-strip: 0.375rem 0.75rem;
   --port-space-block: 1rem 0;

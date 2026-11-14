@@ -19,6 +19,7 @@ import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
 import { diagramPart } from "./board/targets.ts";
 import { refPart, splitRefs } from "./board/refs.ts";
+import { highlightCode } from "./highlight.ts";
 
 /** The history diff's painted change mark on a block. The history mode
  * paints it; until that slice lands, blocks carry no mark. */
@@ -540,16 +541,30 @@ function renderNode(
         );
       }
       const id = unitIdAt(hooks, pos?.start.offset);
+      // an ordinary fence: its own surface (md-fence), coloured by
+      // language when the set knows it (lib/highlight.ts); the spans
+      // hold the source's own text, so copy and find read the source
+      const runs = highlightCode(node.value, node.lang);
       return el(
         "pre",
         {
-          class: "md-code",
+          class: "md-code md-fence",
           "data-copy-unit": "code",
           ...(id ? { "data-unit-id": id } : {}),
           "data-unit-source": node.value,
           ...lineAttr,
         },
-        el("code", {}, node.value),
+        el(
+          "code",
+          {},
+          ...(runs
+            ? runs.map((run) =>
+                run.kinds.length > 0
+                  ? el("span", { class: run.kinds.map((kind) => `code-${kind}`).join(" ") }, run.text)
+                  : run.text,
+              )
+            : [node.value]),
+        ),
       );
     }
     case "html": {
