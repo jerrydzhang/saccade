@@ -12,6 +12,11 @@
 //   i  open in... (ask; keep the link)
 //   w  open in a new window
 //
+// The control plane's rail entries (t-48) are targets of this same
+// menu: a project's f shows its tasks here (its first act - Enter and a
+// plain click switch) and d forgets it; an agent's acts are its first
+// task's, a task row's.
+//
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
 // window-wide since ea51669): they appear only when the window has
 // injected the ports and bound its window-store state. The primary
@@ -24,6 +29,7 @@ import type { Action, InputContext, KeyInput, KeyResolution } from "../input/inp
 import { formatLocation } from "../location.ts";
 import { createMenuSession, type MenuAct, type MenuSession, type MenuTarget } from "../menu/session.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
+import type { RailTarget } from "./rail.ts";
 
 /** The window services the task-row acts ride: opening goes through
  * the window's ONE open funnel (trail + restore), the elsewhere acts
@@ -49,6 +55,10 @@ export interface TasksMenuDeps {
   rowLink(part: string): string | null;
   /** The window's services, or null before injection. */
   ports(): TaskPorts | null;
+  /** The rail entry a rail part names (t-48), or undefined. */
+  railTarget(part: string): RailTarget | undefined;
+  /** Forget a reached project (lib/tracker.ts forgetTracker). */
+  forget(project: string): void;
   /** Capture input while open. Lease release returns to the CURRENT
    * base; a menu never reinstalls its own saved reading context. */
   capture(context: InputContext): { release(): void };
@@ -65,25 +75,13 @@ export interface TasksMenu {
   setOnNotify(callback: () => void): void;
 }
 
-export function taskRowActs(
-  target: MenuTarget,
-  deps: Pick<TasksMenuDeps, "machine" | "rowLink" | "ports">,
-): readonly MenuAct[] {
-  const ports = deps.ports();
-  if (ports === null) return [];
-  const machine = deps.machine();
-  if (machine === null) return [];
-  // the ROW'S LINK composed against the list's own tracker - never
-  // the part path (that is identity, not a location)
-  const link = target.part === null ? null : deps.rowLink(target.part);
-  if (link === null || link.length === 0) return [];
-  const spec = formatLocation({ machine, path: link });
-  // F6 (the ratified primary, t-36 r109): the row's FIRST act is
-  // o 'open board through the link' - Enter and a plain click run
-  // it. With one window and no link, the elsewhere surface's
-  // one-window rule opens a new linked window without asking; the
-  // next Enter reuses the link. The prototype's f/in-place open
-  // never existed - the port's earlier first act reversed this.
+/** The acts on a task's board, composed spec in hand: a task row's, and
+ * an agent's for its first task (t-14: tasks and agents have no here). */
+function boardActs(spec: string, ports: TaskPorts): MenuAct[] {
+  // F6 (the ratified primary, t-36 r109): the FIRST act is o 'open
+  // board through the link' - Enter and a plain click run it. With one
+  // window and no link, the elsewhere surface's one-window rule opens a
+  // new linked window without asking; the next Enter reuses the link.
   // e 'show activity' is RECORDED ABSENT: no activity location is
   // built yet (the inventory's B3); it returns with the surface.
   const acts: MenuAct[] = [];
@@ -117,6 +115,66 @@ export function taskRowActs(
     });
   }
   return acts;
+}
+
+/** A project's acts (t-48): f shows its tasks in this window - the
+ * first act, so Enter and a plain click switch, as the picker's Enter
+ * does - and d forgets it. The home (it holds this device's window
+ * store) and the shown project are never forgotten; their d is absent
+ * and the heading says why. */
+function projectActs(target: RailTarget, deps: Pick<TasksMenuDeps, "ports" | "forget">, ports: TaskPorts): MenuAct[] {
+  const acts: MenuAct[] = [
+    {
+      key: "f",
+      action: {
+        id: "tasks.project.show",
+        label: "show its tasks here",
+        run: () => ports.open(formatLocation({ machine: `tracker:${target.project}`, path: "tasks" })),
+      },
+    },
+  ];
+  if (!target.home && !target.current) {
+    acts.push({
+      key: "d",
+      action: {
+        id: "tasks.project.forget",
+        label: "forget this project (type its host to reach it again)",
+        run: () => deps.forget(target.project),
+      },
+    });
+  }
+  return acts;
+}
+
+/** The menu heading for a target: a project the rail will not forget
+ * says why. */
+export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>, rail: RailTarget | undefined): string {
+  if (target.kind !== "project" || rail === undefined) return target.label;
+  if (rail.home) return `${target.label} (home: holds this device's windows)`;
+  if (rail.current) return `${target.label} (shown)`;
+  return target.label;
+}
+
+export function taskRowActs(
+  target: MenuTarget,
+  deps: Pick<TasksMenuDeps, "machine" | "rowLink" | "ports" | "railTarget" | "forget">,
+): readonly MenuAct[] {
+  const ports = deps.ports();
+  if (ports === null || target.part === null) return [];
+  if (target.kind === "project" || target.kind === "agent") {
+    const rail = deps.railTarget(target.part);
+    if (rail === undefined) return [];
+    if (rail.kind === "project") return projectActs(rail, deps, ports);
+    if (rail.task === null) return [];
+    return boardActs(formatLocation({ machine: `tracker:${rail.project}`, path: rail.task }), ports);
+  }
+  const machine = deps.machine();
+  if (machine === null) return [];
+  // the ROW'S LINK composed against the list's own tracker - never
+  // the part path (that is identity, not a location)
+  const link = deps.rowLink(target.part);
+  if (link === null || link.length === 0) return [];
+  return boardActs(formatLocation({ machine, path: link }), ports);
 }
 
 export function createTasksMenu(deps: TasksMenuDeps): TasksMenu {

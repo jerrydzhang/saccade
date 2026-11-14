@@ -47,6 +47,9 @@ export type RailAgent = {
 export type RailProject = {
   name: string;
   current: boolean;
+  /** The home tracker: it holds this device's window store, so it is
+   * never forgotten. */
+  home: boolean;
   /** Herdr's words in t-14's section order, empty sections left out. */
   groups: { state: string; agents: RailAgent[] }[];
   /** Why this project's agents could not be read, when they could not. */
@@ -98,6 +101,7 @@ export function railOf(
   projects: readonly { name: string; agents: readonly AgentFacts[] | null; problem: string | null }[],
   words: WordsSnapshot,
   current: string | null,
+  home: string | null = null,
 ): Rail {
   const ordered = [...projects].sort((a, b) => a.name.localeCompare(b.name));
   return {
@@ -133,9 +137,64 @@ export function railOf(
               a.incarnation.localeCompare(b.incarnation, undefined, { numeric: true }),
           ),
         }));
-      return { name: project.name, current: project.name === current, groups, problem: project.problem };
+      return {
+        name: project.name,
+        current: project.name === current,
+        home: project.name === home,
+        groups,
+        problem: project.problem,
+      };
     }),
   };
+}
+
+/** A rail entry as a selectable target: the same label selection, act
+ * menu and plain click a task row has. A project's acts switch this
+ * window to its tasks or forget it; an agent's are its first task's,
+ * a task row's acts. The part path is the rail's own identity scheme
+ * (never a page path): the project's name, the agent's incarnation. */
+export type RailTarget = Readonly<{
+  part: string;
+  kind: "project" | "agent";
+  text: string;
+  project: string;
+  /** The agent's first task; null on a project, or an agent with none. */
+  task: string | null;
+  home: boolean;
+  current: boolean;
+}>;
+
+export const projectPart = (name: string): string => `rail/project/${name}`;
+export const agentPart = (project: string, incarnation: string): string => `rail/agent/${project}/${incarnation}`;
+
+/** The rail's targets in its own order: each project, then its agents. */
+export function railTargetsOf(rail: Rail): RailTarget[] {
+  const out: RailTarget[] = [];
+  for (const project of rail.projects) {
+    out.push({
+      part: projectPart(project.name),
+      kind: "project",
+      text: project.name,
+      project: project.name,
+      task: null,
+      home: project.home,
+      current: project.current,
+    });
+    for (const group of project.groups) {
+      for (const agent of group.agents) {
+        out.push({
+          part: agentPart(project.name, agent.incarnation),
+          kind: "agent",
+          text: [agent.incarnation, agent.tasks[0]].filter((part) => part !== undefined).join(" "),
+          project: project.name,
+          task: agent.tasks[0] ?? null,
+          home: project.home,
+          current: project.current,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /** Decode the shell's words snapshot; anything malformed reads as no

@@ -20,6 +20,8 @@ export type TargetKind =
   | "group"
   | "control"
   | "task"
+  | "project"
+  | "agent"
   | "ref"
   | "reference";
 

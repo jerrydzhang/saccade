@@ -108,3 +108,105 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
   });
   assert.equal(decoded.words.bad, undefined);
 });
+
+// -- the rail as targets (t-48): selection, the act menu, forgetting ----
+
+import { vi, onTestFinished } from "vitest";
+import { agentPart, projectPart, railTargetsOf } from "../src/lib/tasks/rail.ts";
+import { taskRowActs, tasksMenuLabel } from "../src/lib/tasks/menu.ts";
+import { forgetTracker, homeTracker, knownTrackers, registerTracker } from "../src/lib/tracker.ts";
+
+function railWithAgent() {
+  const words: WordsSnapshot = { generation: 1, connected: true, words: { t12: { state: "working", at: 1 } } };
+  return railOf(
+    [
+      { name: "saccade", agents: agentFactsOf(agentsPage()), problem: null },
+      { name: "pyrimel", agents: [], problem: null },
+    ],
+    words,
+    "saccade",
+    "pyrimel",
+  );
+}
+
+test("the rail's targets: each project, then its agents, carrying home and shown", () => {
+  const targets = railTargetsOf(railWithAgent());
+  assert.deepEqual(
+    targets.map((target) => [target.part, target.kind, target.text, target.task, target.home, target.current]),
+    [
+      [projectPart("pyrimel"), "project", "pyrimel", null, true, false],
+      [projectPart("saccade"), "project", "saccade", null, false, true],
+      [agentPart("saccade", "i-3"), "agent", "i-3 t-2", "t-2", false, true],
+    ],
+  );
+});
+
+test("a project's acts: f shows its tasks here first; d forgets, never the home or the shown one", () => {
+  const forgotten: string[] = [];
+  const opened: string[] = [];
+  const elsewhere: string[] = [];
+  const target = (name: string, home: boolean, current: boolean) => ({
+    part: projectPart(name),
+    kind: "project" as const,
+    text: name,
+    project: name,
+    task: null,
+    home,
+    current,
+  });
+  const rail = [target("jernerics", false, false), target("pyrimel", true, false), target("saccade", false, true)];
+  const deps = {
+    machine: () => "tracker:saccade",
+    rowLink: () => null,
+    railTarget: (part: string) => rail.find((entry) => entry.part === part),
+    forget: (name: string) => forgotten.push(name),
+    ports: () => ({ open: (spec: string) => opened.push(spec), elsewhere: (spec: string) => elsewhere.push(spec) }),
+  };
+  const acts = (name: string) => taskRowActs({ kind: "project", label: name, part: projectPart(name) }, deps);
+  assert.deepEqual(acts("jernerics").map((act) => act.key), ["f", "d"]);
+  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f"]);
+  assert.deepEqual(acts("saccade").map((act) => act.key), ["f"]);
+  acts("jernerics")[0]!.action.run();
+  acts("jernerics")[1]!.action.run();
+  assert.deepEqual(opened, ["jernerics/tasks"]);
+  assert.deepEqual(forgotten, ["jernerics"]);
+  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }, rail[1]), "pyrimel (home: holds this device's windows)");
+  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }, rail[0]), "jernerics");
+});
+
+test("an agent's acts are its first task's, composed against its own project", () => {
+  const targets = railTargetsOf(railWithAgent());
+  const elsewhere: [string, string][] = [];
+  const acts = taskRowActs(
+    { kind: "agent", label: "i-3 t-2", part: agentPart("saccade", "i-3") },
+    {
+      machine: () => "tracker:pyrimel",
+      rowLink: () => null,
+      railTarget: (part) => targets.find((entry) => entry.part === part),
+      forget: () => {},
+      ports: () => ({ open: () => {}, elsewhere: (spec, act) => elsewhere.push([spec, act]) }),
+    },
+  );
+  assert.deepEqual(acts.map((act) => act.key), ["o", "i", "w"]);
+  acts[0]!.action.run();
+  assert.deepEqual(elsewhere, [["saccade/t-2", "link"]]);
+});
+
+test("forgetting a reached tracker drops it from the registry; the home is refused", () => {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  registerTracker("saccade", "localhost:8811");
+  registerTracker("pyrimel", "localhost:8813");
+  assert.equal(homeTracker(), "saccade");
+  assert.equal(forgetTracker("saccade"), "home");
+  assert.equal(forgetTracker("nobody"), "unknown");
+  assert.equal(forgetTracker("pyrimel"), "forgotten");
+  assert.deepEqual(Object.keys(knownTrackers()), ["saccade"]);
+});

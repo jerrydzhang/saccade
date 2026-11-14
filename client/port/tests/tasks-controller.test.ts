@@ -17,6 +17,7 @@ import type { ViewPage } from "../src/lib/pages.ts";
 import type { ElsewhereAct } from "../src/lib/elsewhere.ts";
 import { TrackerSource } from "../src/lib/tracker.ts";
 import { sourceFor } from "../src/lib/sources.ts";
+import { projectPart } from "../src/lib/tasks/rail.ts";
 
 const MACHINE = "tracker:tasks-test";
 
@@ -435,13 +436,35 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
   );
 });
 
-test("the control plane: a project switches this window in place; an agent's task opens through the link (t-48)", async (t) => {
-  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+test("the control plane: rail entries are targets - s labels them after the rows; a project's Enter switches here (t-48)", async (t) => {
+  const project = projectPart("tasks-test");
+  const bounds = new Map([...ROW_BOUNDS, [project, { top: 0, bottom: 20 }]]);
+  const h = harness(t, [
+    { task: "t-0", title: "x" },
+    { task: "t-1", title: "y" },
+  ], bounds);
   await h.attachment.places.request({ machine: MACHINE, path: "tasks" });
-  h.attachment.presentation.openProject("jernerics");
-  assert.deepEqual(h.opened, ["jernerics/tasks"]);
-  h.attachment.presentation.openAgentTask("jernerics", "t-23");
-  assert.deepEqual(h.elsewhere, [["jernerics/t-23", "link"]]);
+  h.press("s");
+  const view = h.selectView() as { labels: { part: string; label: string }[] };
+  assert.deepEqual(
+    view.labels.map((entry) => [entry.part, entry.label]),
+    [
+      ["/content/0/content/0/row/0", "A"],
+      ["/content/0/content/0/row/1", "S"],
+      [project, "D"],
+    ],
+    "rows keep the labels they had; the rail labels after them",
+  );
+  h.press("d");
+  const menu = h.menuView() as { label: string; acts: { key: string }[] };
+  assert.equal(menu.label, "tasks-test (shown)");
+  assert.deepEqual(menu.acts.map((act) => act.key), ["f"], "the shown project is not forgotten");
+  h.press("Enter");
+  assert.deepEqual(h.opened, ["tasks-test/tasks"]);
+  assert.equal(h.attachment.presentation.getSelection(), null, "a rail entry is not a task selection");
+  // a plain click on the entry runs the same first act
+  h.attachment.presentation.rowPrimaryClick(project);
+  assert.deepEqual(h.opened, ["tasks-test/tasks", "tasks-test/tasks"]);
   // the rail marks the shown project; outside the native shell it
   // says Herdr's words are not here rather than showing nobody
   let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
@@ -451,5 +474,5 @@ test("the control plane: a project switches this window in place; an agent's tas
   off();
   const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
   assert.ok(shown !== null);
-  assert.ok(shown.projects.some((project) => project.name === "tasks-test" && project.current));
+  assert.ok(shown.projects.some((entry) => entry.name === "tasks-test" && entry.current));
 });

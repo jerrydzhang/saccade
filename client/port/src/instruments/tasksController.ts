@@ -23,10 +23,15 @@
 // The rail is the instrument's chrome, published to its component
 // beside the menu, never through the buffer's frames.
 //
+// The rail's entries are targets of the list's own selection and act
+// menu (lib/tasks/rail.ts railTargetsOf, lib/tasks/menu.ts): s labels
+// rows and rail entries together, and a click, a right-click or a
+// label runs the same acts. Rows label first, so a row's label is the
+// one it had before the rail.
+//
 // Deliberately not here (recorded): find (a facility of a shown
-// revision - a task list is not one), any row cursor (j/k is pure
-// scrolling, the scenario 17 resolution), and label selection over the
-// rail (the picker switches projects by keys: name/tasks).
+// revision - a task list is not one) and any row cursor (j/k is pure
+// scrolling, the scenario 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
 import { createLoadScope, failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
@@ -41,7 +46,7 @@ import type {
 import type { InputContext } from "../lib/contracts/input.ts";
 import { tasksReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
-import { createTasksMenu, type TaskPorts, type TasksMenu } from "../lib/tasks/menu.ts";
+import { createTasksMenu, tasksMenuLabel, type TaskPorts, type TasksMenu } from "../lib/tasks/menu.ts";
 import { createFollow } from "../lib/instruments/follow.ts";
 import type { MenuView } from "../lib/menu/session.ts";
 import type {
@@ -59,15 +64,17 @@ import { SourceUnavailableError } from "../lib/board/errors.ts";
 import { instrumentPath } from "../lib/location.ts";
 import { formatLocation } from "../lib/location.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
-import { TrackerSource, knownTrackers } from "../lib/tracker.ts";
+import { TrackerSource, forgetTracker, homeTracker, knownTrackers } from "../lib/tracker.ts";
 import { tauriInvoke } from "../lib/sources.ts";
 import {
   NO_WORDS,
   agentFactsOf,
   railOf,
+  railTargetsOf,
   wordsOf,
   type AgentFacts,
   type Rail,
+  type RailTarget,
   type WordsSnapshot,
 } from "../lib/tasks/rail.ts";
 import {
@@ -113,10 +120,11 @@ export interface TasksUI {
   /** The last label-selected row's task id, if any (identity rule:
    * cleared when the row leaves the page). */
   getSelection(): string | null;
-  /** A plain click on a row runs its FIRST act directly - the same
-   * action object every invocation path runs (scenario 9). */
+  /** A plain click on a row or a rail entry runs its FIRST act
+   * directly - the same action object every invocation path runs
+   * (scenario 9). */
   rowPrimaryClick(part: string): void;
-  /** Open the act menu for a row (right-click). */
+  /** Open the act menu for a row or a rail entry (right-click). */
   openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
   /** The window services the row acts ride (the one open funnel and
    * the elsewhere surface); injected by the window, and no act is
@@ -124,12 +132,6 @@ export interface TasksUI {
   setTaskPorts(ports: TaskPorts): void;
   /** The control plane's rail: projects and their running agents. */
   subscribeRail(observer: (rail: Rail) => void): () => void;
-  /** Switch this window to a project's task list (opens name/tasks
-   * here through the open funnel). */
-  openProject(name: string): void;
-  /** An agent row's act: its first task's board through the link, as
-   * a task row's (t-14: tasks and agents have no here). */
-  openAgentTask(project: string, task: string): void;
 }
 
 /** How often a shown list re-reads its page (a named tunable,
@@ -213,7 +215,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     const projects = [...names].map(
       (name) => agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null },
     );
-    return railOf(projects, words, current);
+    return railOf(projects, words, current, homeTracker());
   }
 
   function notifyRail(): void {
@@ -310,9 +312,26 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     for (const observer of [...menuObservers]) observer(view);
   }
 
+  function railTarget(part: string): RailTarget | undefined {
+    return railTargetsOf(railNow()).find((target) => target.part === part);
+  }
+
+  /** Every selectable target: the rows, then the rail's entries. */
+  function allTargets(): readonly (TaskTarget | RailTarget)[] {
+    return [...scope.frame().targets, ...railTargetsOf(railNow())];
+  }
+
+  function forget(project: string): void {
+    if (forgetTracker(project) !== "forgotten") return;
+    agentPages = agentPages.filter((entry) => entry.name !== project);
+    notifyRail();
+  }
+
   const tasksMenu: TasksMenu = createTasksMenu({
     machine,
     rowLink: (part) => taskRowOf(scope.frame().page ?? { groups: [] }, part)?.location ?? null,
+    railTarget,
+    forget,
     ports: () => ports,
     capture: (context) => buffer.interactions.capture(context),
   });
@@ -325,7 +344,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   // leaves the page clears - never a silent neighbour.
   let selectedTask: string | null = null;
   const selectSession = createSelectSession({
-    targets: () => scope.frame().targets,
+    targets: allTargets,
     visible(target) {
       const metrics = buffer.viewport.metrics();
       const viewTop = metrics.position.top;
@@ -336,9 +355,10 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     },
     capture: (context) => buffer.interactions.capture(context),
     onSelected(target) {
-      selectedTask = (target as TaskTarget).task;
+      if (target.kind === "task") selectedTask = (target as TaskTarget).task;
       // scenario 9: selection opens the act menu
-      tasksMenu.openFor({ part: target.part, kind: target.kind, label: target.text });
+      const label = tasksMenuLabel({ kind: target.kind, label: target.text }, railTarget(target.part));
+      tasksMenu.openFor({ part: target.part, kind: target.kind, label });
     },
   });
 
@@ -360,13 +380,14 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       return selectedTask;
     },
     rowPrimaryClick(part) {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
+      const target = allTargets().find((entry) => entry.part === part);
       if (target === undefined) return;
       tasksMenu.session.primaryClick({ kind: target.kind, label: target.text, part });
       notifyMenu();
     },
     openMenuFor(target, at) {
-      tasksMenu.openFor(target, at);
+      const rail = target.kind === "task" ? undefined : railTarget(target.part);
+      tasksMenu.openFor({ ...target, label: tasksMenuLabel(target, rail) }, at);
     },
     setTaskPorts(injected) {
       ports = injected;
@@ -377,13 +398,6 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       return () => {
         railObservers.delete(observer);
       };
-    },
-    openProject(name) {
-      ports?.open(formatLocation({ machine: `tracker:${name}`, path: "tasks" }));
-    },
-    openAgentTask(project, task) {
-      const spec = formatLocation({ machine: `tracker:${project}`, path: task });
-      if (ports?.elsewhere !== undefined) ports.elsewhere(spec, "link");
     },
   };
 

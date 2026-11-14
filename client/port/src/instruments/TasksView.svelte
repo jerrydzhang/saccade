@@ -14,7 +14,7 @@ import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
-  import type { Rail } from "../lib/tasks/rail.ts";
+  import { agentPart, projectPart, type Rail } from "../lib/tasks/rail.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
 
@@ -44,8 +44,12 @@ import { ageOf } from "../lib/tasks/page.ts";
   // row (scenario 17's mouse path: the act targets the clicked row,
   // not a selection). Right-click opens the same act list at the
   // pointer (scenario 9's third invocation path).
+  // a rail entry is a target like a row (t-48): the same click, the
+  // same right-click menu
   function rowFromEvent(event: MouseEvent): HTMLElement | null {
-    const element = (event.target as HTMLElement | null)?.closest?.('[data-port-kind="task"]');
+    const element = (event.target as HTMLElement | null)?.closest?.(
+      '[data-port-kind="task"], [data-port-kind="project"], [data-port-kind="agent"]',
+    );
     return element instanceof HTMLElement ? element : null;
   }
 
@@ -63,6 +67,7 @@ import { ageOf } from "../lib/tasks/page.ts";
     if (row === null) return;
     const part = row.getAttribute("data-port-part");
     if (part === null) return;
+    const kind = row.getAttribute("data-port-kind") ?? "task";
     const task = row.getAttribute("data-port-task") ?? "";
     const title = row.getAttribute("data-port-title") ?? "";
     event.preventDefault();
@@ -72,7 +77,7 @@ import { ageOf } from "../lib/tasks/page.ts";
         ? undefined
         : { x: event.clientX - box.left, y: event.clientY - box.top };
     controller.openMenuFor(
-      { part, kind: "task", label: `${task} ${title}`.trim() },
+      { part, kind, label: kind === "task" ? `${task} ${title}`.trim() : title },
       at,
     );
   }
@@ -111,7 +116,15 @@ the select session + the act menu (Enter runs the first act), so the
 a11y click advisories do not apply. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="port-plane">
+<div
+  class="port-tasks-stage"
+  role="presentation"
+  onmousemove={pointerMoved}
+  onmouseleave={() => {
+    hovered = null;
+  }}
+>
+<div class="port-plane" bind:this={host} role="document" onclick={onClick} oncontextmenu={onContextMenu}>
 <!-- the control plane's rail (t-48): projects, then each project's
 running agents by Herdr's word; a project switches this window, an
 agent opens its task here -->
@@ -121,8 +134,10 @@ agent opens its task here -->
       <button
         class="port-plane-name"
         data-port-control={`project-${project.name}`}
+        data-port-part={projectPart(project.name)}
+        data-port-kind="project"
+        data-port-title={project.name}
         aria-current={project.current ? "page" : undefined}
-        onclick={() => controller.openProject(project.name)}
       >{project.name}</button>
       {#if project.problem !== null}
         <div class="port-plane-note" title={project.problem}>unreachable</div>
@@ -133,12 +148,11 @@ agent opens its task here -->
           <button
             class="port-plane-agent"
             data-port-control={`agent-${project.name}-${agent.incarnation}`}
+            data-port-part={agentPart(project.name, agent.incarnation)}
+            data-port-kind="agent"
+            data-port-title={[agent.incarnation, agent.tasks[0]].filter((part) => part !== undefined).join(" ")}
             disabled={agent.tasks.length === 0}
             title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
-            onclick={() => {
-              const task = agent.tasks[0];
-              if (task !== undefined) controller.openAgentTask(project.name, task);
-            }}
           >
             <span class="port-plane-incarnation">{agent.incarnation}</span>
             <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
@@ -152,15 +166,7 @@ agent opens its task here -->
     <div class="port-plane-note" data-port-control="herdr-note">{rail.herdr}</div>
   {/if}
 </nav>
-<div
-  class="port-tasks-stage"
-  role="presentation"
-  onmousemove={pointerMoved}
-  onmouseleave={() => {
-    hovered = null;
-  }}
->
-<div class="port-tasks-view" bind:this={host} role="document" onclick={onClick} oncontextmenu={onContextMenu}>
+<div class="port-tasks-view">
   {#if page !== null && content.status === "loaded"}
     {#each page.groups as group (group.part)}
       <section class="port-tasks-group" data-port-part={group.part} data-port-kind="group">
@@ -197,11 +203,11 @@ agent opens its task here -->
     {/each}
   {/if}
 </div>
+</div>
 {#if select !== null}
   <LabelOverlay chips={select.labels} measure={partMeasureIn(host)} typed={select.pendingLabel} />
 {/if}
 {#if menu !== null}
   <ActMenu {menu} {host} session={controller.menuSession()} />
 {/if}
-</div>
 </div>
