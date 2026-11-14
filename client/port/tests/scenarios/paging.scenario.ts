@@ -6,7 +6,7 @@
 // (src/App.ts; now contexts.ts PINNED_CHORDS). Read through the
 // readout's viewport.
 import { expect, test } from "#scenario";
-import { find, longBoard, openLocation, spec, submitLocation } from "./kit/helpers.ts";
+import { find, longBoard, openLocation, spec, openPlane } from "./kit/helpers.ts";
 import type { AppDriver } from "./kit/driver.ts";
 
 const STEPS: [string, (height: number) => number][] = [
@@ -54,7 +54,7 @@ test("lists page by the same steps", async ({ app, tracker }) => {
   // 2h) and still need a Ctrl-f of room; 60 rows scrolled only ~1.4h
   // on a 775px viewport, so the setup ended at the bottom
   for (let index = 0; index < 150; index++) await tracker.createTask(`paging row ${index + 1}`);
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null).toBe("loaded");
   await app.press("Escape");
   await stepsMatch(app);

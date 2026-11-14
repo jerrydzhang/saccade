@@ -13,6 +13,7 @@
 // is restoring.
 
 import type { RestoreStatus, RestoringPlace, SavedPlace } from "../contracts/places.ts";
+import { isPlane } from "../location.ts";
 
 export type WindowPlace = Readonly<{ location: string; part: string | null }>;
 
@@ -20,7 +21,9 @@ export type WindowPlace = Readonly<{ location: string; part: string | null }>;
  * revision a bare location resolved to, or the relaunch would pin
  * what was following) and the board part the reading height sits in
  * (the trail's own capture; a task row or the default position is no
- * part). Null while the frame is loading or carries no location. */
+ * part). The control plane's part is the project it shows (t-54): its
+ * address carries it, so a relaunch reopens that project. Null while
+ * the frame is loading or carries no location. */
 export function shownPlaceOf(
   content: { asked?: unknown; status?: unknown } | undefined,
   capture: () => SavedPlace,
@@ -29,8 +32,11 @@ export function shownPlaceOf(
   if (content.status === "loading") return null;
   let part: string | null = null;
   try {
-    const position = capture().position;
-    if (position.kind === "anchor") {
+    const captured = capture();
+    const position = captured.position;
+    if (isPlane(captured.address)) {
+      part = captured.address.path.length > 0 ? captured.address.path : null;
+    } else if (position.kind === "anchor") {
       const anchor = position.anchor as { kind?: unknown; path?: unknown } | null;
       if (anchor !== null && anchor.kind === "board-part" && typeof anchor.path === "string") part = anchor.path;
     }

@@ -33,7 +33,7 @@ import { boardInstrument, parseOpenSpec } from "./instruments/board.ts";
 import type { BoardUI } from "./instruments/board.ts";
 import { tasksInstrument } from "./instruments/tasks.ts";
 import type { TasksUI } from "./instruments/tasks.ts";
-import { instrumentPath } from "./lib/location.ts";
+import { PLANE_LOCATION, isPlane } from "./lib/location.ts";
 import type { Address } from "./lib/contracts/places.ts";
 import {
   PORT_SURFACE,
@@ -148,7 +148,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let activeSurface: Surface = "board";
 
   function surfaceOfAddress(address: Address): Surface {
-    return instrumentPath(address.path) !== null ? "tasks" : "board";
+    // the control plane (t-54) is the tasks surface's one address
+    return isPlane(address) ? "tasks" : "board";
   }
 
   function instrumentFor(surface: Surface): RunningInstrument {
@@ -266,7 +267,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // the tracker machine rides the parser's own mapping (a host form
     // becomes a tracker: machine) - never a raw split of the string
     let trackerMachine: string | null = null;
-    for (const candidate of [openHere, ...recent]) {
+    // the plane names no tracker: the project it shows is its frame's
+    const shownTracker = (current.kind === "alive" && current.content.kind === "available"
+      ? (current.content.value.props["content"] as { resolved?: { machine?: unknown } | null } | undefined)?.resolved?.machine
+      : undefined);
+    if (typeof shownTracker === "string" && shownTracker.startsWith("tracker:")) trackerMachine = shownTracker;
+    for (const candidate of trackerMachine !== null ? [] : [openHere, ...recent]) {
       if (typeof candidate !== "string") continue;
       const address = parseOpenSpec(candidate);
       if (address !== null && address.machine.startsWith("tracker:")) {
@@ -802,7 +808,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const tasks = instruments.tasks;
     if (tasks !== undefined) {
       (tasks.presentation as TasksUI).setTaskPorts({
-        open: (spec: string) => openSpec(spec),
+        open: (spec: string, part?: string | null) => openSpec(spec, part),
         elsewhere: (spec: string, act: ElsewhereAct) => {
           openElsewhere(spec, act).catch((error: unknown) => {
             diagnostics.report(
@@ -1107,11 +1113,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const surface = surfaceOfAddress(address);
     const target = instrumentFor(surface);
     setActive(surface);
+    // the plane's part is the project it shows (its window place's
+    // part, t-54): the address carries it, no anchor reveals it
+    const plane = isPlane(address);
     const place = {
       bufferId: target.id,
-      address,
+      address: plane ? { ...address, path: part ?? "" } : address,
       position:
-        typeof part === "string" && part.length > 0
+        !plane && typeof part === "string" && part.length > 0
           ? {
               kind: "anchor" as const,
               anchor: { kind: "board-part" as const, path: part },
@@ -1328,6 +1337,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   async function boot(): Promise<void> {
     const requested = await openTestBoard();
+    if (!requested) {
+      // nothing was asked for (no restore, no test open): the control
+      // plane opens now (t-54), not after the settle below - that
+      // wait exists to report on an asked open
+      const shown = displayedFrame();
+      if (shown.kind === "alive" && shown.content.kind === "empty") openSpec(PLANE_LOCATION);
+      console.log(`[port] observation: ${JSON.stringify(readout())}`);
+      return;
+    }
     // The probe: the slice-1 temporary readout ride. The observation
     // contract itself (__saccadePort.readout) is product surface; this
     // console echo exists only until the fresh harness adapter reads
@@ -1358,13 +1376,13 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const failure = diagnostics.entries().at(-1);
       console.error(`[viewer] test open board FAILED: ${failure ? failure.message : "no board"}`);
     }
-    // E4 (t-34@r6 change 4, the ratified floor): a COLD profile - a
-    // genuinely first launch with no opened content - shows the TASKS
-    // window, never a blank page. With no tracker reached yet the
-    // tasks surface carries its honest empty state; the picker (F1)
-    // supplies the first tracker and the list loads through it. Any
-    // open - the lane's test open, a restore, a delivery - leaves the
-    // surface to its own routing.
+    // E4 (t-34@r6 change 4, the ratified floor), t-54: a window with
+    // nothing opened - a cold profile, a new window, a restore whose
+    // saved location no longer parses - opens to the control plane,
+    // never a blank page. With no project known yet the plane says how
+    // to add one (a). Any open that shows something - the lane's test
+    // open, a restore, a delivery - leaves the surface to its own
+    // routing.
     const after = displayedFrame();
     if (after.kind !== "alive" || (after.content.kind !== "available" && after.content.kind !== "unavailable")) {
       // an open was asked for (a restore, the lanes' test open) and
@@ -1372,10 +1390,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       // line sat on the other branch and fired after every open that
       // DID show something)
       if (requested) console.error("[viewer] test open board FAILED: no board");
-      // the tasks instrument constructs through its own door (the
-      // buffer joins here, empty until a tracker is reached)
-      void instrumentFor("tasks");
-      setActive("tasks");
+      openSpec(PLANE_LOCATION);
     }
     console.log(`[port] observation: ${JSON.stringify(readout())}`);
   }

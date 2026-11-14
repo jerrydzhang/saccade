@@ -6,7 +6,7 @@
 // task id, title and age stay; the row's act menu names the full title.
 // Browser-only: the native lane's kiosk-shell holds the window's size.
 import { expect, test } from "#scenario";
-import { spec, submitLocation } from "./kit/helpers.ts";
+import { openPlane } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 
 const LONG = "a task whose title runs long enough to wrap over many lines in a narrow task list, "
@@ -60,7 +60,7 @@ async function expectOneLine(app: AppDriver, seeded: Seeded): Promise<void> {
 
 test("long titles stay on one line, and the lesser columns drop out as the window narrows", async ({ app, tracker }) => {
   const seeded = await seed(tracker);
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.rows.some((row) => row.task === seeded.committed) ?? false).toBe(true);
   await app.press("Escape");
   const committed = await partOf(app, seeded.committed);

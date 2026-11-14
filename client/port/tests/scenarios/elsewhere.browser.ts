@@ -8,7 +8,7 @@
 // project's: s18-linked-delivery.scenario.ts.
 // Sources: t36_checks._s18_port, t36_differential._s17_port.
 import { expect, test } from "./kit/browser.ts";
-import { answerAsk, citationAct, openLocation, spec, submitLocation, whenBound } from "./kit/helpers.ts";
+import { answerAsk, citationAct, openLocation, spec, whenBound, openPlane } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 import type { Shell } from "./kit/browser.ts";
 
@@ -137,7 +137,7 @@ test("a dead link with one window left: o opens a new window, never delivers int
 
 test("S17 the task row's Enter delivers through the link and the list holds its surface", async ({ bridged, tracker }) => {
   const { app, shell } = await bridged();
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect
     .poll(async () => {
       const obs = await app.readout();

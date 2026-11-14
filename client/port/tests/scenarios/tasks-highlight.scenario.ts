@@ -6,7 +6,7 @@
 // compared with its own look before any pointer moved: rows of
 // different states may differ among themselves.
 import { expect, test } from "#scenario";
-import { submitLocation, spec } from "./kit/helpers.ts";
+import { openPlane } from "./kit/helpers.ts";
 import type { AppDriver } from "./kit/driver.ts";
 
 async function visibleRows(app: AppDriver): Promise<string[]> {
@@ -22,7 +22,7 @@ async function visibleRows(app: AppDriver): Promise<string[]> {
 
 test("j/k under a resting pointer highlight no row; a pointer move highlights its row", { tags: ["native"] }, async ({ app, tracker }) => {
   for (let index = 0; index < 60; index++) await tracker.createTask(`highlight row ${index + 1}`);
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null).toBe("loaded");
   await app.press("Escape");
   const rows = await visibleRows(app);

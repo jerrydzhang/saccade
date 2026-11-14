@@ -4,7 +4,8 @@
 // is a file on the TRACKER's machine (t-24@r12: never the device the
 // human sits at - the host reader is test-only machinery),
 // "tracker/t-N[@rK]" names a task board served by that tracker's own
-// read surface, and nothing else is a location. A bare relative path
+// read surface, "plane" is the control plane (it names no tracker),
+// and nothing else is a location. A bare relative path
 // is refused, loudly, never guessed.
 //
 // Machine names may carry colons themselves (user@host:port), so the
@@ -13,13 +14,27 @@
 export type ParsedLocation = { machine: string; path: string } | null;
 
 // The tracker-named form: a repository directory name, then a task
-// spec or an entry page (tasks, agents - the pipeline and the glance,
-// t-14 step 3). The name carries no colon or slash, so it never
-// collides with the machine:/path form.
-const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|tasks|agents)$/;
+// spec or the glance's entry page (agents, t-14 step 3). The name
+// carries no colon or slash, so it never collides with the
+// machine:/path form. A tracker's pipeline is no location (t-54): the
+// control plane shows it.
+const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents)$/;
 
-/** The entry pages the instruments read: the pipeline (tasks) and the
- * glance (agents), per t-14 "Tasks and agents". */
+/** The control plane's address (t-54): it names no tracker. Which
+ * project the plane shows is the window's own state, carried in the
+ * address's path ("" - the window's default) and persisted as the
+ * window place's part; the location string is always "plane". */
+export const PLANE_LOCATION = "plane";
+export const PLANE_MACHINE = "plane";
+
+/** Whether an address is the control plane: a core machine that
+ * happens to be named "plane" is still reached as plane:/path. */
+export function isPlane(address: { machine: string; path: string }): boolean {
+  return address.machine === PLANE_MACHINE && !address.path.startsWith("/");
+}
+
+/** The entry pages the instruments read from a tracker: the pipeline
+ * (tasks) and the glance (agents), per t-14 "Tasks and agents". */
 export type InstrumentPath = "tasks" | "agents";
 
 export function instrumentPath(path: string): InstrumentPath | null {
@@ -38,7 +53,7 @@ export function trackerLocation(input: string): ParsedLocation {
 // once reaches the tracker and remembers its host; afterwards the bare
 // "tracker/spec" form finds it. A missing port is sac serve's default.
 const HOSTED_LOCATION =
-  /^((?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{1,5}))?)\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|tasks|agents)$/;
+  /^((?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{1,5}))?)\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents)$/;
 export const DEFAULT_TRACKER_PORT = 8811;
 
 export type HostedLocation = { host: string; tracker: string; path: string };
@@ -49,6 +64,20 @@ export function hostedTrackerLocation(input: string): HostedLocation | null {
     return null;
   const host = match[2] === undefined ? `${match[1]}:${DEFAULT_TRACKER_PORT}` : match[1];
   return { host, tracker: match[3], path: match[4] };
+}
+
+// A project as the plane's add field takes it (t-54):
+// "host[:port]/tracker", the reaching form without a spec.
+const PROJECT_ADDRESS =
+  /^((?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{1,5}))?)\/([A-Za-z0-9][A-Za-z0-9._-]*)\/?$/;
+
+export type ProjectAddress = { host: string; tracker: string };
+
+export function projectAddress(input: string): ProjectAddress | null {
+  const match = PROJECT_ADDRESS.exec(input.trim());
+  if (!match || match[1] === undefined || match[3] === undefined) return null;
+  const host = match[2] === undefined ? `${match[1]}:${DEFAULT_TRACKER_PORT}` : match[1];
+  return { host, tracker: match[3] };
 }
 
 /** "t-N" or "t-N@rK": the task spec a tracker location's path carries. */
@@ -66,6 +95,7 @@ export function parseLocation(input: string): ParsedLocation {
   const raw = input.trim();
   if (raw.length === 0) return null;
   if (raw.startsWith("/")) return { machine: "tracker-machine", path: raw };
+  if (raw === PLANE_LOCATION) return { machine: PLANE_MACHINE, path: "" };
   const tracker = trackerLocation(raw);
   if (tracker) return tracker;
   const hosted = hostedTrackerLocation(raw);
@@ -107,6 +137,7 @@ export function viewUrl(base: URL, route: string): string {
 /** The parseable string form of a location: the form the header field,
  * the picker and the inspection open all take back. */
 export function formatLocation(location: { machine: string; path: string }): string {
+  if (isPlane(location)) return PLANE_LOCATION;
   if (location.machine.startsWith("tracker:")) {
     return `${location.machine.slice("tracker:".length)}/${location.path}`;
   }

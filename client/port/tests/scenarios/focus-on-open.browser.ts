@@ -7,7 +7,7 @@
 // activates a window on the person's compositor is the native lane's
 // and the human's trace's (window-focus.scenario.ts).
 import { expect, test } from "./kit/browser.ts";
-import { answerAsk, citationAct, openLocation, spec, submitLocation, whenBound } from "./kit/helpers.ts";
+import { answerAsk, citationAct, openLocation, spec, whenBound, openPlane } from "./kit/helpers.ts";
 import type { Shell } from "./kit/browser.ts";
 
 const focused = (shell: Shell): unknown[] => shell.argsOf("focus_suite_window").map((args) => args.label);
@@ -44,7 +44,7 @@ test("the ask's answer, a delivery through the link, and w each focus their rece
 
 test("the task row's Enter, opening elsewhere, focuses the receiver", async ({ bridged, tracker }) => {
   const { app, shell } = await bridged();
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null).toBe("loaded");
   await app.press("s");
   await expect.poll(async () => (await app.labels()).length).toBeGreaterThan(0);

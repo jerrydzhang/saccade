@@ -269,7 +269,8 @@ export interface ReadingActions {
 // commands as the board's, with the pipeline's own reading shape - j/k
 // is pure scrolling by task row (the scenario 17 resolution: NO row
 // cursor), and find is a facility of a shown revision, so / is not
-// offered on a task list.
+// offered on a task list. a opens the control plane's add field (t-54):
+// registering a project opens nothing.
 export interface TasksReadingActions {
   scrollDown(): void;
   scrollUp(): void;
@@ -277,6 +278,7 @@ export interface TasksReadingActions {
   scrollToBottom(): void;
   scrollFraction(direction: -1 | 1, fraction: number): void;
   enterSelect(): void;
+  addProject(): void;
 }
 
 export function tasksReadingContext(actions: TasksReadingActions): InputContext {
@@ -368,6 +370,14 @@ export function tasksReadingContext(actions: TasksReadingActions): InputContext 
         run: () => actions.enterSelect(),
       },
       keys: [sequence(key("s"))],
+    },
+    {
+      action: {
+        id: "tasks.add-project",
+        label: "add a project (host:port/name)",
+        run: () => actions.addProject(),
+      },
+      keys: [sequence(key("a"))],
     },
   ]);
   validateNoCollisions(context);

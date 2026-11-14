@@ -34,6 +34,27 @@ export async function submitLocation(app: AppDriver, location: string): Promise<
   await app.press("Enter");
 }
 
+/** Show the seeded tracker's tasks on the control plane (t-54): open
+ * "plane" through the picker, register the tracker through the
+ * plane's add field (a, host/repo, Enter - registering opens nothing)
+ * and switch to it with its rail entry; answers when its list shows. */
+export async function openPlane(app: AppDriver, tracker: SeededTracker): Promise<void> {
+  await submitLocation(app, "plane");
+  await expect.poll(async () => (await app.readout()).surface).toBe("tasks");
+  await app.press("a");
+  await expect.poll(() => app.shows("project-input")).toBe(true);
+  await app.type(`${tracker.host}/${tracker.repo}`);
+  await app.press("Enter");
+  await expect.poll(() => app.shows("project-input")).toBe(false);
+  await app.click(`project-${tracker.repo}`);
+  await expect
+    .poll(async () => {
+      const tasks = (await app.readout()).tasks;
+      return { project: tasks?.project ?? null, status: tasks?.status ?? null };
+    }, { timeout: 20_000 })
+    .toEqual({ project: tracker.repo, status: "loaded" });
+}
+
 /** Wait until the window shows the open it asked for, `path`
  * (repo/t-N or repo/t-N@rK), loaded; answers that readout. The shown
  * location is the revision that answered: repo/t-N@rK. */

@@ -9,7 +9,7 @@
 // S20: the launch restore - after a relaunch into the same data
 // directory, the windows that were open come back.
 import { expect, test } from "#scenario";
-import { citationAct, openLocation, spec, submitLocation, whenBound } from "./kit/helpers.ts";
+import { citationAct, openLocation, spec, whenBound, openPlane } from "./kit/helpers.ts";
 
 test("D1 j scrolls a window born by the task row's Enter, with the driver in it", { tags: ["multi-window"] }, async ({ app, tracker }) => {
   // its own task (the seeds stay as seeded for every other scenario),
@@ -17,7 +17,7 @@ test("D1 j scrolls a window born by the task row's Enter, with the driver in it"
   const task = await tracker.createTask("D1: a board taller than a window");
   const blocks = Array.from({ length: 150 }, (_, index) => `  - text: D1 overflow block ${index + 1}\n`).join("");
   await tracker.commit(task, `grammar: 1\ntask: ${task}\ncontent:\n${blocks}`, "D1: a board taller than a window");
-  await submitLocation(app, spec(tracker, "tasks"));
+  await openPlane(app, tracker);
   await expect.poll(async () => (await app.readout()).tasks?.status ?? null, { timeout: 20_000 }).toBe("loaded");
   const first = (await app.readout()).tasks!.rows.find((row) => row.task === task)!;
   expect(first, "the D1 task's row is listed").toBeDefined();

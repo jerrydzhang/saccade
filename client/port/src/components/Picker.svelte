@@ -97,7 +97,7 @@ import { parseOpenSpec } from "../instruments/board.ts";
     bind:this={field}
     bind:value={query}
     data-port-control="picker-input"
-    placeholder="open: host:8811/tracker/t-N, a task name, /absolute/path"
+    placeholder="open: host:8811/tracker/t-N, a task name, /absolute/path, plane"
     onkeydown={onKeydown}
   />
   {#if entries.length > 0}

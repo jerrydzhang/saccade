@@ -141,9 +141,10 @@ test("the rail's targets: each project, then its agents, carrying home and shown
   );
 });
 
-test("a project's acts: f shows its tasks here first; d forgets any project, the home and the shown one too", () => {
+test("a project's acts: f shows it on this plane first; a adds a project; d forgets any project, the home and the shown one too", () => {
   const forgotten: string[] = [];
-  const opened: string[] = [];
+  const opened: [string, string | null | undefined][] = [];
+  let adds = 0;
   const elsewhere: string[] = [];
   const target = (name: string, home: boolean, current: boolean) => ({
     part: projectPart(name),
@@ -161,15 +162,24 @@ test("a project's acts: f shows its tasks here first; d forgets any project, the
     rowLink: () => null,
     railTarget: (part: string) => rail.find((entry) => entry.part === part),
     forget: (name: string) => forgotten.push(name),
-    ports: () => ({ open: (spec: string) => opened.push(spec), elsewhere: (spec: string) => elsewhere.push(spec) }),
+    addProject: () => {
+      adds += 1;
+    },
+    ports: () => ({
+      open: (spec: string, part?: string | null) => opened.push([spec, part]),
+      elsewhere: (spec: string) => elsewhere.push(spec),
+    }),
   };
   const acts = (name: string) => taskRowActs({ kind: "project", label: name, part: projectPart(name) }, deps);
-  assert.deepEqual(acts("jernerics").map((act) => act.key), ["f", "d"]);
-  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f", "d"]);
-  assert.deepEqual(acts("saccade").map((act) => act.key), ["f", "d"]);
+  assert.deepEqual(acts("jernerics").map((act) => act.key), ["f", "a", "d"]);
+  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f", "a", "d"]);
+  assert.deepEqual(acts("saccade").map((act) => act.key), ["f", "a", "d"]);
   acts("jernerics")[0]!.action.run();
   acts("jernerics")[1]!.action.run();
-  assert.deepEqual(opened, ["jernerics/tasks"]);
+  acts("jernerics")[2]!.action.run();
+  // the plane names no tracker: the project rides as its part (t-54)
+  assert.deepEqual(opened, [["plane", "jernerics"]]);
+  assert.equal(adds, 1, "a opens the add field and opens nothing");
   assert.deepEqual(forgotten, ["jernerics"]);
   // the heading names the host it was reached at
   assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }, rail[0]), "jernerics (localhost:8814)");
@@ -186,6 +196,7 @@ test("an agent's acts are its first task's, composed against its own project", (
       rowLink: () => null,
       railTarget: (part) => targets.find((entry) => entry.part === part),
       forget: () => {},
+      addProject: () => {},
       ports: () => ({ open: () => {}, elsewhere: (spec, act) => elsewhere.push([spec, act]) }),
     },
   );

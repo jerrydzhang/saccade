@@ -163,9 +163,19 @@ test("the shown place is the ASKED location and the board part at the reading he
   });
 });
 
+test("the plane's part is the project it shows; an empty plane has none (t-54)", () => {
+  const plane = (path: string) => (): SavedPlace => ({
+    bufferId: "main-tasks-1",
+    address: { machine: "plane", path },
+    position: { kind: "anchor", anchor: { kind: "task", task: "t-2" }, viewportOffset: { left: 0, top: 0 } },
+  });
+  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("pyrimel")), { location: "plane", part: "pyrimel" });
+  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("")), { location: "plane", part: null });
+});
+
 test("a task row, a loading frame, an empty frame and a dead capture are no place or no part", () => {
   const row = captured({ kind: "anchor", anchor: { kind: "task", task: "t-2" }, viewportOffset: { left: 0, top: 0 } });
-  assert.deepEqual(shownPlaceOf({ asked: "repo/tasks", status: "loaded" }, row), { location: "repo/tasks", part: null });
+  assert.deepEqual(shownPlaceOf({ asked: "repo/t-1", status: "loaded" }, row), { location: "repo/t-1", part: null });
   assert.equal(shownPlaceOf({ asked: "repo/t-1", status: "loading" }, row), null);
   assert.equal(shownPlaceOf({ asked: "", status: "loaded" }, row), null);
   assert.equal(shownPlaceOf(undefined, row), null);

@@ -15,6 +15,7 @@ import { partMeasureIn } from "../lib/select/measure.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
   import { agentPart, projectPart, type Rail } from "../lib/tasks/rail.ts";
+  import { ADD_CLOSED, type AddView } from "../lib/tasks/add.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
 
@@ -26,6 +27,20 @@ import { ageOf } from "../lib/tasks/page.ts";
   $effect(() => controller.subscribeRail((next) => {
     rail = next;
   }));
+
+  // the add field (t-54): open while the controller's add session is;
+  // typing stays native (a text-entry capture), Enter and Escape are
+  // the session's own commands
+  let add: AddView = $state(ADD_CLOSED);
+  let addInput: HTMLInputElement | null = $state(null);
+  let addValue = $state("");
+  $effect(() => controller.subscribeAdd((view) => {
+    add = view;
+    if (document.activeElement !== addInput) addValue = view.value;
+  }));
+  $effect(() => {
+    if (add.open) addInput?.focus({ preventScroll: true });
+  });
 
   $effect(() => {
     const offSelect = controller.subscribeSelect((view) => {
@@ -162,11 +177,35 @@ agent opens its task here -->
       {/each}
     </section>
   {/each}
+  {#if add.open}
+    <div class="port-plane-add">
+      <input
+        bind:this={addInput}
+        bind:value={addValue}
+        data-port-control="project-input"
+        data-port-captured-input=""
+        type="text"
+        placeholder="host:port/name"
+        aria-label="add a project"
+        oninput={(event) => controller.typeAdd(event.currentTarget.value)}
+      />
+      {#if add.problem !== null}
+        <div class="port-plane-note" data-port-control="project-input-problem">{add.problem}</div>
+      {/if}
+    </div>
+  {/if}
   {#if rail.herdr !== null}
     <div class="port-plane-note" data-port-control="herdr-note">{rail.herdr}</div>
   {/if}
 </nav>
 <div class="port-tasks-view">
+  {#if content.status !== "loading" && content.project === null && rail.projects.length === 0}
+    <div class="port-tasks-none" data-port-control="plane-empty">no project yet: press a and type its host:port/name</div>
+  {:else if content.status !== "loading" && content.project === null}
+    <div class="port-tasks-none" data-port-control="plane-empty">choose a project on the rail, or press a to add one</div>
+  {:else if content.problem !== null}
+    <div class="port-tasks-none" data-port-control="plane-problem">{content.project}: {content.problem}</div>
+  {/if}
   {#if page !== null && content.status === "loaded"}
     {#each page.groups as group (group.part)}
       <section class="port-tasks-group" data-port-part={group.part} data-port-kind="group">
