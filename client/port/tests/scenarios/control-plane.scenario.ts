@@ -1,6 +1,6 @@
 // The control plane (t-48, t-54): its own address, "plane", which
 // names no tracker - a window with nothing opened shows it, and which
-// project it shows is the window's own state (its place's part). The
+// project it shows lives in the session, never in the window's place. The
 // task list carries a rail of the projects this device has reached,
 // the shown one marked; choosing a project switches this window in
 // place - the list it shows, never a new window. Registering a project
@@ -73,8 +73,8 @@ test("the rail lists the reached project and switches this window to its tasks",
   await expect.poll(async () => (await app.readout()).tasks?.project ?? null).toBe(tracker.repo);
   const shown = await app.readout();
   expect(shown.tasks?.location).toBe("plane");
-  // the project is the window's own state: its place's part
-  await expect.poll(async () => (await app.readout()).window.place).toEqual({ location: "plane", part: tracker.repo });
+  // the plane remembers no project: its place is the bare plane
+  await expect.poll(async () => (await app.readout()).window.place).toEqual({ location: "plane", part: null });
   expect(await app.windows()).toEqual(["main"]);
 
   // the rail is the list's own selection: s labels the project with

@@ -16,10 +16,10 @@
 // menu: a project's f shows its tasks on this plane (its first act -
 // Enter and a plain click switch; the plane's project is the window's
 // own state, t-54), a adds another project and d forgets it, any
-// project; an agent's acts are its first task's, a task row's, with y
-// copying `hc attach <address>` - the address as the local core names
-// it (t-55) - in place of the row's copy reference. An agent no tracker
-// registered has y alone.
+// project; an agent's first act is y, copying `hc attach <address>` -
+// the address as the local core names it (t-55) - so Enter and a plain
+// click copy it; its first task's board acts follow. An agent no
+// tracker registered has y alone.
 //
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
 // window-wide since ea51669): they appear only when the window has
@@ -124,14 +124,13 @@ function boardActs(spec: string, ports: TaskPorts, reference = true): MenuAct[] 
   return acts;
 }
 
-/** An agent's acts: its first task's board acts, when it owns one,
- * then y - the attach command for its terminal, the address exactly
- * as the local core names it (t-55). */
+/** An agent's acts: y first - the attach command for its terminal,
+ * the address exactly as the local core names it (t-55) - so Enter and
+ * a plain click copy it (the human, 2026-11-14: to reach the task,
+ * select the task); then its first task's board acts, when it owns
+ * one. */
 function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
-  const acts =
-    target.project !== null && target.task !== null
-      ? boardActs(formatLocation({ machine: `tracker:${target.project}`, path: target.task }), ports, false)
-      : [];
+  const acts: MenuAct[] = [];
   const copy = ports.copy;
   const address = target.address;
   if (copy !== undefined && address !== null) {
@@ -143,6 +142,9 @@ function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
         run: () => copy(`hc attach ${address}`),
       },
     });
+  }
+  if (target.project !== null && target.task !== null) {
+    acts.push(...boardActs(formatLocation({ machine: `tracker:${target.project}`, path: target.task }), ports, false));
   }
   return acts;
 }

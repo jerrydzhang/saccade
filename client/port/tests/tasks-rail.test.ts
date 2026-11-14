@@ -407,8 +407,8 @@ test("every agent is a target with y copying hc attach <address> as the local co
   };
   const acts = (part: string, label: string) => taskRowActs({ kind: "agent", label, part }, deps);
   const registered = acts(agentPart("saccade", "i-3"), "i-3 t-2");
-  assert.deepEqual(registered.map((act) => act.key), ["o", "i", "w", "y"], "the task's acts, y the attach - not the copy reference");
-  registered[3]!.action.run();
+  assert.deepEqual(registered.map((act) => act.key), ["y", "o", "i", "w"], "y the attach first (Enter copies it), then the task's acts");
+  registered[0]!.action.run();
   const stray = acts(terminalPart("other/t4j"), "t-0 / 2 other/t4j");
   assert.deepEqual(stray.map((act) => [act.key, act.action.label]), [["y", "copy hc attach other/t4j"]]);
   stray[0]!.action.run();

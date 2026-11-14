@@ -163,13 +163,13 @@ test("the shown place is the ASKED location and the board part at the reading he
   });
 });
 
-test("the plane's part is the project it shows; an empty plane has none (t-54)", () => {
+test("the plane remembers no project: its place is the bare plane (t-54; the human, 2026-11-14)", () => {
   const plane = (path: string) => (): SavedPlace => ({
     bufferId: "main-tasks-1",
     address: { machine: "plane", path },
     position: { kind: "anchor", anchor: { kind: "task", task: "t-2" }, viewportOffset: { left: 0, top: 0 } },
   });
-  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("pyrimel")), { location: "plane", part: "pyrimel" });
+  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("pyrimel")), { location: "plane", part: null });
   assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("")), { location: "plane", part: null });
 });
 
