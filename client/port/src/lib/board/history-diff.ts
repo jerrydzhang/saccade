@@ -228,9 +228,11 @@ export function wordDiffMarkdown(before: string, after: string): string {
     ops.push(...midA.map((token) => ({ op: "del" as const, token })));
     ops.push(...midB.map((token) => ({ op: "ins" as const, token })));
   } else {
+    // spaces never anchor the alignment (a shared space between two
+    // changed words would split one change into interleaved pieces)
     const pairs = lcs(
-      midA.map((token) => token.text),
-      midB.map((token) => token.text),
+      midA.map((token, index) => (token.kind === "space" ? `\u0000a${index}` : token.text)),
+      midB.map((token, index) => (token.kind === "space" ? `\u0000b${index}` : token.text)),
     );
     let i = 0;
     let j = 0;
@@ -253,6 +255,7 @@ const MARKER = /^(#{1,6}|[-*+]|\d+[.)]|>)$/;
 function emit(ops: readonly Op[]): string {
   let out = "";
   let lineStart = true;
+  let previous: Op["op"] | null = null;
   for (const { op, token } of ops) {
     const [open, close] = op === "ins" ? [INS_OPEN, INS_CLOSE] : [DEL_OPEN, DEL_CLOSE];
     if (token.kind === "newline") {
@@ -261,9 +264,12 @@ function emit(ops: readonly Op[]): string {
       continue;
     }
     if (token.kind === "space") {
-      out += token.text;
+      // a removed space is written only inside a removed run; the
+      // current text's own spaces are always written
+      if (op !== "del" || previous === "del") out += token.text;
       continue;
     }
+    previous = op;
     if (token.kind === "fence") {
       // a structure line: a removed one would open a fence that never
       // closes (or break a diagram's or a formula's source), so only
@@ -279,7 +285,11 @@ function emit(ops: readonly Op[]): string {
     }
     lineStart = false;
   }
-  return out;
+  // a run of changed words reads as one mark: the spaces between two
+  // marks of the same kind join them (no box around every word)
+  return out
+    .replace(/\uE001([ \t]+)\uE000/g, "$1")
+    .replace(/\uE003([ \t]+)\uE002/g, "$1");
 }
 
 /** After rendering: the sentinels become ins and del elements, across

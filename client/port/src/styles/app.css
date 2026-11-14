@@ -414,6 +414,8 @@ body {
 .port-board-view .chg-mod,
 .port-board-view .chg-del {
   box-shadow: inset 3px 0 0 var(--port-color-accent);
+  /* the rule sits clear of the text it marks */
+  padding-left: 0.75rem;
 }
 
 .port-board-view .chg-add {
