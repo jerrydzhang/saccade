@@ -75,6 +75,12 @@ import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
 import { createKeyTrace } from "./lib/input/key-trace.ts";
 import { createReadingLayoutHolder } from "./lib/board/reading-layout.ts";
+import {
+  createWindowPlaceHolder,
+  placementDone,
+  shownPlaceOf,
+  type WindowPlace,
+} from "./lib/navigation/window-place.ts";
 
 /** The which-key popup delay in ms (the r110 tunable, nvim's
  * neighborhood - the human tunes). */
@@ -363,6 +369,25 @@ export function createPortWindow(windowId = "main"): PortWindow {
     cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   });
 
+  // -- the window's place (lib/navigation/window-place.ts) ------------
+  // What the window shows and where it reads reach its window state
+  // once they settle; the holder decides when, the window says what it
+  // shows (shownPlace, below) and how a write reaches its state. The
+  // shown frames, the scroller's scrolling and every placement feed it.
+  const windowPlace = createWindowPlaceHolder({
+    current: () => shownPlace(),
+    write({ location, part }) {
+      if (windowStore === null || windowStateId === null) return;
+      void windowStore.patch(windowStateId, { location, part }).catch(() => {
+        // an unreachable store: the place stays this session's; the
+        // next settled change writes it again
+      });
+    },
+    schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
+    cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+  });
+  const onScrollerScroll = () => windowPlace.changed();
+
   // -- figure inspection (S04): a TEMPORARY window surface ----------
   // It dies on close, never enters the trail, and while open it is
   // modal for keys: the inspector's context answers every stroke
@@ -467,9 +492,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return (await invoke("suite_windows")) as SuiteWindow[];
   }
 
-  async function ensureWindowState(): Promise<string | null> {
+  async function ensureWindowState(): Promise<{ location: string; part: string | null } | null> {
     if (windowStore !== null) return null;
-    let restored: string | null = null;
+    let restored: { location: string; part: string | null } | null = null;
     try {
       const base = serverBase();
       const invoke = tauriInvoke();
@@ -540,8 +565,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const boundId = windowStateId;
       const state =
         boundId === null ? null : await windowStore.getState(boundId).catch(() => null);
-      restored = state === null ? null : state.location;
+      restored =
+        state === null || state.location === null || state.location.length === 0
+          ? null
+          : { location: state.location, part: state.part };
       readingLayout.bound(state);
+      windowPlace.bound(state ?? { location: null, part: null });
       await refreshLink();
       injectPorts();
       notifyStrip();
@@ -891,7 +920,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const surface = surfaceOfAddress(place.address);
       const target = instrumentFor(surface);
       setActive(surface);
-      target.places.restore(place);
+      windowPlace.placing(placementDone(target.places.restore(place)));
     },
   });
 
@@ -903,6 +932,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       if (surface !== activeSurface) return;
       for (const observer of [...frameObservers]) observer(state);
       notifyStrip();
+      windowPlace.changed();
     });
   }
   const unsubscribeBoardFrame = subscribeSurface(activeInstrument(), "board");
@@ -912,6 +942,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (state !== undefined) return state;
     const instrument = instruments[activeSurface];
     return instrument !== undefined ? instrument.snapshot() : { kind: "destroyed" };
+  }
+
+  /** The place the window shows (lib/navigation/window-place.ts). */
+  function shownPlace(): WindowPlace | null {
+    const state = displayedFrame();
+    if (state.kind !== "alive" || state.content.kind !== "available") return null;
+    return shownPlaceOf(
+      state.content.value.props["content"] as { asked?: unknown; status?: unknown } | undefined,
+      () => activeInstrument().places.capture(),
+    );
   }
 
   function stripView(): StripView {
@@ -1064,7 +1104,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
             }
           : { kind: "default" as const },
     };
-    target.places.restore(place);
+    windowPlace.placing(placementDone(target.places.restore(place)));
     notifyStrip();
   }
 
@@ -1248,9 +1288,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
     try {
       console.log("[viewer] startup: bridge present");
       const restored = await ensureWindowState();
-      if (restored !== null && restored.length > 0) {
-        console.log(`[viewer] startup: restoring the bound state's location: ${restored}`);
-        openSpec(restored);
+      if (restored !== null) {
+        console.log(
+          `[viewer] startup: restoring the bound state's place: ${restored.location} ${restored.part ?? "(top)"}`,
+        );
+        openSpec(restored.location, restored.part);
         // a restored location never falls through to the test-open
         // channel; the window SET restored through the launch restore
         return true;
@@ -1362,6 +1404,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       link: linkLabel,
       bound: windowStore !== null && windowStateId !== null,
       focus: focusState,
+      place: shownPlace(),
       ask: ask === null
         ? null
         : { act: ask.act, spec: ask.spec, chips: ask.chips },
@@ -1401,6 +1444,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
   return {
     attachViewport(element: HTMLElement | null) {
       viewport.attachElement(element);
+      attachedViewport?.removeEventListener("scroll", onScrollerScroll);
+      element?.addEventListener("scroll", onScrollerScroll, { passive: true });
       attachedViewport = element;
       readingLayout.apply();
     },
@@ -1493,6 +1538,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     },
     destroy() {
       readingLayout.destroy();
+      windowPlace.destroy();
+      attachedViewport?.removeEventListener("scroll", onScrollerScroll);
       window.removeEventListener("keydown", windowKeyDown);
       windowHost.dispose();
       unsubscribeBoardFrame();

@@ -157,6 +157,8 @@ Inside the sandbox there is no `/etc/hosts` (the config binds vite to
 runner config loader and points vite's cache at the run root).
 
 Native holds real-window scenarios only: S18 (window birth, delivery landing
-in the other webview, the link). To add later: launch restore across a relaunch on the
-same data dir (S20: a fixture that relaunches on one XDG root), and an `i`
-delivery into an already-live receiver that has scrolled away.
+in the other webview, the link), and the relaunches on the same data dir
+(`app.relaunch()`): S20 (the window set comes back), the reading layout, and
+`window-place.scenario.ts` (each window back at its location and reading
+part). To add later: an `i` delivery into an already-live receiver that has
+scrolled away.
