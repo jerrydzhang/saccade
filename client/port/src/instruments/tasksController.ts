@@ -207,15 +207,28 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     return machine !== null && machine.startsWith("tracker:") ? machine.slice("tracker:".length) : null;
   }
 
+  // projects forgotten this session: the shown one stays off the rail
+  // though the window still shows it, until it is reached again
+  const forgotten = new Set<string>();
+
+  /** The shown project when it belongs on the rail. */
+  function railCurrent(): string | null {
+    const current = currentProject();
+    if (current === null) return null;
+    if (knownTrackers()[current] !== undefined) forgotten.delete(current);
+    return forgotten.has(current) ? null : current;
+  }
+
   function railNow(): Rail {
     // every reached project is listed, read or not yet
-    const names = new Set([...Object.keys(knownTrackers()), ...agentPages.map((entry) => entry.name)]);
-    const current = currentProject();
+    const known = knownTrackers();
+    const names = new Set([...Object.keys(known), ...agentPages.map((entry) => entry.name)]);
+    const current = railCurrent();
     if (current !== null) names.add(current);
     const projects = [...names].map(
       (name) => agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null },
     );
-    return railOf(projects, words, current, homeTracker());
+    return railOf(projects, words, currentProject(), homeTracker(), known);
   }
 
   function notifyRail(): void {
@@ -225,7 +238,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
 
   async function readAgentPages(): Promise<void> {
     const names = Object.keys(knownTrackers());
-    const current = currentProject();
+    const current = railCurrent();
     if (current !== null && !names.includes(current)) names.push(current);
     agentPages = await Promise.all(
       names.map(async (name) => {
@@ -322,7 +335,8 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
   }
 
   function forget(project: string): void {
-    if (forgetTracker(project) !== "forgotten") return;
+    forgetTracker(project);
+    forgotten.add(project);
     agentPages = agentPages.filter((entry) => entry.name !== project);
     notifyRail();
   }

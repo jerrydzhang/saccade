@@ -50,6 +50,8 @@ export type RailProject = {
   /** The home tracker: it holds this device's window store, so it is
    * never forgotten. */
   home: boolean;
+  /** The host this device reached it at, when registered. */
+  host: string | null;
   /** Herdr's words in t-14's section order, empty sections left out. */
   groups: { state: string; agents: RailAgent[] }[];
   /** Why this project's agents could not be read, when they could not. */
@@ -102,6 +104,7 @@ export function railOf(
   words: WordsSnapshot,
   current: string | null,
   home: string | null = null,
+  hosts: Readonly<Record<string, string>> = {},
 ): Rail {
   const ordered = [...projects].sort((a, b) => a.name.localeCompare(b.name));
   return {
@@ -141,6 +144,7 @@ export function railOf(
         name: project.name,
         current: project.name === current,
         home: project.name === home,
+        host: hosts[project.name] ?? null,
         groups,
         problem: project.problem,
       };
@@ -162,6 +166,7 @@ export type RailTarget = Readonly<{
   task: string | null;
   home: boolean;
   current: boolean;
+  host: string | null;
 }>;
 
 export const projectPart = (name: string): string => `rail/project/${name}`;
@@ -179,6 +184,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
       task: null,
       home: project.home,
       current: project.current,
+      host: project.host,
     });
     for (const group of project.groups) {
       for (const agent of group.agents) {
@@ -190,6 +196,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
           task: agent.tasks[0] ?? null,
           home: project.home,
           current: project.current,
+          host: project.host,
         });
       }
     }

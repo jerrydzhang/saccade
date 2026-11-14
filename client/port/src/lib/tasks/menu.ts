@@ -14,7 +14,7 @@
 //
 // The control plane's rail entries (t-48) are targets of this same
 // menu: a project's f shows its tasks here (its first act - Enter and a
-// plain click switch) and d forgets it; an agent's acts are its first
+// plain click switch) and d forgets it, any project; an agent's acts are its first
 // task's, a task row's.
 //
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
@@ -119,9 +119,9 @@ function boardActs(spec: string, ports: TaskPorts): MenuAct[] {
 
 /** A project's acts (t-48): f shows its tasks in this window - the
  * first act, so Enter and a plain click switch, as the picker's Enter
- * does - and d forgets it. The home (it holds this device's window
- * store) and the shown project are never forgotten; their d is absent
- * and the heading says why. */
+ * does - and d forgets it. Any project may be forgotten, the home and
+ * the shown one included (the human, 2026-11-14: with one project,
+ * forgetting it must be possible). */
 function projectActs(target: RailTarget, deps: Pick<TasksMenuDeps, "ports" | "forget">, ports: TaskPorts): MenuAct[] {
   const acts: MenuAct[] = [
     {
@@ -133,26 +133,22 @@ function projectActs(target: RailTarget, deps: Pick<TasksMenuDeps, "ports" | "fo
       },
     },
   ];
-  if (!target.home && !target.current) {
-    acts.push({
-      key: "d",
-      action: {
-        id: "tasks.project.forget",
-        label: "forget this project (type its host to reach it again)",
-        run: () => deps.forget(target.project),
-      },
-    });
-  }
+  acts.push({
+    key: "d",
+    action: {
+      id: "tasks.project.forget",
+      label: "forget this project (type its host to reach it again)",
+      run: () => deps.forget(target.project),
+    },
+  });
   return acts;
 }
 
-/** The menu heading for a target: a project the rail will not forget
- * says why. */
+/** The menu heading for a target: a project names the host it was
+ * reached at, so a stray entry shows what it is. */
 export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>, rail: RailTarget | undefined): string {
-  if (target.kind !== "project" || rail === undefined) return target.label;
-  if (rail.home) return `${target.label} (home: holds this device's windows)`;
-  if (rail.current) return `${target.label} (shown)`;
-  return target.label;
+  if (target.kind !== "project" || rail === undefined || rail.host === null) return target.label;
+  return `${target.label} (${rail.host})`;
 }
 
 export function taskRowActs(

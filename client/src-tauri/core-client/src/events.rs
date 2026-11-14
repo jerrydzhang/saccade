@@ -29,8 +29,10 @@ const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreEvent {
     /// The subscription's own first answer: the terminal table as it
-    /// stands. The listing carries no words (t-21@r1) - words fill as
-    /// status events arrive.
+    /// stands, each terminal with the word it holds now (herdr-core
+    /// 0.1.17 carries `status` per row; t-21@r1's "no words" listing
+    /// predates it). Without it, a terminal that went quiet before the
+    /// subscription never showed until it spoke again.
     Snapshot { terminals: Vec<SnapshotTerminal> },
     /// A status change: the program's word and its own message,
     /// progress and title exactly as sent (a missing field is absent,
@@ -63,6 +65,21 @@ pub enum CoreEvent {
 pub struct SnapshotTerminal {
     pub address: String,
     pub state: String,
+    /// The word the terminal holds now, exactly as the program sent it;
+    /// None when it never reported one.
+    pub status: Option<SnapshotStatus>,
+    /// When that word last changed, epoch milliseconds.
+    pub status_ms: Option<u64>,
+}
+
+/// A snapshot row's word: the fields a status event carries.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SnapshotStatus {
+    pub state: Option<String>,
+    pub app: Option<String>,
+    pub msg: Option<String>,
+    pub progress: Option<String>,
+    pub title: Option<String>,
 }
 
 impl CoreEvent {
@@ -112,6 +129,7 @@ pub fn parse_line(line: &str, first: bool) -> Result<CoreEvent, CoreFail> {
             .map(|rows| {
                 rows.iter()
                     .filter_map(|row| {
+                        let status = row.get("status").and_then(Value::as_object);
                         Some(SnapshotTerminal {
                             address: row.get("address")?.as_str()?.to_string(),
                             state: row
@@ -119,6 +137,14 @@ pub fn parse_line(line: &str, first: bool) -> Result<CoreEvent, CoreFail> {
                                 .and_then(Value::as_str)
                                 .unwrap_or("unknown")
                                 .to_string(),
+                            status: status.map(|s| SnapshotStatus {
+                                state: field_text(s.get("state")),
+                                app: field_text(s.get("app")),
+                                msg: field_text(s.get("msg")),
+                                progress: field_text(s.get("progress")),
+                                title: field_text(s.get("title")),
+                            }),
+                            status_ms: row.get("status_ms").and_then(Value::as_u64),
                         })
                     })
                     .collect()
@@ -317,11 +343,15 @@ mod test {
                 terminals: vec![
                     SnapshotTerminal {
                         address: "t1".into(),
-                        state: "live".into()
+                        state: "live".into(),
+                        status: None,
+                        status_ms: None,
                     },
                     SnapshotTerminal {
                         address: "t2".into(),
-                        state: "live".into()
+                        state: "live".into(),
+                        status: None,
+                        status_ms: None,
                     },
                 ]
             }

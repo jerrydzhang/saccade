@@ -141,7 +141,7 @@ test("the rail's targets: each project, then its agents, carrying home and shown
   );
 });
 
-test("a project's acts: f shows its tasks here first; d forgets, never the home or the shown one", () => {
+test("a project's acts: f shows its tasks here first; d forgets any project, the home and the shown one too", () => {
   const forgotten: string[] = [];
   const opened: string[] = [];
   const elsewhere: string[] = [];
@@ -153,6 +153,7 @@ test("a project's acts: f shows its tasks here first; d forgets, never the home 
     task: null,
     home,
     current,
+    host: name === "jernerics" ? "localhost:8814" : null,
   });
   const rail = [target("jernerics", false, false), target("pyrimel", true, false), target("saccade", false, true)];
   const deps = {
@@ -164,14 +165,15 @@ test("a project's acts: f shows its tasks here first; d forgets, never the home 
   };
   const acts = (name: string) => taskRowActs({ kind: "project", label: name, part: projectPart(name) }, deps);
   assert.deepEqual(acts("jernerics").map((act) => act.key), ["f", "d"]);
-  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f"]);
-  assert.deepEqual(acts("saccade").map((act) => act.key), ["f"]);
+  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f", "d"]);
+  assert.deepEqual(acts("saccade").map((act) => act.key), ["f", "d"]);
   acts("jernerics")[0]!.action.run();
   acts("jernerics")[1]!.action.run();
   assert.deepEqual(opened, ["jernerics/tasks"]);
   assert.deepEqual(forgotten, ["jernerics"]);
-  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }, rail[1]), "pyrimel (home: holds this device's windows)");
-  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }, rail[0]), "jernerics");
+  // the heading names the host it was reached at
+  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }, rail[0]), "jernerics (localhost:8814)");
+  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }, rail[1]), "pyrimel");
 });
 
 test("an agent's acts are its first task's, composed against its own project", () => {
@@ -192,7 +194,7 @@ test("an agent's acts are its first task's, composed against its own project", (
   assert.deepEqual(elsewhere, [["saccade/t-2", "link"]]);
 });
 
-test("forgetting a reached tracker drops it from the registry; the home is refused", () => {
+test("forgetting drops a tracker from the registry; a forgotten home hands over to the next, the last leaves none", () => {
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
@@ -205,8 +207,14 @@ test("forgetting a reached tracker drops it from the registry; the home is refus
   registerTracker("saccade", "localhost:8811");
   registerTracker("pyrimel", "localhost:8813");
   assert.equal(homeTracker(), "saccade");
-  assert.equal(forgetTracker("saccade"), "home");
   assert.equal(forgetTracker("nobody"), "unknown");
+  assert.equal(forgetTracker("saccade"), "forgotten");
+  assert.deepEqual(Object.keys(knownTrackers()), ["pyrimel"]);
+  assert.equal(homeTracker(), "pyrimel");
   assert.equal(forgetTracker("pyrimel"), "forgotten");
-  assert.deepEqual(Object.keys(knownTrackers()), ["saccade"]);
+  assert.deepEqual(knownTrackers(), {});
+  assert.equal(homeTracker(), null);
+  // the next tracker reached becomes the home
+  registerTracker("jernerics", "localhost:8814");
+  assert.equal(homeTracker(), "jernerics");
 });

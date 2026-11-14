@@ -457,8 +457,7 @@ test("the control plane: rail entries are targets - s labels them after the rows
   );
   h.press("d");
   const menu = h.menuView() as { label: string; acts: { key: string }[] };
-  assert.equal(menu.label, "tasks-test (shown)");
-  assert.deepEqual(menu.acts.map((act) => act.key), ["f"], "the shown project is not forgotten");
+  assert.deepEqual(menu.acts.map((act) => act.key), ["f", "d"], "even the shown project can be forgotten");
   h.press("Enter");
   assert.deepEqual(h.opened, ["tasks-test/tasks"]);
   assert.equal(h.attachment.presentation.getSelection(), null, "a rail entry is not a task selection");
@@ -475,4 +474,16 @@ test("the control plane: rail entries are targets - s labels them after the rows
   const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
   assert.ok(shown !== null);
   assert.ok(shown.projects.some((entry) => entry.name === "tasks-test" && entry.current));
+
+  // d on the shown project: it leaves the rail though the list stays
+  h.attachment.presentation.openMenuFor({ part: project, kind: "project", label: "tasks-test" });
+  h.press("d");
+  const after = (() => {
+    let next: import("../src/lib/tasks/rail.ts").Rail | null = null;
+    h.attachment.presentation.subscribeRail((value) => {
+      next = value;
+    })();
+    return next as unknown as import("../src/lib/tasks/rail.ts").Rail;
+  })();
+  assert.ok(!after.projects.some((entry) => entry.name === "tasks-test"), "the forgotten shown project leaves the rail");
 });

@@ -239,8 +239,36 @@ fn apply(shared: &Shared, event: CoreEvent) {
         // the restart vocabulary and a fresh snapshot both mean the
         // table restarts: kept terminals come back under their
         // addresses as their events arrive
-        CoreEvent::CoreRestarted | CoreEvent::Snapshot { .. } => {
+        CoreEvent::CoreRestarted => {
             shared.publish(|words| words.clear());
+        }
+        // a fresh snapshot: the table restarts from the words the core
+        // holds now - every live terminal, its word as sent (a terminal
+        // that never reported one carries none); finished rows are not
+        // running and stay out
+        CoreEvent::Snapshot { terminals } => {
+            let now = now_secs();
+            shared.publish(move |words| {
+                words.clear();
+                for terminal in terminals {
+                    if terminal.state != "live" {
+                        continue;
+                    }
+                    let status = terminal.status.unwrap_or_default();
+                    words.insert(
+                        terminal.address,
+                        WordRow {
+                            state: status.state,
+                            app: status.app,
+                            msg: status.msg,
+                            progress: status.progress,
+                            title: status.title,
+                            finished: None,
+                            at: terminal.status_ms.map(|ms| ms / 1000).unwrap_or(now),
+                        },
+                    );
+                }
+            });
         }
         CoreEvent::Finished { terminal, reason } => {
             let at = now_secs();
@@ -425,6 +453,41 @@ mod tests {
         // quiet is a normal answer: no landing, no move
         let stale = feed.wait(snapshot.generation, Duration::from_millis(120));
         assert_eq!(stale.generation, snapshot.generation);
+    }
+
+    #[test]
+    fn the_snapshot_brings_the_words_terminals_hold_already() {
+        // a terminal that went quiet before the subscription (an agent
+        // left done or idle) sends no status event; its word rides the
+        // snapshot row, and a finished row is not running
+        let lines = vec![
+            r#"{"jsonrpc":"2.0","id":1,"result":{"channel":null,"seq":1,"terminals":[{"address":"t4b","state":"live","status":{"app":"claude-code","msg":"proposed a family","state":"done"},"status_ms":1794694940203},{"address":"t3k","state":"live","status":null,"status_ms":null},{"address":"t9","state":"finished","status":null}]}}"#.into(),
+        ];
+        let (socket, _dir) = fake_core(&lines);
+        let feed = WordsFeed::spawn(Some(socket), Duration::from_millis(10));
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut snapshot = feed.wait(0, Duration::from_millis(400));
+        while !snapshot.words.contains_key("t4b") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the snapshot's words never landed"
+            );
+            snapshot = feed.wait(snapshot.generation, Duration::from_secs(1));
+        }
+        let row = snapshot.words.get("t4b").expect("the quiet agent's row");
+        assert_eq!(row.state.as_deref(), Some("done"));
+        assert_eq!(row.msg.as_deref(), Some("proposed a family"));
+        assert_eq!(row.app.as_deref(), Some("claude-code"));
+        assert_eq!(row.at, 1794694940);
+        let shell = snapshot
+            .words
+            .get("t3k")
+            .expect("a live terminal with no word");
+        assert_eq!(shell.state, None);
+        assert!(
+            !snapshot.words.contains_key("t9"),
+            "a finished terminal is not running"
+        );
     }
 
     #[test]

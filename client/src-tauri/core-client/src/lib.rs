@@ -23,7 +23,7 @@ pub mod transport;
 
 pub use client::{CoreClient, ExecOutput, FileEdit, FileEditOutcome, ASSET_CAP};
 pub use error::CoreFail;
-pub use events::{CoreEvent, EventsConnection, SnapshotTerminal};
+pub use events::{CoreEvent, EventsConnection, SnapshotStatus, SnapshotTerminal};
 pub use guard::guard_relative;
 pub use subscribe::{DocEvent, Subscription};
 pub use transport::{CoreTransport, SocketTransport};

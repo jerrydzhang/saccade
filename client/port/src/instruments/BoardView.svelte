@@ -244,11 +244,16 @@ import { partMeasureIn } from "../lib/select/measure.ts";
 {/if}
 <div class="port-board-stage">
   {#if content.history}
+    <!-- the aside spans the board's height; its card sticks to the
+    top of the view, so the commit message reads beside the change
+    wherever it sits -->
     <aside class="port-history" data-port-control="history" aria-label="history">
-      <div class="port-history-head" data-port-control="history-revision">
-        {content.history.task}@r{content.history.revision} of r{content.history.latest} - {content.history.changed.length} changed
+      <div class="port-history-card">
+        <div class="port-history-head" data-port-control="history-revision">
+          {content.history.task}@r{content.history.revision} of r{content.history.latest} - {content.history.changed.length} changed
+        </div>
+        <div class="port-history-message" data-port-control="history-message">{content.history.message}</div>
       </div>
-      <div class="port-history-message" data-port-control="history-message">{content.history.message}</div>
     </aside>
   {/if}
   <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>

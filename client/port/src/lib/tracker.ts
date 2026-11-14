@@ -78,16 +78,22 @@ export function registerTracker(name: string, host: string): void {
 
 /** Forget a tracker this device reached: it leaves the registry (and
  * so the control plane's rail) until its location is typed with the
- * host again. The tracker and its record are untouched. The home is
- * never forgotten - it holds this device's window store - and the
- * answer says so. */
-export function forgetTracker(name: string): "forgotten" | "home" | "unknown" {
+ * host again. The tracker and its record are untouched. Any tracker
+ * may go, the home and the last one too (the human, 2026-11-14): a
+ * forgotten home hands the window store to the next tracker reached,
+ * and windows bound this session keep their state until relaunch. */
+export function forgetTracker(name: string): "forgotten" | "unknown" {
   const registry = readRegistry();
   if (registry[name] === undefined) return "unknown";
-  if (homeTracker() === name) return "home";
+  const wasHome = homeTracker() === name;
   delete registry[name];
   try {
     localStorage.setItem(TRACKERS_KEY, JSON.stringify(registry));
+    if (wasHome) {
+      const next = Object.keys(registry)[0];
+      if (next === undefined) localStorage.removeItem(HOME_KEY);
+      else localStorage.setItem(HOME_KEY, next);
+    }
   } catch {
     return "unknown";
   }
