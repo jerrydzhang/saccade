@@ -1352,12 +1352,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // surface to its own routing.
     const after = displayedFrame();
     if (after.kind !== "alive" || (after.content.kind !== "available" && after.content.kind !== "unavailable")) {
+      // an open was asked for (a restore, the lanes' test open) and
+      // nothing shows: that is the failure worth logging (t-44: the
+      // line sat on the other branch and fired after every open that
+      // DID show something)
+      if (requested) console.error("[viewer] test open board FAILED: no board");
       // the tasks instrument constructs through its own door (the
       // buffer joins here, empty until a tracker is reached)
       void instrumentFor("tasks");
       setActive("tasks");
-    } else if (requested) {
-      console.error("[viewer] test open board FAILED: no board");
     }
     console.log(`[port] observation: ${JSON.stringify(readout())}`);
   }
