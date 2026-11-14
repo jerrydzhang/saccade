@@ -13,6 +13,7 @@ import LabelOverlay from "../components/LabelOverlay.svelte";
 import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
+  import { paintDiffMarks } from "../lib/board/history-diff.ts";
   import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
   let { content, controller }: { content: BoardData; controller: BoardUI } = $props();
@@ -133,6 +134,8 @@ import { partMeasureIn } from "../lib/select/measure.ts";
       content.resolved?.machine ?? "",
       identity,
       content.board === null ? "no-board" : "board",
+      // history mode renders a diffed board at the same pinned path
+      content.history ? `history@r${content.history.revision}` : "",
     ].join("\u0000");
   });
   let renders = $state(0);
@@ -169,6 +172,7 @@ import { partMeasureIn } from "../lib/select/measure.ts";
       },
     };
     const container = renderBoard(board, hooks);
+    if (frame.history) paintDiffMarks(container);
     element.replaceChildren(container);
     renders += 1;
     controller.reportPresentation({ renders, hydrated });
@@ -239,6 +243,14 @@ import { partMeasureIn } from "../lib/select/measure.ts";
   </div>
 {/if}
 <div class="port-board-stage">
+  {#if content.history}
+    <aside class="port-history" data-port-control="history" aria-label="history">
+      <div class="port-history-head" data-port-control="history-revision">
+        {content.history.task}@r{content.history.revision} of r{content.history.latest} - {content.history.changed.length} changed
+      </div>
+      <div class="port-history-message" data-port-control="history-message">{content.history.message}</div>
+    </aside>
+  {/if}
   <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
   </div>
   {#if select !== null}

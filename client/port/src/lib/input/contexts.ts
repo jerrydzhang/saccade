@@ -27,6 +27,8 @@ export interface WindowActions {
   /** space-/: find in the active board (the leader's find command;
    * the bare-/ reading binding stays). */
   enterFind(): void;
+  /** space-h: history mode on the active board (t-49): enter or leave. */
+  toggleHistory?(): void;
   /** space-l: the link act - labels over windows, a key sets the
    * link (the prototype's D1 modal shape). */
   linkByLabels(): void;
@@ -102,6 +104,18 @@ export function windowContext(actions: WindowActions): InputContext {
       },
       keys: [sequence(key(" "), key("/"))],
     },
+    ...(actions.toggleHistory === undefined
+      ? []
+      : [
+          {
+            action: {
+              id: "window.history",
+              label: "enter or leave history",
+              run: () => actions.toggleHistory?.(),
+            },
+            keys: [sequence(key(" "), key("h"))],
+          },
+        ]),
     {
       action: {
         id: "window.link",
@@ -247,6 +261,8 @@ export interface ReadingActions {
   /** + - = zoom the board's text; Ctrl-+ Ctrl-- Ctrl-= its column's
    * width (lib/board/reading-layout.ts). */
   readingLayout(change: ReadingLayoutChange): void;
+  /** h l: step time in history mode; nothing outside it. */
+  historyStep?(direction: -1 | 1): void;
 }
 
 // The Tasks instrument's reading context: the same viewport reading
@@ -457,6 +473,26 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
       // N is the character (its case carries Shift, m-552)
       keys: [sequence(key("N"))],
     },
+    ...(actions.historyStep === undefined
+      ? []
+      : [
+          {
+            action: {
+              id: "board.history-older",
+              label: "history: the revision before",
+              run: () => actions.historyStep?.(-1),
+            },
+            keys: [sequence(key("h"))],
+          },
+          {
+            action: {
+              id: "board.history-newer",
+              label: "history: the revision after",
+              run: () => actions.historyStep?.(1),
+            },
+            keys: [sequence(key("l"))],
+          },
+        ]),
     {
       action: {
         id: "board.find-clear",

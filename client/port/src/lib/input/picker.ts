@@ -13,12 +13,16 @@ export interface PickerState {
 export interface PickerController {
   open(): void;
   close(): void;
-  submit(spec: string): void;
+  /** Enter opens here; Shift+Enter (elsewhere) opens a new window. */
+  submit(spec: string, elsewhere?: boolean): void;
   snapshot(): PickerState;
   subscribe(observer: (state: PickerState) => void): () => void;
 }
 
-export function createPickerController(openSpec: (spec: string) => void): PickerController {
+export function createPickerController(
+  openSpec: (spec: string) => void,
+  openNew: (spec: string) => void = openSpec,
+): PickerController {
   let state: PickerState = { open: false };
   const observers = new Set<(state: PickerState) => void>();
 
@@ -34,10 +38,12 @@ export function createPickerController(openSpec: (spec: string) => void): Picker
     close() {
       publish({ open: false });
     },
-    submit(spec: string) {
+    submit(spec: string, elsewhere = false) {
       const trimmed = spec.trim();
       publish({ open: false });
-      if (trimmed.length > 0) openSpec(trimmed);
+      if (trimmed.length === 0) return;
+      if (elsewhere) openNew(trimmed);
+      else openSpec(trimmed);
     },
     snapshot() {
       return state;

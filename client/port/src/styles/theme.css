@@ -52,6 +52,10 @@
   --port-code-meta: #5d5591;
   --port-code-addition: #2f6a1d;
   --port-code-deletion: #a32a2a;
+  --port-diff-added: #2f6b1f;
+  --port-diff-added-background: rgba(59, 110, 35, 0.14);
+  --port-diff-removed: #9b2335;
+  --port-diff-removed-background: rgba(155, 35, 53, 0.12);
 
   /* space and line: the prototype's world rhythm */
   --port-space-strip: 0.25rem 0.75rem;

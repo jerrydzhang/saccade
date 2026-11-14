@@ -118,7 +118,7 @@ export interface PortWindow {
   helpView(): unknown;
   subscribeWhichKey(observer: (pending: unknown, help: boolean) => void): () => void;
   closePicker(): void;
-  submitPicker(spec: string): void;
+  submitPicker(spec: string, elsewhere?: boolean): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
   answerAsk(chip: string): void;
   cancelAsk(): void;
@@ -217,7 +217,17 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // through the ONE open funnel below (openSpec). Text-entry
   // semantics: the key seam skips field targets, so typing inside the
   // picker stays native (scenario 10).
-  const picker = createPickerController((spec) => openSpec(spec));
+  // Shift+Enter in the picker opens a new window (t-47): the w act's
+  // path, which never touches the link
+  const picker = createPickerController(
+    (spec) => openSpec(spec),
+    (spec) => {
+      openElsewhere(spec, "new").catch((error: unknown) => {
+        note = `the open act failed: ${String(error).slice(0, 120)}`;
+        notifyStrip();
+      });
+    },
+  );
 
   // The picker's context (F1, the scope rule: the window's ONE
   // tracker): recents are this window's own trail (newest first),
@@ -833,6 +843,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
       enterFind: () => {
         if (activeSurface === "board" && instruments.board !== undefined) {
           (instruments.board.presentation as BoardUI).enterFind();
+        }
+      },
+      toggleHistory: () => {
+        if (activeSurface === "board" && instruments.board !== undefined) {
+          (instruments.board.presentation as BoardUI).toggleHistory();
         }
       },
       linkByLabels: () => {
@@ -1500,7 +1515,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         pickerContextObservers.delete(observer);
       };
     },
-    submitPicker: (spec) => picker.submit(spec),
+    submitPicker: (spec, elsewhere) => picker.submit(spec, elsewhere),
     subscribePicker(observer) {
       return picker.subscribe(observer);
     },

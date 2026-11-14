@@ -314,6 +314,27 @@ test("with the elsewhere port the citation carries the OPEN acts in the KINDS or
   assert.equal(acts[3]?.action.label, "open in a new viewer");
 });
 
+test("a shifted or middle click runs the citation's o act directly: open at the link, no menu (t-47)", () => {
+  const elsewhere: { spec: string; act: string }[] = [];
+  const { deps } = referenceHarness({
+    ports: {
+      open: () => assert.fail("a modified click never follows here"),
+      copy: () => {},
+      elsewhere: (spec, act) => { elsewhere.push({ spec, act }); },
+    },
+  });
+  const menu = createBoardMenu({ ...deps, capture: () => ({ release: () => {} }) });
+  const target = { kind: "reference", label: "t-0@r1", part: "/content/1" };
+  const outcome = menu.session.keyClick(target, "o");
+  assert.equal(outcome.kind, "act");
+  if (outcome.kind === "act") assert.equal(outcome.action.id, "reference.open-at-link");
+  assert.equal(menu.session.isOpen(), false, "no menu opens");
+  assert.deepEqual(elsewhere, [{ spec: "seedtracker/t-0@r1", act: "link" }]);
+  // a key the kind does not declare acts nothing
+  assert.equal(menu.session.keyClick(target, "q").kind, "ignored");
+  assert.equal(elsewhere.length, 1);
+});
+
 test("the OPEN acts deliver the composed spec with their act; without the port they never appear", () => {
   const elsewhere: { spec: string; act: string }[] = [];
   const withPort = referenceHarness({

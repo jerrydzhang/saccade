@@ -164,10 +164,84 @@ body {
   overflow: hidden;
 }
 
+/* the control plane (t-48): the rail of projects and their running
+ * agents beside the list; on a narrow window the rail sits above it */
+.port-plane {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 40rem) {
+  .port-plane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.port-plane-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.port-plane-project {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.port-plane-name,
+.port-plane-agent {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0.125rem 0.5rem;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.port-plane-name[aria-current] {
+  color: var(--port-color-ink-strong);
+  font-weight: 600;
+}
+
+.port-plane-agent {
+  display: flex;
+  gap: 0.5rem;
+  padding-left: 1rem;
+}
+
+.port-plane-agent:disabled {
+  cursor: default;
+}
+
+.port-plane-msg {
+  color: var(--port-color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.port-plane-word,
+.port-plane-note {
+  padding: 0 0.5rem 0 1rem;
+  color: var(--port-color-muted);
+  font-size: 0.85em;
+}
+
 /* the tasks stage: the label overlay's positioning context, exactly
  * the host's box */
 .port-tasks-stage {
   position: relative;
+  min-width: 0;
 }
 
 /* F4 as information: the five-column grid (tid, title, agents,
@@ -319,6 +393,68 @@ body {
   line-height: var(--port-world-leading);
   background: var(--port-world-background);
   color: var(--port-world-foreground);
+}
+
+/* history mode (t-49): the words a revision added and removed, the
+ * parts it changed (a rule at the part's edge: the change ruler), the
+ * commit beside the board in the right margin, above it when narrow */
+.port-diff-ins {
+  color: var(--port-diff-added);
+  background: var(--port-diff-added-background);
+  text-decoration: none;
+}
+
+.port-diff-del {
+  color: var(--port-diff-removed);
+  background: var(--port-diff-removed-background);
+  text-decoration: line-through;
+}
+
+.port-board-view .chg-add,
+.port-board-view .chg-mod,
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-color-accent);
+}
+
+.port-board-view .chg-add {
+  box-shadow: inset 3px 0 0 var(--port-diff-added);
+}
+
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-diff-removed);
+  opacity: 0.8;
+}
+
+.port-history {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  width: 18rem;
+  margin-left: 1rem;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--port-color-foreground);
+  border-left: 1px solid var(--port-color-line);
+}
+
+.port-history-head {
+  color: var(--port-color-muted);
+  margin-bottom: 0.5rem;
+}
+
+.port-history-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 80rem) {
+  .port-history {
+    position: static;
+    width: auto;
+    margin: 0 0 0.5rem 0;
+    border-left: 0;
+    border-bottom: 1px solid var(--port-color-line);
+  }
 }
 
 /* the board renderer's minimal block layout (placement only) */

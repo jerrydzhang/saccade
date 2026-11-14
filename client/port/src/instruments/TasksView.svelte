@@ -14,12 +14,18 @@ import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
 import { ageOf } from "../lib/tasks/page.ts";
   import type { TasksData, TasksUI } from "./tasks.ts";
+  import type { Rail } from "../lib/tasks/rail.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
 
   let host: HTMLElement | null = $state(null);
   let select: SelectSessionView | null = $state(null);
   let menu: MenuView | null = $state(null);
+  let rail: Rail = $state({ projects: [], herdr: null });
+
+  $effect(() => controller.subscribeRail((next) => {
+    rail = next;
+  }));
 
   $effect(() => {
     const offSelect = controller.subscribeSelect((view) => {
@@ -105,6 +111,47 @@ the select session + the act menu (Enter runs the first act), so the
 a11y click advisories do not apply. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div class="port-plane">
+<!-- the control plane's rail (t-48): projects, then each project's
+running agents by Herdr's word; a project switches this window, an
+agent opens its task here -->
+<nav class="port-plane-rail" data-port-control="rail" aria-label="projects">
+  {#each rail.projects as project (project.name)}
+    <section class="port-plane-project" data-port-project={project.name}>
+      <button
+        class="port-plane-name"
+        data-port-control={`project-${project.name}`}
+        aria-current={project.current ? "page" : undefined}
+        onclick={() => controller.openProject(project.name)}
+      >{project.name}</button>
+      {#if project.problem !== null}
+        <div class="port-plane-note" title={project.problem}>unreachable</div>
+      {/if}
+      {#each project.groups as group (group.state)}
+        <div class="port-plane-word" data-port-word={group.state}>{group.state === "" ? "no word" : group.state}</div>
+        {#each group.agents as agent (agent.incarnation)}
+          <button
+            class="port-plane-agent"
+            data-port-control={`agent-${project.name}-${agent.incarnation}`}
+            disabled={agent.tasks.length === 0}
+            title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
+            onclick={() => {
+              const task = agent.tasks[0];
+              if (task !== undefined) controller.openAgentTask(project.name, task);
+            }}
+          >
+            <span class="port-plane-incarnation">{agent.incarnation}</span>
+            <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
+            {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
+          </button>
+        {/each}
+      {/each}
+    </section>
+  {/each}
+  {#if rail.herdr !== null}
+    <div class="port-plane-note" data-port-control="herdr-note">{rail.herdr}</div>
+  {/if}
+</nav>
 <div
   class="port-tasks-stage"
   role="presentation"
@@ -156,4 +203,5 @@ a11y click advisories do not apply. -->
 {#if menu !== null}
   <ActMenu {menu} {host} session={controller.menuSession()} />
 {/if}
+</div>
 </div>

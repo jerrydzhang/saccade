@@ -44,6 +44,7 @@ import type { StructuredIssue } from "../lib/board/errors.ts";
 import { SourceUnavailableError } from "../lib/board/errors.ts";
 import type { Board, FigureBlock } from "../lib/board/model.ts";
 import { decodeBoard } from "../lib/board/decode.ts";
+import { diffBoards } from "../lib/board/history-diff.ts";
 import { crateVerdict } from "../lib/board/validate.ts";
 import { createFollow } from "../lib/board/follow.ts";
 import type { ReadingLayoutChange } from "../lib/board/reading-layout.ts";
@@ -91,6 +92,22 @@ export type BoardData = Readonly<{
    * does not. Model existence is untouched (scenario 12: folded-in
    * children keep existing, lose presentation). */
   folded: readonly string[];
+  /** History mode (t-49): the revision shown against the one before
+   * it; absent outside history. */
+  history?: HistoryView | null;
+}>;
+
+/** What history mode shows: the revision, the newest one, the commit
+ * that landed it (docked beside the board), and the changed parts in
+ * reading order (n and N jump between them). */
+export type HistoryView = Readonly<{
+  task: string;
+  revision: number;
+  latest: number;
+  message: string;
+  changed: readonly string[];
+  /** The change n or N last reached, -1 before any. */
+  at: number;
 }>;
 
 /** The board controller's face to its own component: rendering needs
@@ -110,6 +127,8 @@ export interface BoardUI extends HydrationHost {
   /** Enter find from the window command (space-/): the same entry
    * the reading context's bare / runs. */
   enterFind(): void;
+  /** space h: enter or leave history mode (t-49). */
+  toggleHistory(): void;
   /** The follow state as information (the S15 diagnosis): the
    * followed address and whether the poll is armed. */
   /** The view's work counts (the readout's presentation field). */
@@ -133,6 +152,11 @@ export interface BoardUI extends HydrationHost {
    * same action object every invocation path runs (scenario 9). The
    * part names the citation's incorporation block. */
   referencePrimaryClick(part: string): void;
+  /** A shifted or middle click on the citation: its `o` act, open at
+   * the link (t-47). */
+  referenceElsewhereClick(part: string): void;
+  /** A shifted or middle click on a prose ref: its `o` act. */
+  refElsewhereClick(part: string): void;
   /** A plain click on a figure runs its first act (enlarge) through
    * the shared menu path. */
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
@@ -294,6 +318,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       boardMenu.session.primaryClick({ kind: "reference", label, part });
       notifyMenu();
     },
+    referenceElsewhereClick(part) {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      if (target === undefined || target.source === undefined) return;
+      const label = `${target.source.task}@r${target.source.revision}`;
+      boardMenu.session.keyClick({ kind: "reference", label, part }, "o");
+      notifyMenu();
+    },
+    refElsewhereClick(part: string) {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      if (target === undefined) return;
+      boardMenu.session.keyClick({ kind: "ref", label: target.text, part }, "o");
+      notifyMenu();
+    },
     refPrimaryClick(part: string) {
       const target = scope.frame().targets.find((entry) => entry.part === part);
       if (target === undefined) return;
@@ -339,6 +376,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     enterFind() {
       if (scope.frame().board != null) find.enter();
+    },
+    toggleHistory() {
+      void toggleHistory();
     },
     reportPresentation(stats) {
       presentation = stats;
@@ -509,6 +549,172 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     return { kind: "ready", value: scope.frame() };
   }
 
+  // -- history mode (t-49; t-14 "The viewer", History) ----------------
+  // A mode over the shown board, not a navigation: the window's trail
+  // never sees it. Entering shows the shown revision against the one
+  // before it; h and l step time; leaving shows the revision reached,
+  // plain (a bare open again when that is the newest one). The follow
+  // pauses while history holds the window.
+  type HistoryState = {
+    machine: string;
+    task: number;
+    revision: number;
+    latest: number;
+    messages: Map<number, string>;
+    changed: string[];
+    at: number;
+    /** What leaving opens at the newest revision: the asked address. */
+    returnTo: Address;
+  };
+  let history: HistoryState | null = null;
+  let historyIntent = 0;
+
+  function historyView(state: HistoryState): HistoryView {
+    return {
+      task: `t-${state.task}`,
+      revision: state.revision,
+      latest: state.latest,
+      message: state.messages.get(state.revision) ?? "",
+      changed: state.changed,
+      at: state.at,
+    };
+  }
+
+  async function toggleHistory(): Promise<void> {
+    if (history !== null) {
+      await leaveHistory();
+      return;
+    }
+    const frame = scope.frame();
+    const location = frame.resolved;
+    if (frame.status !== "loaded" || frame.board === null || location === null) return;
+    const spec = /^t-(\d+)@r(\d+)$/.exec(location.path);
+    if (spec === null || !location.machine.startsWith("tracker:")) {
+      note("history reads a tracker board's revisions");
+      return;
+    }
+    const source = sourceFor(location.machine);
+    if (!(source instanceof TrackerSource)) return;
+    const intent = ++historyIntent;
+    let page;
+    try {
+      page = await source.history(`t-${spec[1]}`);
+    } catch (error) {
+      note(`the history could not be read: ${String(error)}`);
+      return;
+    }
+    if (intent !== historyIntent) return;
+    const messages = new Map<number, string>();
+    let latest = Number(spec[2]);
+    for (const entry of page.entries ?? []) {
+      if (entry.revision === null) continue;
+      latest = Math.max(latest, entry.revision);
+      if (entry.message !== null && entry.event === "task_committed") messages.set(entry.revision, entry.message);
+    }
+    follow.stop();
+    followAddress = null;
+    const asked = parseLocation(frame.asked);
+    history = {
+      machine: location.machine,
+      task: Number(spec[1]),
+      revision: Number(spec[2]),
+      latest,
+      messages,
+      changed: [],
+      at: -1,
+      returnTo: asked ?? { machine: location.machine, path: location.path },
+    };
+    await showRevision(Number(spec[2]));
+  }
+
+  async function showRevision(revision: number): Promise<void> {
+    const state = history;
+    if (state === null) return;
+    const source = sourceFor(state.machine);
+    if (!(source instanceof TrackerSource)) return;
+    const intent = ++historyIntent;
+    const pinned = `t-${state.task}@r${revision}`;
+    await buffer.updates.refresh(async () => {
+      try {
+        const [text, before] = await Promise.all([
+          source.boardTextAt(pinned),
+          revision > 1 ? source.boardTextAt(`t-${state.task}@r${revision - 1}`) : Promise.resolve(null),
+        ]);
+        const current = decodeBoard(text);
+        const previous = before === null ? null : decodeBoard(before);
+        if (current.status !== "ok") {
+          return { kind: "failed", issue: failureIssue("read-failed", `${pinned} does not decode`) };
+        }
+        const diff = diffBoards(previous !== null && previous.status === "ok" ? previous.board : null, current.board);
+        if (intent !== historyIntent || history !== state) {
+          return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
+        }
+        state.revision = revision;
+        state.changed = diff.changed;
+        state.at = -1;
+        const location: Location = { machine: state.machine, path: pinned };
+        resolved = location;
+        const token = scope.begin();
+        scope.adopt({
+          generation: token,
+          asked: scope.asked(),
+          location: formatLocation(location),
+          resolved: location,
+          status: "loaded",
+          board: diff.board,
+          errors: [],
+          renderOutcomes: [],
+          targets: boardTargetsOf(diff.board),
+          folded: [...foldedSet],
+          history: historyView(state),
+        });
+        return readyFrame(scope.frame());
+      } catch (error) {
+        return { kind: "failed", issue: issueOf(error) };
+      }
+    });
+  }
+
+  async function leaveHistory(): Promise<void> {
+    const state = history;
+    if (state === null) return;
+    history = null;
+    historyIntent++;
+    const address =
+      state.revision === state.latest
+        ? state.returnTo
+        : { machine: state.machine, path: `t-${state.task}@r${state.revision}` };
+    await places.request(address);
+  }
+
+  function stepHistory(direction: -1 | 1): void {
+    const state = history;
+    if (state === null) return;
+    const next = state.revision + direction;
+    if (next < 1 || next > state.latest) return;
+    void showRevision(next);
+  }
+
+  function jumpChange(direction: -1 | 1): boolean {
+    const state = history;
+    if (state === null) return false;
+    if (state.changed.length === 0) return true;
+    const count = state.changed.length;
+    state.at = state.at === -1 ? (direction === 1 ? 0 : count - 1) : (state.at + direction + count) % count;
+    const part = state.changed[state.at]!;
+    const bounds = buffer.geometry.bounds(part);
+    if (bounds !== null) buffer.viewport.reveal(bounds);
+    buffer.updates.updateDisplayed((frame) => ({
+      ...frame,
+      value: { ...frame.value, history: historyView(state) },
+    }));
+    return true;
+  }
+
+  function note(message: string): void {
+    console.warn(`[port] history: ${message}`);
+  }
+
   const places: ContentPlaces<BoardAnchor> = {
     captureDisplayed(viewport: ViewportMetrics): ContentCapture<BoardAnchor> {
       const address: Address = resolved
@@ -536,6 +742,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // call load directly and do not end the interaction.
       requestLog.push(formatLocation(address));
       if (requestLog.length > 6) requestLog.shift();
+      // an open from anywhere ends history mode
+      history = null;
+      historyIntent++;
       find.navigateAway();
       // Follow the asked bare address, never the pinned resolution.
       // An explicit open invalidates any in-flight poll immediately.
@@ -618,11 +827,16 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     enterFind: () => {
       if (displayedData()?.board != null) find.enter();
     },
-    nextMatch: () => find.step(1),
-    prevMatch: () => find.step(-1),
+    nextMatch: () => {
+      if (!jumpChange(1)) find.step(1);
+    },
+    prevMatch: () => {
+      if (!jumpChange(-1)) find.step(-1);
+    },
     clearSearch: () => {
       if (find.hasSearch()) find.clearSearch();
     },
+    historyStep: (direction) => stepHistory(direction),
     readingLayout: (change) => readingLayoutPort?.(change),
   });
 
