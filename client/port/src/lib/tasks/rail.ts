@@ -97,6 +97,26 @@ export function agentFactsOf(page: ViewPage): AgentFacts[] {
   return out;
 }
 
+/** The word for an incarnation's terminal address. The tracker records
+ * the address on the agent's own machine (t81); a core that federates
+ * other machines names their terminals machine-first (other/t81), so a
+ * laptop's core reaching the agents' machine carries the prefix. An
+ * exact key wins; else the one key that is some machine's terminal of
+ * that address. Two machines holding the same address is ambiguous:
+ * no word is guessed. */
+export function wordFor(words: Readonly<Record<string, HerdrWord>>, address: string): HerdrWord | undefined {
+  const exact = words[address];
+  if (exact !== undefined) return exact;
+  const suffix = `/${address}`;
+  let found: HerdrWord | undefined;
+  for (const [key, word] of Object.entries(words)) {
+    if (!key.endsWith(suffix)) continue;
+    if (found !== undefined) return undefined;
+    found = word;
+  }
+  return found;
+}
+
 /** The rail: every project in name order, the shown one marked, each
  * with its running agents grouped by word. */
 export function railOf(
@@ -113,7 +133,7 @@ export function railOf(
       const sections = new Map<string, RailAgent[]>();
       for (const agent of project.agents ?? []) {
         if (agent.address === null) continue;
-        const word = words.words[agent.address];
+        const word = wordFor(words.words, agent.address);
         // a terminal that ended carries its reason and no word: it is
         // not running
         if (word === undefined || word.finished !== undefined) continue;

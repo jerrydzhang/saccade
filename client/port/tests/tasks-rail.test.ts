@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ViewPage } from "../src/lib/pages.ts";
-import { NO_WORDS, agentFactsOf, railOf, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
+import { NO_WORDS, agentFactsOf, railOf, wordFor, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
 
 function agentsPage(): ViewPage {
   const agent = (n: number, address: string | null, tasks: string | null) => ({
@@ -217,4 +217,18 @@ test("forgetting drops a tracker from the registry; a forgotten home hands over 
   // the next tracker reached becomes the home
   registerTracker("jernerics", "localhost:8814");
   assert.equal(homeTracker(), "jernerics");
+});
+
+test("a federating core's machine-first addresses join the tracker's bare ones; two machines with one address join neither", () => {
+  const word = (state: string) => ({ state, at: 1 });
+  assert.equal(wordFor({ "other/t81": word("done") }, "t81")?.state, "done");
+  assert.equal(wordFor({ t81: word("working"), "other/t81": word("done") }, "t81")?.state, "working", "an exact key wins");
+  assert.equal(wordFor({ "a/t81": word("done"), "b/t81": word("idle") }, "t81"), undefined);
+  assert.equal(wordFor({ "other/xt81": word("done") }, "t81"), undefined, "only a whole address after the machine");
+  const rail = railOf(
+    [{ name: "pyrimel", agents: [{ incarnation: "i-9", address: "t88", tasks: ["t-4"] }], problem: null }],
+    { generation: 1, connected: true, words: { "other/t88": word("working") } },
+    "pyrimel",
+  );
+  assert.deepEqual(rail.projects[0]?.groups.map((group) => [group.state, group.agents.map((agent) => agent.incarnation)]), [["working", ["i-9"]]]);
 });
