@@ -558,10 +558,28 @@ fn diff_door(cli: &Cli, destination: &Destination, spec: &str) -> Result<String,
     let url = server_url(destination, "board diff")?;
     let (task, from, to) = parse_diff_spec(spec)?;
     let reply = client::board_diff(&url, task, from, to).map_err(Fail::Client)?;
+    // the component summary (t-50) reads both revisions' board.yaml
+    // through the get door: no wire change, so any server answers it
+    let board_at = |revision: usize| -> Result<board_grammar::Board, Fail> {
+        let file = client::board_get_file(&url, task, Some(revision), "board.yaml")
+            .map_err(Fail::Client)?;
+        let text = String::from_utf8(decode_content(&file.content)?)
+            .map_err(|_| Fail::Usage(format!("t-{task}@r{revision} board.yaml is not text")))?;
+        board_grammar::parse(&text)
+            .map_err(|error| Fail::Usage(format!("t-{task}@r{revision} does not parse: {error}")))
+    };
+    let components = saccade::boards::changes::changes(&board_at(from)?, &board_at(to)?);
     if cli.json {
-        return Ok(serde_json::to_string(&reply).expect("the reply is plain data"));
+        let mut value = serde_json::to_value(&reply).expect("the reply is plain data");
+        value["components"] =
+            serde_json::to_value(&components).expect("the changes are plain data");
+        return Ok(serde_json::to_string(&value).expect("the reply is plain data"));
     }
-    Ok(reply.diff)
+    Ok(format!(
+        "{}\n{}",
+        saccade::boards::changes::render(&components, from, to),
+        reply.diff
+    ))
 }
 
 fn log_door(cli: &Cli, destination: &Destination, task: &str) -> Result<String, Fail> {
