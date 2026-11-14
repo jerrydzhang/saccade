@@ -133,6 +133,11 @@ export interface BoardUI extends HydrationHost {
    * same action object every invocation path runs (scenario 9). The
    * part names the citation's incorporation block. */
   referencePrimaryClick(part: string): void;
+  /** A shifted or middle click on the citation: its `o` act, open at
+   * the link (t-47). */
+  referenceElsewhereClick(part: string): void;
+  /** A shifted or middle click on a prose ref: its `o` act. */
+  refElsewhereClick(part: string): void;
   /** A plain click on a figure runs its first act (enlarge) through
    * the shared menu path. */
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
@@ -292,6 +297,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (target === undefined || target.source === undefined) return;
       const label = `${target.source.task}@r${target.source.revision}`;
       boardMenu.session.primaryClick({ kind: "reference", label, part });
+      notifyMenu();
+    },
+    referenceElsewhereClick(part) {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      if (target === undefined || target.source === undefined) return;
+      const label = `${target.source.task}@r${target.source.revision}`;
+      boardMenu.session.keyClick({ kind: "reference", label, part }, "o");
+      notifyMenu();
+    },
+    refElsewhereClick(part: string) {
+      const target = scope.frame().targets.find((entry) => entry.part === part);
+      if (target === undefined) return;
+      boardMenu.session.keyClick({ kind: "ref", label: target.text, part }, "o");
       notifyMenu();
     },
     refPrimaryClick(part: string) {

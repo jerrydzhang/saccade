@@ -51,6 +51,12 @@ async function stroke(browser: Browser, key: string): Promise<void> {
   const action = browser.action("key");
   const chord = /^Ctrl-(.)$/.exec(key);
   const chordBase = chord ? CHORDS[chord[1]!] : undefined;
+  const shiftNamed = /^Shift-(.+)$/.exec(key);
+  if (shiftNamed && NAMED[shiftNamed[1]!] !== undefined) {
+    const base = NAMED[shiftNamed[1]!]!;
+    await action.down(Key.Shift).down(base).up(base).up(Key.Shift).perform();
+    return;
+  }
   if (chord && chordBase !== undefined) {
     // a shifted symbol under Ctrl holds Shift too (Ctrl-+ is Ctrl+Shift+=)
     await action.down(Key.Control).down(Key.Shift).down(chordBase).up(chordBase).up(Key.Shift).up(Key.Control).perform();
@@ -168,6 +174,15 @@ async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver
       for (const ch of text) await stroke(browser, ch);
     },
     async click(id, options) {
+      if (options?.shift || options?.button === "middle") {
+        // Shift held across the pointer's press and release: the key
+        // source's down lands in the first tick and stays held until
+        // the actions release
+        const button = options.button === "middle" ? 1 : options.button === "right" ? 2 : 0;
+        const pointer = browser.action("pointer").move({ origin: await control(id).getElement() }).down({ button }).up({ button });
+        await browser.actions(options.shift ? [browser.action("key").down(Key.Shift), pointer] : [pointer]);
+        return;
+      }
       await control(id).click({ button: options?.button ?? "left" });
     },
     async clickPart(part, options) {

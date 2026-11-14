@@ -43,6 +43,10 @@ export interface HydrationHost {
   /** A plain (unshifted, primary-button) click on the citation whose
    * incorporation part is `part`. */
   referencePrimaryClick(part: string): void;
+  /** A shifted or middle click on the citation: open elsewhere (`o`). */
+  referenceElsewhereClick(part: string): void;
+  /** A shifted or middle click on a prose ref: open elsewhere (`o`). */
+  refElsewhereClick(part: string): void;
   /** A plain click on the figure whose part is `part` (the primary
    * act, scenario 4's enlarge). */
   /** A plain click on a figure or a rendered diagram: its first act. */
@@ -138,25 +142,24 @@ async function hydrateCitations(
     link.addEventListener("contextmenu", () => {
       contextmenuAt = performance.now();
     });
+    // a middle click opens elsewhere, exactly as a shifted click
+    const justMiddle = middleClick(link, () => {
+      if (part !== null) _host.referenceElsewhereClick(part);
+    });
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      if (performance.now() - contextmenuAt < 250) return;
+      if (performance.now() - contextmenuAt < 250 || justMiddle()) return;
       // a plain click runs the citation's FIRST act (follow here)
       // through the controller's shared menu path - the same action
       // object the menu key, Enter and the menu item run (scenario 9).
-      // Shifted clicks open elsewhere: the elsewhere slice owns that
-      // surface; the deferral is reported, never silently flattened.
-      if (event.shiftKey || part === null) {
-        console.log("[port] shifted citation open deferred (elsewhere slice)");
+      // A shifted click runs its `o` act instead: open at the link
+      // (t-14 "Two acts, never a mode"; t-47).
+      if (part === null) return;
+      if (event.shiftKey) {
+        _host.referenceElsewhereClick(part);
         return;
       }
       _host.referencePrimaryClick(part);
-    });
-    link.addEventListener("auxclick", (event) => {
-      if (event.button !== 1) return;
-      event.preventDefault();
-      // a middle click opens elsewhere, exactly as a shifted click
-      console.log("[port] middle-click citation open deferred (elsewhere slice)");
     });
     span.replaceChildren(link);
   }
@@ -169,9 +172,14 @@ async function hydrateCitations(
     ref.addEventListener("contextmenu", () => {
       refContextmenuAt = performance.now();
     });
+    const justMiddle = middleClick(ref, () => _host.refElsewhereClick(part));
     ref.addEventListener("click", (event) => {
       event.preventDefault();
-      if (performance.now() - refContextmenuAt < 250) return;
+      if (performance.now() - refContextmenuAt < 250 || justMiddle()) return;
+      if (event.shiftKey) {
+        _host.refElsewhereClick(part);
+        return;
+      }
       _host.refPrimaryClick(part);
     });
   }
@@ -198,6 +206,37 @@ async function hydrateCitations(
       _host.figurePrimaryClick(part);
     });
   }
+}
+
+/** The middle button's click on an element: the release over the
+ * element that a middle press started on. The release's own button is
+ * not trusted - this stack's WebDriver reports a middle release, and
+ * the click it synthesizes after it, as button 0 (probed in the native
+ * lane) - so the press decides. Answers whether a middle click just
+ * acted, for the element's click handler to drop that stray click, as
+ * the right-gesture guard drops the post-contextmenu one. */
+function middleClick(element: HTMLElement, act: () => void): () => boolean {
+  let pressed = false;
+  let actedAt = 0;
+  element.addEventListener("mousedown", (event) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    pressed = true;
+  });
+  element.addEventListener("mouseup", (event) => {
+    if (!pressed) return;
+    pressed = false;
+    event.preventDefault();
+    actedAt = performance.now();
+    act();
+  });
+  element.addEventListener("mouseleave", () => {
+    pressed = false;
+  });
+  element.addEventListener("auxclick", (event) => {
+    if (event.button === 1) event.preventDefault();
+  });
+  return () => performance.now() - actedAt < 250;
 }
 
 async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {

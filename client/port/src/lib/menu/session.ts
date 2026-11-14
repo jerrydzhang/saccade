@@ -112,6 +112,11 @@ export type MenuSession = Readonly<{
    * menu (:69 primary) - plain click means follow here (:43). With no
    * menu-independent acts declared for the kind, nothing happens. */
   primaryClick(target: MenuTarget): MenuKeyOutcome;
+  /** A modified click runs the act its key names directly, without
+   * opening a menu: a shifted or middle click on a citation is `o`
+   * (t-14 "Two acts, never a mode"). A key the kind does not declare
+   * acts nothing. */
+  keyClick(target: MenuTarget, key: string): MenuKeyOutcome;
   /** A pointer-down outside the menu dismisses without acting (:517). */
   outsidePointerDown(): void;
   /** A wheel scroll outside the menu dismisses without acting: the
@@ -202,6 +207,16 @@ export function createMenuSession(actsFor: MenuActs): MenuSession {
       events.push({ kind: "act", index: 0, actionId: entry.action.id });
       entry.action.run();
       return { kind: "act", index: 0, action: entry.action };
+    },
+    keyClick: (target: MenuTarget, key: string) => {
+      if (open) close("outside-click");
+      const entries = actsFor(target);
+      const index = entries.findIndex((entry) => entry.key === key);
+      const entry = entries[index];
+      if (entry === undefined) return { kind: "ignored" };
+      events.push({ kind: "act", index, actionId: entry.action.id });
+      entry.action.run();
+      return { kind: "act", index, action: entry.action };
     },
     outsidePointerDown: () => close("outside-click"),
     scrolledAway: () => close("scroll"),

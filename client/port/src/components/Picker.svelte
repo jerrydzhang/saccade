@@ -16,7 +16,7 @@ import { parseOpenSpec } from "../instruments/board.ts";
     close,
   }: {
     context: PickContext;
-    submit(spec: string): void;
+    submit(spec: string, elsewhere: boolean): void;
     close(): void;
   } = $props();
 
@@ -44,7 +44,9 @@ import { parseOpenSpec } from "../instruments/board.ts";
     }
   });
 
-  function open(index: number): void {
+  // Shift+Enter (or a shifted row click) opens the choice in a new
+  // window; Enter opens it here (t-47, the human's 2026-11-14 key)
+  function open(index: number, elsewhere = false): void {
     const typed = query.trim();
     // A query that PARSES as a location IS the location (the
     // prototype's own rule): a typed form never silently resolves
@@ -53,15 +55,15 @@ import { parseOpenSpec } from "../instruments/board.ts";
     // reopened the stale pin, disarming the follow. Typed forms are
     // also how a tracker is first reached.
     if (typed.length > 0 && parseOpenSpec(typed) !== null) {
-      submit(typed);
+      submit(typed, elsewhere);
       return;
     }
     const entry = entries[index];
     if (entry === undefined) {
-      if (typed.length > 0) submit(typed);
+      if (typed.length > 0) submit(typed, elsewhere);
       return;
     }
-    submit(entry.spec);
+    submit(entry.spec, elsewhere);
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -73,7 +75,7 @@ import { parseOpenSpec } from "../instruments/board.ts";
       selected = Math.max(0, selected - 1);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      open(selected);
+      open(selected, event.shiftKey);
     } else if (event.key === "Escape") {
       event.preventDefault();
       close();
@@ -108,7 +110,7 @@ import { parseOpenSpec } from "../instruments/board.ts";
             data-port-picker-row={entry.id}
             onclick={(event) => {
               event.preventDefault();
-              open(index);
+              open(index, event.shiftKey);
             }}
           >
             <span class="port-picker-kind">{entry.kind}</span>

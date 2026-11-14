@@ -237,6 +237,22 @@ test("the picker controller: submit goes through the one open funnel, then close
   assert.deepEqual(opened, ["host:8811/repo/t-1"]);
 });
 
+test("the picker controller: Shift+Enter submits to the new-window path, Enter to the open funnel (t-47)", () => {
+  const here: string[] = [];
+  const fresh: string[] = [];
+  const picker = createPickerController(
+    (spec) => here.push(spec),
+    (spec) => fresh.push(spec),
+  );
+  picker.open();
+  picker.submit("repo/tasks", true);
+  assert.equal(picker.snapshot().open, false, "the picker closes either way");
+  picker.open();
+  picker.submit("repo/t-2");
+  assert.deepEqual(fresh, ["repo/tasks"]);
+  assert.deepEqual(here, ["repo/t-2"]);
+});
+
 test("m-552: a printable character carries its own Shift; letters keep their case; ctrl/alt/meta stay exact", async () => {
   const { strokeMatches, key: plain } = await import("../src/lib/input/input-context.ts");
   const at = (k: string, over: Partial<KeyInput> = {}): KeyInput => ({ key: k, ctrl: false, shift: false, alt: false, meta: false, ...over });

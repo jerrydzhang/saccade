@@ -62,12 +62,16 @@ export interface AppDriver {
   /** Real key presses in order. Names: one character ("n", "/", " ";
    * a US-layout shifted symbol such as "+" or "?" arrives with Shift
    * held, as a person types it), a named key ("Escape", "Enter",
-   * "Backspace", "ArrowDown", "NumpadAdd"), or a Ctrl chord ("Ctrl-f"). */
+   * "Backspace", "ArrowDown", "NumpadAdd"), a Ctrl chord ("Ctrl-f"), or
+   * a Shift chord on a named key ("Shift-Enter"). */
   press(...keys: string[]): Promise<void>;
   /** Real typing into whatever holds focus, character by character. */
   type(text: string): Promise<void>;
   /** A real click on a port control (its data-port-control id). */
-  click(control: string, options?: { button?: "left" | "right" }): Promise<void>;
+  /** A real click on a port control (its data-port-control id);
+   * `shift` holds Shift through the click, "middle" is the wheel
+   * button (native only: the open-elsewhere gestures, t-47). */
+  click(control: string, options?: { button?: "left" | "right" | "middle"; shift?: boolean }): Promise<void>;
   /** A real click on a rendered content part (its canonical content
    * path, as the readout's content.parts names it). "header" clicks
    * the part's top strip - a group's own hit area, where its center

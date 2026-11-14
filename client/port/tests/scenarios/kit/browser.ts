@@ -44,6 +44,8 @@ function keySyntax(key: string): string {
   // a shifted symbol under Ctrl holds Shift too (Ctrl-+ is Ctrl+Shift+=)
   if (chord && US_SHIFTED.has(chord[1]!)) return `{Control>}{Shift>}${chord[1]}{/Shift}{/Control}`;
   if (chord) return `{Control>}${chord[1]}{/Control}`;
+  const shiftNamed = /^Shift-(.+)$/.exec(key);
+  if (shiftNamed) return `{Shift>}{${shiftNamed[1]}}{/Shift}`;
   if (key.length > 1) return `{${key}}`;
   if (key === "{" || key === "[") return key + key;
   if (/^[A-Z]$/.test(key)) return `{Shift>}${key}{/Shift}`;
@@ -79,6 +81,9 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       for (const ch of text) await userEvent.keyboard(keySyntax(ch));
     },
     async click(control, options) {
+      if (options?.shift || options?.button === "middle") {
+        throw new Error("modified clicks are native only: they open windows (tag the scenario multi-window)");
+      }
       await inside.getByTestId(control).click({ button: options?.button ?? "left" });
     },
     async clickPart(part, options) {

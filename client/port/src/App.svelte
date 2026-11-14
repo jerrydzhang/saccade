@@ -139,7 +139,7 @@ from the registry's reviewed erasure boundary. -->
   {#if picker.open}
     <Picker
       context={pickerContext}
-      submit={(spec) => port?.submitPicker(spec)}
+      submit={(spec, elsewhere) => port?.submitPicker(spec, elsewhere)}
       close={() => port?.closePicker()}
     />
   {/if}
