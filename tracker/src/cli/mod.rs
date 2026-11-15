@@ -256,11 +256,8 @@ enum Cmd {
         #[arg(last = true)]
         prompt: Vec<String>,
     },
-    /// The task-free workspace controller: provision a new workspace,
-    /// or move a stopped native session's saved directory. Creation
-    /// births its own record - no task, claim, or incarnation; a
-    /// change refuses a live session and lands only after the saved
-    /// header actually moved
+    /// The task-free workspace controller: provision a new workspace.
+    /// Creation births its own record - no task, claim, or incarnation
     Workspace {
         #[command(subcommand)]
         verb: WorkspaceVerb,
