@@ -263,6 +263,10 @@ export interface ReadingActions {
   readingLayout(change: ReadingLayoutChange): void;
   /** h l: step time in history mode; nothing outside it. */
   historyStep?(direction: -1 | 1): void;
+  /** t: track the part at the reading height, or stop (t-57). */
+  historyTrack?(): void;
+  /** H L: the revision before or after that changed the tracked part. */
+  historyWalk?(direction: -1 | 1): void;
 }
 
 // The Tasks instrument's reading context: the same viewport reading
@@ -502,11 +506,36 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
             },
             keys: [sequence(key("l"))],
           },
+          {
+            action: {
+              id: "board.history-track",
+              label: "history: track the part being read, or stop",
+              run: () => actions.historyTrack?.(),
+            },
+            keys: [sequence(key("t"))],
+          },
+          {
+            action: {
+              id: "board.history-track-older",
+              label: "history: the change to the tracked part before",
+              run: () => actions.historyWalk?.(-1),
+            },
+            // H and L are the characters (their case carries Shift)
+            keys: [sequence(key("H"))],
+          },
+          {
+            action: {
+              id: "board.history-track-newer",
+              label: "history: the change to the tracked part after",
+              run: () => actions.historyWalk?.(1),
+            },
+            keys: [sequence(key("L"))],
+          },
         ]),
     {
       action: {
         id: "board.find-clear",
-        label: "clear the committed search",
+        label: "clear the committed search (in history: stop tracking)",
         run: () => actions.clearSearch(),
       },
       keys: [sequence(key("Escape"))],

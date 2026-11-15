@@ -16,7 +16,7 @@ import { SourceUnavailableError } from "./board/errors.ts";
 import { baseFromHost, instrumentPath, parseTaskSpec } from "./location.ts";
 import { viewUrl } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
-import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type ViewPage } from "./pages.ts";
+import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
 
 // The tracker's identity facts, from the root page (t-24@r14, r16).
 export type TrackerIdentity = {
@@ -430,6 +430,22 @@ export class TrackerSource implements BoardSource {
     await this.checkContract();
     const base = trackerBase(this.tracker);
     return fetchPage(this.fetcher, viewUrl(base, `${path.trim()}/history`));
+  }
+
+  /** The component changes between two revisions of a task (t-57):
+   * the diff page's `changes`, the alignment history mode shows. A
+   * tracker that serves none predates them: refused, never guessed. */
+  async revisionChanges(task: number, from: number, to: number): Promise<PageChange[]> {
+    await this.checkContract();
+    const base = trackerBase(this.tracker);
+    const page = await fetchPage(this.fetcher, viewUrl(base, `t-${task}@r${from}..r${to}/diff`));
+    if (page.changes === undefined) {
+      throw new SourceUnavailableError(
+        "core-protocol",
+        `the tracker's diff page for t-${task}@r${from}..r${to} carries no component changes; move the binaries in step`,
+      );
+    }
+    return page.changes;
   }
 
   /** The authored board.yaml at a pinned revision, as text: the source

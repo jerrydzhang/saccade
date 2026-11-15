@@ -102,6 +102,11 @@ struct PageDoc {
     content: Option<Vec<Part>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     entries: Option<Vec<serde_json::Value>>,
+    /// The diff page's component changes (t-57): what `sac board diff`
+    /// names, computed by boards::changes, select paths in the revision
+    /// each side names. Additive inside view major 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Vec<crate::boards::changes::Change>>,
 }
 
 /// One view-grammar component. v1 serves six kinds (t-24@r2): text,
@@ -222,6 +227,7 @@ fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> 
             },
         ]),
         entries: None,
+        changes: None,
     }
 }
 
@@ -660,6 +666,7 @@ fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
         revision: None,
         content: Some(families_parts()),
         entries: None,
+        changes: None,
     }
 }
 
@@ -785,6 +792,7 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
         revision: None,
         content: Some(content),
         entries: None,
+        changes: None,
     }
 }
 
@@ -938,6 +946,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
         revision: None,
         content: Some(content),
         entries: None,
+        changes: None,
     }
 }
 
@@ -1107,6 +1116,7 @@ fn board_page(
         revision: None,
         content: Some(content),
         entries: None,
+        changes: None,
     })
 }
 
@@ -1249,6 +1259,7 @@ fn history_page(
         revision: Some(revision),
         content: None,
         entries: Some(entries),
+        changes: None,
     })
 }
 
@@ -1286,8 +1297,10 @@ fn entry_value(entry: &HistoryEntry, task: usize) -> serde_json::Value {
 }
 
 /// The diff page: the stored unified diff between two revisions, one
-/// text part. The viewer's structure-aware word diff stays client-side,
-/// computed from the two revisions.
+/// text part, and the component changes `sac board diff` names (t-57):
+/// the viewer's history mode aligns the two revisions by these, and
+/// marks words inside a changed text itself (that rides its Markdown
+/// renderer).
 fn diff_page(
     app: &AppState,
     snapshot: &Snapshot,
@@ -1301,6 +1314,10 @@ fn diff_page(
     let at = |revision: usize| ctx.commits[revision - 1].commit.as_str().to_string();
     let boards = boards_of(app)?;
     let diff = boards.diff(&at(from), &at(to))?;
+    let changes = crate::boards::changes::changes(
+        &boards.read_board_at(&at(from))?,
+        &boards.read_board_at(&at(to))?,
+    );
     Ok(PageDoc {
         view: ViewMajor { major: VIEW_MAJOR },
         kind: "document",
@@ -1319,6 +1336,7 @@ fn diff_page(
             location: None,
         }]),
         entries: None,
+        changes: Some(changes),
     })
 }
 
@@ -1366,6 +1384,7 @@ fn component_page(
         revision: None,
         content: Some(vec![part_of(component, &location, task, revision)]),
         entries: None,
+        changes: None,
     })
 }
 

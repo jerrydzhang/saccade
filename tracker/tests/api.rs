@@ -10016,6 +10016,16 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
         json_of(&api_body)["diff"].as_str().unwrap(),
         "the page carries the stored diff"
     );
+    // and the component changes `sac board diff` names (t-57), select
+    // paths in the revision each side names
+    assert_eq!(
+        diff["changes"],
+        json!([
+            {"change": "added", "label": "group \"evidence\"", "to": "/content/1"},
+            {"change": "added", "label": "annotation", "to": "/content/2"},
+        ]),
+        "{body}"
+    );
 
     // the file family: raw bytes, typed by extension
     let mut response = ureq::get(&format!("{url}/view/v1/t-0@r2/file/board.yaml"))

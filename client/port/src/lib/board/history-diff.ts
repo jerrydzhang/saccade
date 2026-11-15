@@ -1,12 +1,13 @@
-// History mode's diff (t-49; t-14 "The viewer", History), its pure
-// half: a revision shown against the one before it. Components are
-// aligned as `sac board diff` aligns them (tracker/src/boards/
-// changes.rs: by a key - a group's title, a text's first heading, a
-// figure's input, an incorporation's source task - over a longest
-// common subsequence). The result is ONE board to render: the shown
-// revision's components, each added or changed one marked, and every
-// removed one placed back where it stood, marked removed, so the
-// reader sees what went without leaving the page.
+// History mode's diff (t-49, t-57; t-14 "The viewer", History), its
+// pure half: a revision shown against the one before it. The component
+// alignment is the tracker's: the diff page serves the changes `sac
+// board diff` names (tracker/src/boards/changes.rs), and the shown
+// board follows them - the client keeps no alignment of its own. The
+// result is ONE board to render: the shown revision's components, each
+// added, changed or moved one marked, and every removed one placed back
+// where it stood, marked removed, so the reader sees what went without
+// leaving the page. Beside it, every shown part's place in both
+// revisions: what keeps the part being read in place across steps.
 //
 // Inside a changed text the diff is by word, and keeps Markdown's
 // structure: the marks ride private-use sentinels through the normal
@@ -17,63 +18,303 @@
 // shows its new source unmarked (marks would break the diagram).
 
 import type { Block, Board, GroupBlock, IncorporationBlock } from "./model.ts";
+import { selectToPart } from "./targets.ts";
 
 export const INS_OPEN = "\uE000";
 export const INS_CLOSE = "\uE001";
 export const DEL_OPEN = "\uE002";
 export const DEL_CLOSE = "\uE003";
 
-export type ChangeMark = "add" | "mod" | "del";
+export type ChangeMark = "add" | "mod" | "del" | "move";
 type Marked = Block & { change?: ChangeMark };
+
+/** One component change as the diff page serves it: select paths in
+ * the revision each side names (`from` the earlier, `to` the later). */
+export type ComponentChange = Readonly<{
+  change: "added" | "removed" | "changed" | "moved";
+  from?: string;
+  to?: string;
+}>;
+
+/** A shown part and where it stands in each revision: `before` in the
+ * earlier, `after` in the shown one; null where it does not exist (an
+ * added part has no before, a removed one no after). Paths are
+ * canonical part paths (/content/0/content/1). */
+export type ShownPart = Readonly<{
+  shown: string;
+  before: string | null;
+  after: string | null;
+  change: ChangeMark | null;
+}>;
 
 export type BoardDiff = {
   board: Board;
   /** The changed parts in reading order, as rendered part paths: the
    * places n and N jump between. */
   changed: string[];
+  /** Every shown component part, in reading order. */
+  parts: ShownPart[];
 };
 
 /** The shown revision against its predecessor (null: the first
- * revision, everything added). */
-export function diffBoards(previous: Board | null, current: Board): BoardDiff {
+ * revision, everything added), aligned by the tracker's changes. */
+export function diffBoards(
+  previous: Board | null,
+  current: Board,
+  changes: readonly ComponentChange[] = [],
+): BoardDiff {
   const changed: string[] = [];
-  const content = diffBlocks(previous?.content ?? [], current.content, "", changed);
-  return { board: { ...current, content }, changed };
+  const parts: ShownPart[] = [];
+  if (previous === null) {
+    const content = current.content.map((block, index) => {
+      const path = `/content/${index}`;
+      changed.push(path);
+      record(parts, block, path, null, path, "add");
+      return markAll(block, "add");
+    });
+    return { board: { ...current, content }, changed, parts };
+  }
+  const index = indexChanges(changes);
+  const content = diffBlocks(previous.content, current.content, "", "", "", index, changed, parts);
+  return { board: { ...current, content }, changed, parts };
 }
 
-function blockKey(block: Block): string {
+type ChangeIndex = {
+  /** Earlier-revision parts that went (removed, or moved away). */
+  gone: Set<string>;
+  /** Later-revision parts that came (added, or moved here). */
+  came: Set<string>;
+  /** Moved parts: later path -> earlier path. */
+  movedFrom: Map<string, string>;
+  /** Earlier paths of the aligned pairs that changed whole. */
+  changed: Set<string>;
+  /** Every path a change names, either side, to tell a container to
+   * walk in: [earlier paths, later paths]. */
+  before: string[];
+  after: string[];
+};
+
+function indexChanges(changes: readonly ComponentChange[]): ChangeIndex {
+  const index: ChangeIndex = {
+    gone: new Set(),
+    came: new Set(),
+    movedFrom: new Map(),
+    changed: new Set(),
+    before: [],
+    after: [],
+  };
+  for (const entry of changes) {
+    const from = entry.from === undefined ? null : selectToPart(entry.from);
+    const to = entry.to === undefined ? null : selectToPart(entry.to);
+    if (from !== null) index.before.push(from);
+    if (to !== null) index.after.push(to);
+    if (entry.change === "removed" && from !== null) index.gone.add(from);
+    if (entry.change === "added" && to !== null) index.came.add(to);
+    if (entry.change === "moved" && from !== null && to !== null) {
+      index.gone.add(from);
+      index.came.add(to);
+      index.movedFrom.set(to, from);
+    }
+    if (entry.change === "changed" && from !== null) index.changed.add(from);
+  }
+  return index;
+}
+
+function childrenOf(block: Block): readonly Block[] {
+  return block.kind === "group" || block.kind === "incorporation" ? block.content : [];
+}
+
+/** A shown part and its descendants, placed in both revisions by the
+ * same child positions (`before` or `after` null: absent there). */
+function record(
+  parts: ShownPart[],
+  block: Block,
+  shown: string,
+  before: string | null,
+  after: string | null,
+  change: ChangeMark | null,
+): void {
+  parts.push({ shown, before, after, change });
+  childrenOf(block).forEach((child, index) => {
+    const at = (prefix: string | null) => (prefix === null ? null : `${prefix}/content/${index}`);
+    record(parts, child, at(shown)!, at(before), at(after), change === "mod" ? null : change);
+  });
+}
+
+/** One level of the alignment: the earlier and later siblings under a
+ * container both revisions hold. What the changes name as gone or come
+ * is placed by them; every other sibling pairs in order - exactly the
+ * tracker's longest common subsequence, so the pairs need no keys. */
+function diffBlocks(
+  previous: readonly Block[],
+  current: readonly Block[],
+  beforePrefix: string,
+  afterPrefix: string,
+  shownPrefix: string,
+  index: ChangeIndex,
+  changed: string[],
+  parts: ShownPart[],
+): Block[] {
+  const beforeAt = (i: number) => `${beforePrefix}/content/${i}`;
+  const afterAt = (j: number) => `${afterPrefix}/content/${j}`;
+  const keptBefore = previous.map((_, i) => i).filter((i) => !index.gone.has(beforeAt(i)));
+  const keptAfter = current.map((_, j) => j).filter((j) => !index.came.has(afterAt(j)));
+  const pairs: [number, number][] = [];
+  for (let k = 0; k < Math.min(keptBefore.length, keptAfter.length); k++) pairs.push([keptBefore[k]!, keptAfter[k]!]);
+  const out: Block[] = [];
+  const at = () => `${shownPrefix}/content/${out.length}`;
+  const removed = (i: number) => {
+    // a moved component shows where it went, never where it stood
+    if ([...index.movedFrom.values()].includes(beforeAt(i))) return;
+    const block = previous[i]!;
+    changed.push(at());
+    record(parts, block, at(), beforeAt(i), null, "del");
+    out.push(markAll(block, "del"));
+  };
+  const added = (j: number) => {
+    const block = current[j]!;
+    changed.push(at());
+    const from = index.movedFrom.get(afterAt(j));
+    if (from !== undefined) {
+      record(parts, block, at(), from, afterAt(j), "move");
+      out.push({ ...block, change: "move" } as Marked);
+      return;
+    }
+    record(parts, block, at(), null, afterAt(j), "add");
+    out.push(markAll(block, "add"));
+  };
+  const inside = (paths: readonly string[], path: string) => paths.some((other) => other.startsWith(`${path}/`));
+  let i = 0;
+  let j = 0;
+  for (const [pi, pj] of [...pairs, [previous.length, current.length] as [number, number]]) {
+    while (i < pi) removed(i++);
+    while (j < pj) added(j++);
+    if (pi === previous.length && pj === current.length) break;
+    const before = previous[pi]!;
+    const after = current[pj]!;
+    const path = at();
+    if (index.changed.has(beforeAt(pi))) {
+      changed.push(path);
+      record(parts, after, path, beforeAt(pi), afterAt(pj), "mod");
+      if (
+        (before.kind === "text" && after.kind === "text") ||
+        (before.kind === "annotation" && after.kind === "annotation")
+      ) {
+        const markdown = wordDiffMarkdown(before.markdown, (after as typeof before).markdown);
+        out.push({ ...after, markdown, change: "mod" } as Marked);
+      } else {
+        out.push({ ...after, change: "mod" } as Marked);
+      }
+    } else if (
+      (after.kind === "group" || after.kind === "incorporation") &&
+      before.kind === after.kind &&
+      (inside(index.before, beforeAt(pi)) || inside(index.after, afterAt(pj)))
+    ) {
+      // a container whose own fields agree: walk in and mark there
+      parts.push({ shown: path, before: beforeAt(pi), after: afterAt(pj), change: null });
+      const content = diffBlocks(
+        (before as GroupBlock | IncorporationBlock).content,
+        (after as GroupBlock | IncorporationBlock).content,
+        beforeAt(pi),
+        afterAt(pj),
+        path,
+        index,
+        changed,
+        parts,
+      );
+      out.push({ ...after, content } as Block);
+    } else {
+      // unchanged: the tracker named nothing here
+      record(parts, after, path, beforeAt(pi), afterAt(pj), null);
+      out.push(after);
+    }
+    i = pi + 1;
+    j = pj + 1;
+  }
+  return out;
+}
+
+/** A whole component added or removed: the mark on it, and its texts'
+ * words marked through, so a removed paragraph reads struck. */
+function markAll(block: Block, change: "add" | "del"): Block {
+  const op = change === "add" ? "ins" : "del";
+  const mark = (markdown: string) => emit(tokenize(markdown).map((token) => ({ op, token }) as Op));
   switch (block.kind) {
-    case "group":
-      return `group:${block.title ?? ""}`;
     case "text":
-      return `text:${headingOf(block.markdown) ?? ""}`;
-    case "figure":
-      return `figure:${block.input}`;
-    case "incorporation":
-      return `incorporation:${block.source.task}`;
     case "annotation":
-      return "annotation";
-    case "unknown":
-      return `unknown:${block.name}`;
+      return { ...block, markdown: mark(block.markdown), change } as Marked;
+    case "group":
+    case "incorporation":
+      return { ...block, content: block.content.map((child) => markAll(child, change)), change } as Marked;
+    default:
+      return { ...block, change } as Marked;
   }
 }
 
-function headingOf(markdown: string): string | null {
-  const first = markdown.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
-  return first.startsWith("#") ? first : null;
+// -- places across revisions -------------------------------------------
+
+/** The block part a rendered part belongs to: a ref, diagram or
+ * citation inside a block reads as the block. */
+export function blockPartOf(part: string): string {
+  return /^(\/content\/\d+)+/.exec(part)?.[0] ?? part;
 }
 
-/** Equality of authored content, ignoring source positions. */
-function same(a: Block, b: Block): boolean {
-  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
-}
-
-function strip(block: Block): unknown {
-  const { pos: _pos, ...rest } = block as Block & { pos?: unknown };
-  if (block.kind === "group" || block.kind === "incorporation") {
-    return { ...rest, content: block.content.map(strip) };
+/** The shown part standing at `path` in one revision, or null. A part
+ * the diff does not list reads as its nearest listed ancestor (not
+ * exact). */
+export function shownAt(
+  diff: BoardDiff,
+  side: "before" | "after",
+  path: string,
+): { shown: string; exact: boolean } | null {
+  for (let at: string | null = blockPartOf(path); at !== null; at = parentOf(at)) {
+    const found = diff.parts.find((part) => part[side] === at);
+    if (found !== undefined) return { shown: found.shown, exact: at === path };
   }
-  return rest;
+  return null;
+}
+
+/** Where a shown part stands in one revision. When it is not there (an
+ * added part before, a removed one after), its nearest surviving
+ * neighbour: the closest sibling that is there, the one above first at
+ * each distance, else its container's. */
+export function placeIn(
+  diff: BoardDiff,
+  shown: string,
+  side: "before" | "after",
+): { path: string; exact: boolean } | null {
+  const of = (path: string) => diff.parts.find((part) => part.shown === path);
+  const own = of(blockPartOf(shown));
+  if (own === undefined) return null;
+  const direct = own[side];
+  if (direct !== null) return { path: direct, exact: true };
+  for (let at: string | null = own.shown; at !== null; at = parentOf(at)) {
+    const parent = parentOf(at);
+    const siblings = diff.parts.filter((part) => parentOf(part.shown) === parent);
+    const position = siblings.findIndex((part) => part.shown === at);
+    for (let distance = 1; distance < siblings.length; distance++) {
+      for (const k of [position - distance, position + distance]) {
+        const there = siblings[k]?.[side];
+        if (there !== null && there !== undefined) return { path: there, exact: false };
+      }
+    }
+    if (parent !== null) {
+      const container = of(parent)?.[side];
+      if (container !== null && container !== undefined) return { path: container, exact: false };
+    }
+  }
+  return null;
+}
+
+/** Whether the shown revision changed this part: it carries a mark, or
+ * something inside it does. */
+export function touches(diff: BoardDiff, shown: string): boolean {
+  return diff.changed.some((path) => path === shown || path.startsWith(`${shown}/`));
+}
+
+function parentOf(path: string): string | null {
+  const cut = path.lastIndexOf("/content/");
+  return cut <= 0 ? null : path.slice(0, cut);
 }
 
 function lcs<T>(a: readonly T[], b: readonly T[]): [number, number][] {
@@ -97,77 +338,6 @@ function lcs<T>(a: readonly T[], b: readonly T[]): [number, number][] {
     else j++;
   }
   return pairs;
-}
-
-function diffBlocks(previous: readonly Block[], current: readonly Block[], prefix: string, changed: string[]): Block[] {
-  const pairs = lcs(previous.map(blockKey), current.map(blockKey));
-  const out: Block[] = [];
-  const at = () => `${prefix}/content/${out.length}`;
-  const removed = (block: Block) => {
-    changed.push(at());
-    out.push(markAll(block, "del"));
-  };
-  const added = (block: Block) => {
-    changed.push(at());
-    out.push(markAll(block, "add"));
-  };
-  let i = 0;
-  let j = 0;
-  for (const [pi, pj] of [...pairs, [previous.length, current.length] as [number, number]]) {
-    while (i < pi) removed(previous[i++]!);
-    while (j < pj) added(current[j++]!);
-    if (pi === previous.length && pj === current.length) break;
-    const before = previous[pi]!;
-    const after = current[pj]!;
-    if (same(before, after)) {
-      out.push(after);
-    } else if (
-      (before.kind === "group" && after.kind === "group" && before.title === after.title) ||
-      (before.kind === "incorporation" &&
-        after.kind === "incorporation" &&
-        JSON.stringify(before.source) === JSON.stringify(after.source))
-    ) {
-      // a container whose own fields agree: walk in and mark there
-      const path = at();
-      const inner = diffBlocks(
-        (before as GroupBlock | IncorporationBlock).content,
-        (after as GroupBlock | IncorporationBlock).content,
-        path,
-        changed,
-      );
-      out.push({ ...after, content: inner } as Block);
-    } else if (
-      (before.kind === "text" && after.kind === "text") ||
-      (before.kind === "annotation" && after.kind === "annotation")
-    ) {
-      changed.push(at());
-      const markdown = wordDiffMarkdown(before.markdown, (after as typeof before).markdown);
-      out.push({ ...after, markdown, change: "mod" } as Marked);
-    } else {
-      changed.push(at());
-      out.push({ ...after, change: "mod" } as Marked);
-    }
-    i = pi + 1;
-    j = pj + 1;
-  }
-  return out;
-}
-
-/** A whole component added or removed: the mark on it, and its texts'
- * words marked through, so a removed paragraph reads struck. */
-function markAll(block: Block, change: "add" | "del"): Block {
-  const op = change === "add" ? "ins" : "del";
-  const mark = (markdown: string) => emit(tokenize(markdown).map((token) => ({ op, token }) as Op));
-  switch (block.kind) {
-    case "text":
-    case "annotation":
-      return { ...block, markdown: mark(block.markdown), change } as Marked;
-    case "group":
-    case "incorporation":
-      return { ...block, content: block.content.map((child) => markAll(child, change)), change } as Marked;
-    default:
-      return { ...block, change } as Marked;
-  }
 }
 
 // -- the word diff -----------------------------------------------------
