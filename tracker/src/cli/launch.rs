@@ -518,17 +518,8 @@ pub(super) fn ask_run(
     if !world.incarnations.contains_key(&creator) {
         return Err(Fail::Reject(Reject::InvalidIncarnationId));
     }
-    // preflight before anything launches: the creator is a registered
-    // NATIVE session (a historical attribution identity cannot create),
-    // and the question is prose that can exist
-    match &world.incarnations[&creator].incarnation {
-        saccade::Incarnation::Native { .. } => {}
-        saccade::Incarnation::Established { .. } => {
-            return Err(Fail::Usage(
-                "launch --ask creates from a live native session; this attribution identity carries no saved native session to create from".into(),
-            ));
-        }
-    }
+    // preflight before anything launches: the question is prose that
+    // can exist
     let body = Prose::new(question.to_string())?;
     let creator_num = world
         .incarnation_num(creator)
@@ -559,7 +550,6 @@ pub(super) fn ask_run(
                 harness,
                 ..
             } => native_id.as_str() == fresh.native_id && *harness == fresh.harness,
-            _ => false,
         })
         .map(|(id, _)| *id)
         .ok_or_else(|| {

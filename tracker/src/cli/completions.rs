@@ -104,11 +104,6 @@ pub(super) fn incarnation_lines(world: &World, records: &[StoredRecord]) -> Vec<
                         .unwrap_or_else(|| "awaiting its first save".into());
                     format!("{actor} native session {}, {saved}", native_id.as_str())
                 }
-                Incarnation::Established { task, workspace } => format!(
-                    "{actor} established t-{}, workspace {}",
-                    task.0,
-                    workspace.as_path().display()
-                ),
             };
             one(format!("i-{number}"), description)
         })

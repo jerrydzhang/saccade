@@ -190,12 +190,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                 address,
                 adopted,
                 harness,
-            } = &ctx.incarnation
-            else {
-                return Err(LaunchFail::Usage(format!(
-                    "{token} carries no saved native session to resume; historical attribution identities have none",
-                )));
-            };
+            } = &ctx.incarnation;
             // the recorded kind is the authority: an explicit harness
             // is a claim about the session, and a wrong claim refuses
             if let Some(expected) = expected

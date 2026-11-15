@@ -17,20 +17,18 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskOffered { .. }
         | Event::TaskRejected { .. }
         | Event::TaskAccepted { .. }
-        | Event::TaskWorkspaceCheckpointed { .. }
         | Event::MessageSent { .. }
         // naming: any tier; the store arm holds an agent to its own
         // declared incarnation
         | Event::IncarnationNamed { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
-        // provisioning by role: the machinery's establishment and
+        // provisioning by role: the machinery's
         // creation, the native registration, and the recipient's
         // delivery record.
         // Cleanup lands only after its effects verified:
         // the same effect-only authority, never a caller-authored fact.
-        Event::WorkspaceEstablished { .. }
-        | Event::WorkspaceCreated { .. }
+        Event::WorkspaceCreated { .. }
         | Event::WorkspaceCleaned { .. }
         | Event::IncarnationRegistered { .. }
         | Event::SavedSessionBound { .. }
@@ -72,24 +70,6 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::OfferBoard { task, commit } => vec![Event::TaskOffered { task, commit }],
         Command::RejectBoard { task, grounds } => vec![Event::TaskRejected { task, grounds }],
         Command::AcceptBoard { task } => vec![Event::TaskAccepted { task }],
-        Command::EstablishWorkspace {
-            task_id,
-            base,
-            branch,
-            worktree,
-        } => vec![Event::WorkspaceEstablished {
-            task_id,
-            base,
-            branch,
-            worktree,
-        }],
-        Command::CheckpointWorkspace {
-            task_id,
-            checkpoint,
-        } => vec![Event::TaskWorkspaceCheckpointed {
-            task_id,
-            checkpoint,
-        }],
         Command::CreateWorkspace {
             base,
             branch,
@@ -189,7 +169,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 18] = [
+        let events: [(Event, Authority); 16] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -236,25 +216,8 @@ mod test {
                 AnyTier,
             ),
             (Event::TaskAccepted { task: TaskId(0) }, AnyTier),
-            // Provisioning stays machine-authored; checkpoint is the exception.
-            (
-                Event::WorkspaceEstablished {
-                    task_id: TaskId(0),
-                    base: GitCommit::new("abc123".into()).unwrap(),
-                    branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                    worktree: WorktreePath::new("/wt".into()).unwrap(),
-                },
-                Require(Tier::System),
-            ),
-            (
-                Event::TaskWorkspaceCheckpointed {
-                    task_id: TaskId(0),
-                    checkpoint: GitCommit::new("abc123".into()).unwrap(),
-                },
-                AnyTier,
-            ),
             // Creation is the machinery's own act, like the
-            // establishment and the registration.
+            // registration.
             (
                 Event::WorkspaceCreated {
                     base: GitCommit::new("abc123".into()).unwrap(),
@@ -378,16 +341,6 @@ mod test {
                 grounds: prose(),
             },
             Command::AcceptBoard { task: TaskId(0) },
-            Command::EstablishWorkspace {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("abc123".into()).unwrap(),
-            },
             Command::CreateWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("workspace-deadbeef".into()).unwrap(),

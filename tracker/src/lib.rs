@@ -74,12 +74,6 @@ pub enum Reject {
     #[error("human-only act")]
     HumanOnly,
     // Workspace
-    #[error("the task already holds a workspace")]
-    WorkspaceAlreadyExists,
-    #[error("the task has no workspace")]
-    WorkspaceMissing,
-    #[error("the tip rewinds the recorded checkpoint")]
-    CheckpointRewind,
     #[error("no workspace was born at that record")]
     InvalidWorkspaceId,
     #[error("the workspace's stage does not admit this lifecycle fact")]
@@ -112,9 +106,6 @@ impl Reject {
             Reject::NotOwnIncarnation => "not_own_incarnation",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
-            Reject::WorkspaceAlreadyExists => "workspace_already_exists",
-            Reject::WorkspaceMissing => "workspace_missing",
-            Reject::CheckpointRewind => "checkpoint_rewind",
             Reject::InvalidWorkspaceId => "invalid_workspace_id",
             Reject::WorkspaceStageMismatch => "workspace_stage_mismatch",
             Reject::InvalidActor => "invalid_actor",
@@ -153,9 +144,6 @@ mod test {
             Reject::NotOwnIncarnation,
             Reject::InvalidMessageId,
             Reject::HumanOnly,
-            Reject::WorkspaceAlreadyExists,
-            Reject::WorkspaceMissing,
-            Reject::CheckpointRewind,
             Reject::InvalidWorkspaceId,
             Reject::WorkspaceStageMismatch,
             Reject::InvalidActor,

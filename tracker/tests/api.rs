@@ -197,19 +197,6 @@ async fn commands_round_trip_over_the_wire() {
             now,
         )
         .unwrap();
-        saccade::db::record(
-            &mut conn,
-            &Context::system(),
-            Command::EstablishWorkspace {
-                task_id: TaskId(0),
-                base: saccade::GitCommit::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
-                    .unwrap(),
-                branch: saccade::GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: saccade::WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-            },
-            now + 1,
-        )
-        .unwrap();
     }
     let hist_base = spawn_server(&hist).await;
     let (_, standing) = get_json(&hist_base, "/api/v1/records");
@@ -220,7 +207,7 @@ async fn commands_round_trip_over_the_wire() {
             .iter()
             .map(|r| r["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["task_created", "workspace_established"]
+        ["task_created"]
     );
 
     let (status, body) = post_command(
@@ -291,7 +278,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"establish_workspace": {"task_id": 0, "base": "abc123", "branch": "saccade/t-0", "worktree": "/repo/wt/t-0"}}),
+            json!({"create_workspace": {"base": "abc123", "branch": "feature-abc123ab", "worktree": "/repo/wt/feature-abc123ab"}}),
         ),
     );
     assert_eq!(status, 400);
@@ -6068,9 +6055,7 @@ async fn the_task_free_controller_creates_workspaces() {
     assert_eq!(rover["num"], 0);
     let rover_birth = rover["incarnation"].as_u64().unwrap();
     // the retired task-bound effect routes are absent: a 404 that
-    // writes nothing - the task-bound establishment is birthable by no
-    // public face, its fold contracts pinned in the store and
-    // round-trip inventories
+    // writes nothing
     let (_, body) = get_json(&base_url, "/api/v1/records");
     let standing = json_of(&body)["records"].as_array().unwrap().len();
     for path in ["/api/v1/workspace/start", "/api/v1/workspace/open"] {
@@ -6670,15 +6655,15 @@ async fn the_cleaned_stage_guards_launch() {
     assert!(err.contains("recorded Cleaned"), "{err}");
 }
 
-/// A recorded path addresses its own birth: a historical establishment
+/// A recorded path addresses its own birth: a birth
 /// whose stored string carries a symlink segment resolves through it -
 /// stored identity preserved, and two stored paths aliasing one
 /// directory refuse as ambiguous rather than picking.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
     let rig = lifecycle_rig("alias");
-    // a historical establishment whose recorded path carries a symlink
-    // segment: hand-written, exactly what an old log may hold
+    // a birth whose recorded path carries a symlink segment:
+    // hand-written, exactly what a log may hold
     let link = rig.dir.join("link");
     let real_home = rig.dir.join("real-wt");
     std::fs::create_dir_all(&real_home).unwrap();
@@ -6697,31 +6682,21 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
             "HEAD",
         ],
     );
-    let establishment = |task: i32, branch: &str, worktree: &str| {
+    let birth = |at: u64, branch: &str, worktree: &str| {
         let mut conn = saccade::db::open(&rig.dir.join("saccade.db")).unwrap();
         saccade::db::record(
             &mut conn,
             &saccade::store::Context::system(),
-            saccade::Command::CreateTask {
-                name: saccade::Prose::new(format!("a lineage behind {branch}")).unwrap(),
-            },
-            task as u64 * 2,
-        )
-        .unwrap();
-        saccade::db::record(
-            &mut conn,
-            &saccade::store::Context::system(),
-            saccade::Command::EstablishWorkspace {
-                task_id: saccade::TaskId(task as usize),
+            saccade::Command::CreateWorkspace {
                 base: saccade::GitCommit::new("abc123".into()).unwrap(),
                 branch: saccade::GitBranch::new(branch.into()).unwrap(),
                 worktree: saccade::WorktreePath::new(worktree.into()).unwrap(),
             },
-            task as u64 * 2 + 1,
+            at,
         )
         .unwrap();
     };
-    establishment(0, "saccade/t-9", recorded.display().to_string().as_str());
+    birth(1, "saccade/t-9", recorded.display().to_string().as_str());
 
     // the recorded string itself addresses the birth: the ordered clean
     // contract runs over the real checkout it names
@@ -6758,7 +6733,7 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
     }
     // a second stored path over the same directory makes the alias
     // unsafe: both shapes refuse as ambiguous, neither is picked
-    establishment(1, "saccade/t-10", real.display().to_string().as_str());
+    birth(3, "saccade/t-10", real.display().to_string().as_str());
     for shape in [recorded.to_str().unwrap(), real.to_str().unwrap()] {
         let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", shape]);
         assert!(!ok, "the aliased directory resolved to one birth: {err}");
@@ -6982,10 +6957,7 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
         native_id,
         saved_session,
         ..
-    } = &ctx.incarnation
-    else {
-        panic!("the door births a native identity");
-    };
+    } = &ctx.incarnation;
     // the pre-allocated id is the one pi will create: it rode argv
     assert!(
         composition.contains(native_id.as_str()),

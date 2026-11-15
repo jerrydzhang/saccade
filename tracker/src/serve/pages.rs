@@ -18,7 +18,6 @@ use serde::Serialize;
 use crate::api::{AppState, ReadFail, Snapshot};
 use crate::boards::BoardsFail;
 use crate::db::StoredRecord;
-use crate::objects::incarnation::Incarnation;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{Owner, TaskId, TaskState};
 use crate::record::views::{self, Target, WaitUntil};
@@ -727,9 +726,6 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
     let last_commits = last_commit_per_session(snapshot);
     let mut content: Vec<Part> = Vec::new();
     for (id, ctx) in &world.incarnations {
-        let Incarnation::Native { .. } = &ctx.incarnation else {
-            continue;
-        };
         // a superseded holder no longer carries the address; the
         // holder the fold names now is the one the page lists
         if world.superseded.contains_key(id) {
@@ -1821,7 +1817,6 @@ mod test {
                 at: last_at,
             }],
             birth_actor: actor.clone(),
-            workspace: None,
         };
         let now: u64 = 1_800_000_000;
         let day = 24 * 60 * 60;

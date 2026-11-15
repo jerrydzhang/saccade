@@ -62,22 +62,7 @@ pub enum Event {
     TaskAccepted {
         task: TaskId,
     },
-    // Workspace events: the establishment is the machinery verb,
-    // System-authored by role; the checkpoint is the exception any
-    // tier may record
-    /// The workspace-establishment birth: task reference, canonical
-    /// base, branch, and the workspace's absolute path. The record's
-    /// position is the shared workspace/incarnation identity.
-    WorkspaceEstablished {
-        task_id: TaskId,
-        base: GitCommit,
-        branch: GitBranch,
-        worktree: WorktreePath,
-    },
-    TaskWorkspaceCheckpointed {
-        task_id: TaskId,
-        checkpoint: GitCommit,
-    },
+    // Workspace events: machinery verbs, System-authored by role
     /// The created workspace's birth: the canonical base commit,
     /// branch, and absolute path provisioning established. The
     /// record's position is the workspace's own identity; no task, no
@@ -201,22 +186,6 @@ pub enum Command {
     /// Accept an offered board.
     AcceptBoard {
         task: TaskId,
-    },
-    // Machinery verbs: System authorship comes from the role, never input
-    EstablishWorkspace {
-        task_id: TaskId,
-        base: GitCommit,
-        branch: GitBranch,
-        worktree: WorktreePath,
-    },
-    /// Retired from the public wire: the name no longer decodes at
-    /// /api/v1/command, so no caller can land a checkpoint; the shape
-    /// stays constructible for the trusted fixtures and decides to its
-    /// historical event.
-    #[serde(skip_deserializing)]
-    CheckpointWorkspace {
-        task_id: TaskId,
-        checkpoint: GitCommit,
     },
     // Creation is a machinery verb: System authorship comes
     // from the role, never input

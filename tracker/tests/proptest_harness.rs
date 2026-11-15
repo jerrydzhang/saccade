@@ -51,9 +51,6 @@ enum Action {
         task: u8,
         human: bool,
     },
-    Establish {
-        task: u8,
-    },
     CreateWorkspace {
         draw: u8,
     },
@@ -97,8 +94,7 @@ impl Action {
             | Action::Reject { human, .. }
             | Action::Accept { human, .. } => *human,
             Action::Commit { .. } | Action::Offer { .. } => false,
-            Action::Establish { .. }
-            | Action::CreateWorkspace { .. }
+            Action::CreateWorkspace { .. }
             | Action::Register { .. }
             | Action::BindSaved { .. }
             | Action::AssignAddress { .. }
@@ -118,7 +114,6 @@ impl Action {
             | Action::Offer { task, .. }
             | Action::Reject { task, .. }
             | Action::Accept { task, .. }
-            | Action::Establish { task, .. }
                 if role == "task" =>
             {
                 *task
@@ -179,20 +174,10 @@ fn record_ref_at(records: usize, n: u8) -> RecordId {
     }
 }
 
-/// The historical incarnation born with a task's establishment; the
-/// sentinel slot draws a guaranteed-absent reference.
-fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::IncarnationId> {
-    let born: Vec<saccade::IncarnationId> = world
-        .incarnations
-        .iter()
-        .filter(|(_, ctx)| {
-            matches!(
-                ctx.incarnation,
-                saccade::Incarnation::Established { task: born, .. } if born == task
-            )
-        })
-        .map(|(id, _)| *id)
-        .collect();
+/// A registered native incarnation a claim names; the sentinel slot
+/// draws a guaranteed-absent reference.
+fn incarnation_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
+    let born: Vec<saccade::IncarnationId> = world.incarnations.keys().copied().collect();
     let slot = n as usize % (born.len() + 1);
     if slot == born.len() {
         Some(saccade::IncarnationId(RecordId(usize::MAX)))
@@ -229,7 +214,7 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         Action::Claim { incarnation, .. } => Command::ClaimTask {
             id: task,
             incarnation: (*incarnation % 3 == 0)
-                .then(|| incarnation_at(world, task, *incarnation))
+                .then(|| incarnation_at(world, *incarnation))
                 .flatten(),
         },
         Action::Cancel { .. } => Command::CancelTask {
@@ -291,13 +276,6 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             grounds: Prose::new("generated grounds".into()).unwrap(),
         },
         Action::Accept { .. } => Command::AcceptBoard { task },
-        Action::Establish { .. } => Command::EstablishWorkspace {
-            task_id: task,
-            base: saccade::GitCommit::new(format!("abc{:03}", task.0)).unwrap(),
-            branch: saccade::GitBranch::new(format!("saccade/t-{}", task.0)).unwrap(),
-            worktree: saccade::WorktreePath::new(format!("/generated/wt/t-{}", task.0).into())
-                .unwrap(),
-        },
         Action::CreateWorkspace { draw } => Command::CreateWorkspace {
             base: saccade::GitCommit::new("abc000".into()).unwrap(),
             branch: saccade::GitBranch::new(format!("feature-{draw:02}")).unwrap(),
@@ -367,8 +345,7 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
 
 fn context(action: &Action, world: &World) -> Context {
     // provisioning and delivery bookkeeping are the machinery's own acts
-    if let Action::Establish { .. }
-    | Action::CreateWorkspace { .. }
+    if let Action::CreateWorkspace { .. }
     | Action::Register { .. }
     | Action::BindSaved { .. }
     | Action::AssignAddress { .. }
@@ -454,7 +431,6 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => (any::<u8>(), any::<u8>()).prop_map(|(task, commit)| Action::Offer { task, commit }),
         2 => id(|task, human| Action::Reject { task, human }),
         2 => id(|task, human| Action::Accept { task, human }),
-        2 => any::<u8>().prop_map(|task| Action::Establish { task }),
         2 => any::<u8>().prop_map(|draw| Action::CreateWorkspace { draw }),
         2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
         1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, file)| Action::BindSaved { draw, locator: file }),
@@ -604,11 +580,6 @@ fn generator_reaches_deep_states() {
                                 *milestones.entry("board accept").or_default() += 1;
                             }
                         }
-                        Action::Establish { .. } => {
-                            if last.kind == "workspace_established" {
-                                *milestones.entry("workspace established").or_default() += 1;
-                            }
-                        }
                         Action::CreateWorkspace { .. } => {
                             if last.kind == "workspace_created" {
                                 *milestones.entry("workspace created").or_default() += 1;
@@ -658,9 +629,6 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
-                        saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
-                        saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
-                        saccade::Reject::CheckpointRewind => "CheckpointRewind",
                         saccade::Reject::InvalidWorkspaceId => "InvalidWorkspaceId",
                         saccade::Reject::WorkspaceStageMismatch => "WorkspaceStageMismatch",
                     };
@@ -692,7 +660,6 @@ fn generator_reaches_deep_states() {
         ("message sent", 0.01),
         ("message submitted", 0.005),
         ("incarnation named", 0.01),
-        ("workspace established", 0.10),
         ("workspace created", 0.10),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);

@@ -180,9 +180,6 @@ pub(super) fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail
     if let Some(owner) = &view.owner {
         out.push(format!("owner  {owner}"));
     }
-    if let Some(workspace) = &view.workspace {
-        out.push(format!("workspace  {workspace}"));
-    }
     if let Some(explanation) = &view.explanation {
         out.push("explanation".to_string());
         out.push(wrap(explanation, WIDTH, "  ", "  "));

@@ -92,9 +92,7 @@ fn command_task(command: &Command) -> Option<TaskId> {
         | Command::CommitBoard { task: id, .. }
         | Command::OfferBoard { task: id, .. }
         | Command::RejectBoard { task: id, .. }
-        | Command::AcceptBoard { task: id }
-        | Command::EstablishWorkspace { task_id: id, .. }
-        | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
+        | Command::AcceptBoard { task: id } => Some(*id),
         _ => None,
     }
 }

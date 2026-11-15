@@ -94,8 +94,6 @@ pub fn wait_matches(
         | Event::TaskOffered { task: id, .. }
         | Event::TaskRejected { task: id, .. }
         | Event::TaskAccepted { task: id } => *target == Target::Task(*id),
-        Event::WorkspaceEstablished { task_id, .. }
-        | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
         // the registrations, the relaunch
         // facts, the workspace lifecycle, and the messages name no
         // task the wait could wake on
@@ -161,8 +159,6 @@ pub struct ShowView {
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
     pub owner: Option<String>,
-    /// The established workspace's branch and address, when one stands
-    pub workspace: Option<String>,
 }
 
 impl ShowView {
@@ -176,13 +172,6 @@ impl ShowView {
                 _ => None,
             },
             owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
-            workspace: ctx.workspace.as_ref().map(|w| {
-                format!(
-                    "{} | {}",
-                    w.workspace.branch.as_str(),
-                    w.workspace.worktree.as_path().display()
-                )
-            }),
         }
     }
 }
@@ -245,14 +234,13 @@ pub enum RefTarget {
     },
     Incarnation {
         num: usize,
-        /// The birth task a historical establishment carries; a
-        /// registered native identity has none
+        /// A registered native identity carries no birth task
         task: Option<usize>,
     },
     Message {
         num: usize,
     },
-    /// Any other record fact - a claim, a checkpoint: its position
+    /// Any other record fact - a claim: its position
     /// and its home task, None when the fold gives it none
     Record {
         seq: usize,
@@ -265,13 +253,10 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     if let Some(task) = world.task_born_at(rid) {
         return Some(RefTarget::Task { task: task.0 });
     }
-    if let Some(ictx) = world.incarnations.get(&crate::IncarnationId(rid)) {
+    if world.incarnations.contains_key(&crate::IncarnationId(rid)) {
         return Some(RefTarget::Incarnation {
             num: world.incarnation_num(crate::IncarnationId(rid))?,
-            task: match &ictx.incarnation {
-                crate::Incarnation::Established { task, .. } => Some(task.0),
-                crate::Incarnation::Native { .. } => None,
-            },
+            task: None,
         });
     }
     if world.messages.contains_key(&crate::MessageId(rid)) {
@@ -630,7 +615,6 @@ mod test {
             ownership: Vec::new(),
             commits: Vec::new(),
             birth_actor: ActorName::new("human person".into()).unwrap(),
-            workspace: None,
         }
     }
 
@@ -754,8 +738,8 @@ mod test {
         assert!(error.to_string().contains("holds no tasks yet"));
     }
 
-    // the task wait wakes on exactly its task's lifecycle and
-    // workspace records, and nothing else
+    // the task wait wakes on exactly its task's lifecycle records,
+    // and nothing else
     #[test]
     fn the_task_wait_matches_exactly_its_own_records() {
         let mut world = World::new();
@@ -802,11 +786,10 @@ mod test {
             &mut events,
             3,
             &ctx("pi"),
-            Event::WorkspaceEstablished {
-                task_id: TaskId(0),
+            Event::WorkspaceCreated {
                 base: crate::GitCommit::new("abc123".into()).unwrap(),
-                branch: crate::GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: crate::WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+                branch: crate::GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: crate::WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
         );
         push(
@@ -846,7 +829,7 @@ mod test {
                 .map(|(seq, _)| *seq)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(matching(&Target::Task(TaskId(0))), vec![0, 2, 3]);
+        assert_eq!(matching(&Target::Task(TaskId(0))), vec![0, 2]);
         assert_eq!(matching(&Target::Task(TaskId(1))), vec![1, 4]);
     }
 

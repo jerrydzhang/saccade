@@ -1,29 +1,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Reject;
-use crate::objects::task::TaskId;
 use crate::store::RecordId;
-use crate::types::pointers::{NativeSessionId, SessionLocator, WorktreePath};
+use crate::types::pointers::{NativeSessionId, SessionLocator};
 
 /// The record position of the incarnation's birth is its identity.
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
 pub struct IncarnationId(pub RecordId);
 
 /// An incarnation identifies a native agent session - never a task, a
-/// workspace, or a running process. Two births carry one: the
-/// workspace establishment births a historical attribution identity,
+/// workspace, or a running process. One birth carries one:
 /// the registration births a native session identity. A native
 /// identity has no lifecycle: turns, compaction, resume, and
 /// workspace handoff retain it; fresh sessions and forks create
 /// another. Historical existence asserts no current execution.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Incarnation {
-    /// The shared workspace-establishment birth: attribution only,
-    /// never a binding to a real native session.
-    Established {
-        task: TaskId,
-        workspace: WorktreePath,
-    },
     /// A registered native session: the durable native id, the
     /// saved-session locator ordinary resume validates (bound by the
     /// attach when the launch door birthed the identity before pi's
@@ -48,17 +40,14 @@ impl Incarnation {
     pub fn native_id(&self) -> Option<&NativeSessionId> {
         match self {
             Incarnation::Native { native_id, .. } => Some(native_id),
-            Incarnation::Established { .. } => None,
         }
     }
 
     /// The locator a native incarnation resumes from; unbound while a
-    /// launch-door birth precedes pi's first save, and historical
-    /// establishments carry none.
+    /// launch-door birth precedes pi's first save.
     pub fn saved_session(&self) -> Option<&SessionLocator> {
         match self {
             Incarnation::Native { saved_session, .. } => saved_session.as_ref(),
-            Incarnation::Established { .. } => None,
         }
     }
 
@@ -67,7 +56,6 @@ impl Incarnation {
     pub fn address(&self) -> Option<&str> {
         match self {
             Incarnation::Native { address, .. } => address.as_deref(),
-            Incarnation::Established { .. } => None,
         }
     }
 
@@ -77,16 +65,13 @@ impl Incarnation {
     pub fn adopted(&self) -> bool {
         match self {
             Incarnation::Native { adopted, .. } => *adopted,
-            Incarnation::Established { .. } => false,
         }
     }
 
-    /// The harness the native session runs under; historical
-    /// establishments carry none.
+    /// The harness the native session runs under.
     pub fn harness(&self) -> Option<crate::harness::Harness> {
         match self {
             Incarnation::Native { harness, .. } => Some(*harness),
-            Incarnation::Established { .. } => None,
         }
     }
 }

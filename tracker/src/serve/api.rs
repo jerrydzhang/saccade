@@ -1012,8 +1012,6 @@ pub struct LifecycleWorkspace {
     base: String,
     branch: String,
     path: String,
-    /// The establishment's home task, when the birth was task-bound
-    home: Option<usize>,
 }
 
 impl LifecycleWorkspace {
@@ -1023,7 +1021,6 @@ impl LifecycleWorkspace {
             base: facts.base.as_str().to_string(),
             branch: facts.branch.as_str().to_string(),
             path: facts.worktree.as_path().display().to_string(),
-            home: facts.home.map(|t| t.0),
         }
     }
 }
