@@ -11,7 +11,16 @@ export function partMeasureIn(host: HTMLElement | null): PartMeasure {
     const target = host.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
     if (!(target instanceof HTMLElement)) return null;
     const hostBox = host.getBoundingClientRect();
-    const box = target.getBoundingClientRect();
-    return { left: box.left - hostBox.left, top: box.top - hostBox.top };
+    // a target flowing in a line of text (a link or ref) is measured
+    // by its first line's fragment: its chip stands before it there
+    const inline = getComputedStyle(target).display === "inline";
+    const box = (inline ? target.getClientRects()[0] : undefined) ?? target.getBoundingClientRect();
+    return {
+      left: box.left - hostBox.left,
+      top: box.top - hostBox.top,
+      width: box.width,
+      height: box.height,
+      inline,
+    };
   };
 }

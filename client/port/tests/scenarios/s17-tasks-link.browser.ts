@@ -33,7 +33,7 @@ test("S17 the row menu is o i w y; a second Enter reuses the link; the list hold
   await expect.poll(async () => (await app.readout()).window.link).toBe("w-b");
   const linked = "w-b";
   const delivered = shell.argsOf("open_in_window").length;
-  expect((await app.strip()).link).toBe(`-> ${linked}`);
+  expect((await app.strip()).link).toBe(`linked to ${linked}`);
   const windows = shell.windows().length;
   await rowMenu(app);
   await app.press("Enter");

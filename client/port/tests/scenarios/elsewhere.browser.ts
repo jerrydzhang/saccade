@@ -38,6 +38,8 @@ test("one window, no link: o opens a new window born at the citation", async ({ 
   await onCiting(app, tracker);
   expect((await app.readout()).window).toMatchObject({ label: "main", link: null, ask: null });
   expect((await app.strip()).link).toBe("unlinked");
+  // a loaded board: the strip keeps its load status quiet (t-59)
+  expect((await app.strip()).status).toBe("");
 
   await citationAct(app, "o");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
@@ -70,7 +72,7 @@ test("several windows, no link: o asks; the answer delivers there and becomes th
   await expect.poll(() => shell.argsOf("open_in_window")).toEqual([{ label: "w-b", location: ask!.spec }]);
   expect(shell.argsOf("broadcast_jump_labels_clear").length).toBeGreaterThanOrEqual(1);
   await expect.poll(async () => (await app.readout()).window).toMatchObject({ link: "w-b", ask: null });
-  expect((await app.strip()).link).toBe("-> w-b");
+  expect((await app.strip()).link).toBe("linked to w-b");
   // the link is the store's fact: this window's state points at w-b's
   const receiver = shell.windows().find((entry) => entry.label === "w-b")!.stateId;
   expect((await tracker.windowState(ownState(shell), shell.device)).link).toBe(receiver);
@@ -104,7 +106,7 @@ test("a live link: o delivers without asking; i asks and leaves the link; w open
   const born = shell.argsOf("open_suite_window")[0]!.stateId as string;
   expect((await tracker.windowState(born, shell.device)).location).toBe(spec);
   expect((await app.readout()).window.link).toBe("w-b");
-  expect((await app.strip()).link).toBe("-> w-b");
+  expect((await app.strip()).link).toBe("linked to w-b");
 });
 
 test("a dead link among several windows: o falls back to asking, without the dead window", async ({ bridged, tracker }) => {

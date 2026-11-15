@@ -20,8 +20,10 @@ test("space shows its continuations after the named delay", async ({ app, tracke
   expect(Date.now() - pressed).toBeGreaterThanOrEqual(tunables.whichKeyDelayMs - 50);
   expect(await app.shows("which-key")).toBe(true);
   const keys = (await readInput(app)).whichKey!.entries.map((entry) => entry.keys);
-  // the ruled space continuations: picker, find, link, unlink
-  for (const continuation of ["spc spc", "spc /", "spc l", "spc u"]) expect(keys).toContain(continuation);
+  // the ruled space continuations: picker, link, unlink; find is `/`
+  // alone (t-59 removed space /)
+  for (const continuation of ["spc spc", "spc l", "spc u"]) expect(keys).toContain(continuation);
+  expect(keys).not.toContain("spc /");
   for (const entry of (await readInput(app)).whichKey!.entries) {
     expect(entry.keys.startsWith("spc ")).toBe(true);
     expect(entry.label.length).toBeGreaterThan(0);

@@ -1,27 +1,40 @@
 <script lang="ts">
-  // The which-key popup (the r110 ruling, generalized): any pending
-  // prefix's continuations, read from the active context's own
-  // command tables - and the help surface (the same component over
-  // the empty prefix, a recorded deliberate difference from the
-  // prototype's hand-curated list). Composition only; the views come
-  // from the matcher, the tunables from the caller.
-  let {
-    view,
-    title = "",
-  }: {
-    view: { prefix: readonly { key: string }[]; completions: readonly { key: string; label: string }[] };
-    title?: string;
-  } = $props();
+  // The key surfaces (the r110 ruling, t-59's float): the which-key
+  // popup - a pending prefix's continuations, its head the prefix -
+  // and help, every key set in columns by the context it comes from.
+  // One floating surface for both; composition only. The views are
+  // projections of the matcher's own (lib/input/help.ts).
+  import type { HelpView, PendingKeysView } from "../lib/input/help.ts";
+
+  let { view }: { view: PendingKeysView | HelpView } = $props();
 </script>
 
-<div class="port-whichkey" data-port-control="which-key" role="listbox" aria-label="pending keys">
-  {#if title !== ""}
-    <div class="port-whichkey-title">{title}</div>
-  {/if}
-  {#each view.completions as row (row.key)}
-    <div class="port-whichkey-row" data-port-whichkey-key={row.key}>
-      <span class="port-whichkey-key">{row.key}</span>
-      <span class="port-whichkey-label">{row.label}</span>
+{#if "groups" in view}
+  <div class="port-float port-help" data-port-control="which-key" role="listbox" aria-label="keys">
+    {#each view.groups as group (group.title)}
+      <section class="port-help-group" data-port-help-group={group.title}>
+        <div class="port-float-head">{group.title}</div>
+        <div class="port-whichkey-rows">
+          {#each group.rows as row (row.label)}
+            <div class="port-whichkey-row" data-port-whichkey-key={row.key}>
+              <kbd class="port-whichkey-key">{row.key}</kbd>
+              <span class="port-whichkey-label">{row.label}</span>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/each}
+  </div>
+{:else}
+  <div class="port-float port-whichkey" data-port-control="which-key" role="listbox" aria-label="pending keys">
+    <div class="port-float-head"><kbd class="port-whichkey-key">{view.prefix}</kbd> ...</div>
+    <div class="port-whichkey-rows">
+      {#each view.rows as row (row.key)}
+        <div class="port-whichkey-row" data-port-whichkey-key={row.key}>
+          <kbd class="port-whichkey-key">{row.key}</kbd>
+          <span class="port-whichkey-label">{row.label}</span>
+        </div>
+      {/each}
     </div>
-  {/each}
-</div>
+  </div>
+{/if}

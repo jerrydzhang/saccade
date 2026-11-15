@@ -12,6 +12,9 @@ from the registry's reviewed erasure boundary. -->
   import type { PickerState } from "./lib/input/picker.ts";
   import Picker from "./components/Picker.svelte";
   import WhichKey from "./components/WhichKey.svelte";
+  import { pendingKeys, type HelpView, type PendingKeysView } from "./lib/input/help.ts";
+  import type { WhichKeyView } from "./lib/input/key-matcher.ts";
+  import Strip from "./components/Strip.svelte";
 
   let port: PortWindow | null = null;
   let scroller: HTMLElement | null = $state(null);
@@ -24,8 +27,8 @@ from the registry's reviewed erasure boundary. -->
     specOf: (id: string) => id,
     openHere: null as string | null,
   });
-  let whichKeyView = $state<unknown>(null);
-  let helpView = $state<unknown>(null);
+  let whichKeyView = $state<PendingKeysView | null>(null);
+  let helpView = $state<HelpView | null>(null);
   let ask = $state<import("./lib/elsewhere.ts").AskState | null>(null);
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
@@ -52,7 +55,7 @@ from the registry's reviewed erasure boundary. -->
       pickerContext = context;
     });
     const offWhichKey = windowPort.subscribeWhichKey((pending, help) => {
-      whichKeyView = pending;
+      whichKeyView = pending === null ? null : pendingKeys(pending as WhichKeyView);
       helpView = help ? windowPort.helpView() : null;
     });
     const offAsk = windowPort.subscribeAsk((state) => {
@@ -97,25 +100,11 @@ from the registry's reviewed erasure boundary. -->
 </script>
 
 <div class="port-shell">
-  <header class="port-strip">
-    <span class="port-strip-name">saccade</span>
-    <span class="port-strip-location" data-port-strip="location">
-      {strip?.location ?? "no board"}
-    </span>
-    <span class="port-strip-status" data-port-strip="status">{strip?.status ?? "empty"}</span>
-    {#if strip?.note}
-      <span class="port-strip-note">{strip.note}</span>
-    {/if}
-    {#if strip?.jumpChip}
-      <span class="port-strip-chip">{strip.jumpChip}</span>
-    {/if}
-    <span class="port-strip-link" data-port-strip="link">
-      {strip?.link != null ? `-> ${strip.link}` : "unlinked"}
-    </span>
-  </header>
+  <Strip {strip} />
   {#if ask !== null}
-    <div class="port-picker">
+    <div class="port-float port-picker">
       <input
+        class="port-picker-field"
         bind:this={askInput}
         bind:value={askValue}
         data-port-control="ask-input"
@@ -131,10 +120,10 @@ from the registry's reviewed erasure boundary. -->
     </div>
   {/if}
   {#if whichKeyView !== null}
-    <WhichKey view={whichKeyView} title="keys" />
+    <WhichKey view={whichKeyView} />
   {/if}
   {#if helpView !== null}
-    <WhichKey view={helpView} title="all keys" />
+    <WhichKey view={helpView} />
   {/if}
   {#if picker.open}
     <Picker
