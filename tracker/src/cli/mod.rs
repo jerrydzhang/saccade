@@ -60,7 +60,7 @@ struct Cli {
     #[arg(long, global = true)]
     at: Option<u64>,
 
-    /// Select this running server for reads, writes, and waits alike
+    /// Select this running server for reads and writes alike
     #[arg(long, global = true)]
     server: Option<String>,
 
@@ -1416,7 +1416,7 @@ fn body_source(body: Option<String>, stdin: bool) -> Result<String, Fail> {
     body.ok_or_else(|| Fail::Usage("the body comes quoted or through --stdin".into()))
 }
 
-/// Every text read ends with this line, feedable to the next `wait --after`.
+/// Every text read ends with this line: the log position the read reached.
 fn cursor_line(cursor: Option<usize>) -> String {
     match cursor {
         Some(c) => format!("cursor {c}"),

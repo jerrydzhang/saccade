@@ -130,7 +130,7 @@ complete -c sac -l repo -r -f -d 'the tracker repo when the working directory is
 complete -c sac -l actor -r -f -d 'actor name recorded on events'
 complete -c sac -l json -d 'machine-readable output'
 complete -c sac -l at -r -f -d 'event time override'
-complete -c sac -l server -r -f -d 'select this running server for reads, writes, and waits'
+complete -c sac -l server -r -f -d 'select this running server for reads and writes'
 complete -c sac -n '__saccade_verb create; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
 complete -c sac -n '__saccade_verb list; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
 complete -c sac -n '__saccade_verb skill; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'install'
