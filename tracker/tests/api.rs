@@ -7217,66 +7217,6 @@ async fn clean_refuses_an_unreadable_terminal_table() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn reconcile_names_open_terminals_and_absence_in_both_arms() {
-    let rig = lifecycle_rig("reconcile-host");
-    // birth one goes Cleaned the honest way: the clean's own doors
-    let (_seq1, _branch1, ws_live) = rig_provision(&rig, "cleaned-live");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_live]);
-    assert!(ok, "the setup clean refuses: {err}");
-    // the host names a terminal at the cleaned path: the Cleaned arm's
-    // conflict, dry run and apply alike, and no fact lands for it
-    rig_open_terminal(&rig, "term_after_clean", &ws_live);
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
-    assert!(ok, "reconcile fails: {out}{err}");
-    assert!(
-        out.contains("live terminal(s) at a workspace recorded Cleaned"),
-        "{out}{err}"
-    );
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
-    assert!(ok, "reconcile apply fails: {out}{err}");
-    assert!(
-        out.contains("live terminal(s) at a workspace recorded Cleaned"),
-        "{out}{err}"
-    );
-    assert!(out.contains("applied - no new facts recorded"), "{out}");
-
-    // birth two: the checkout gone and no terminal anywhere - the
-    // absence arm records Cleaned on apply
-    let (seq2, _branch2, ws_gone) = rig_provision(&rig, "departed-soon");
-    sh(&rig.root, &["worktree", "remove", &ws_gone]);
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
-    assert!(ok, "the absence apply fails: {out}{err}");
-    assert!(
-        out.contains("checkout absent and the host names no terminals there"),
-        "{out}{err}"
-    );
-    assert!(out.contains(&ws_gone), "{out}{err}");
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let parsed = json_of(&body);
-    let cleaned: Vec<&serde_json::Value> = parsed["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|r| r["kind"] == "workspace_cleaned")
-        .collect();
-    // the setup clean landed this story's first Cleaned fact; the
-    // absence arm added the departed birth's own
-    assert_eq!(cleaned.len(), 2, "{cleaned:?}");
-    assert_eq!(cleaned[1]["payload"]["workspace"], json!(seq2));
-
-    // the terminal leaves: the live twin verifies to the preserved fact
-    std::fs::write(&rig.host_state, b"").unwrap();
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
-    assert!(ok, "the final reconcile fails: {out}{err}");
-    assert!(
-        out.contains(
-            "verified: recorded Cleaned, checkout absent, the host names no terminals there"
-        ),
-        "{out}{err}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn restore_reuses_recreates_and_refuses_its_mismatches() {
     let rig = lifecycle_rig("restore");
     let (_, branch, ws) = rig_provision(&rig, "reborn");
@@ -7562,113 +7502,6 @@ async fn the_cleaned_stage_guards_launch_and_switch() {
     assert!(ok, "the restored workspace launches: {out}{err}");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn reconcile_verifies_preserves_and_records_on_apply() {
-    let rig = lifecycle_rig("reconcile");
-    // a present matching workspace: preserved
-    let (kept_seq, kept_branch, kept) = rig_provision(&rig, "keeper");
-    // an absent workspace whose host presence is verified: cleanable
-    let (_gone_seq, gone_branch, gone) = rig_provision(&rig, "departed");
-    sh(&rig.root, &["worktree", "remove", &gone]);
-    // a conflict: bytes at the recorded path, no registration
-    let (_bad_seq, _bad_branch, bad) = rig_provision(&rig, "conflicted");
-    sh(&rig.root, &["worktree", "remove", &bad]);
-    std::fs::create_dir_all(&bad).unwrap();
-
-    // the dry run records nothing and reports every fact
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
-    assert!(ok, "the dry run fails: {out}{err}");
-    assert!(out.contains("dry run"), "{out}");
-    assert!(out.contains(&format!("record {kept_seq} {kept}")), "{out}");
-    assert!(out.contains("preserved"), "{out}");
-    assert!(!out.contains("Cleaned recorded now"), "{out}");
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let kinds: Vec<String> = json_of(&body)["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["kind"].as_str().unwrap().to_string())
-        .collect();
-    assert!(
-        !kinds.contains(&"workspace_cleaned".to_string()),
-        "{kinds:?}"
-    );
-
-    // the applied run records the verified Cleaned facts in one batch
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
-    assert!(ok, "the applied run fails: {out}{err}");
-    assert!(
-        out.contains("applied - 1 verified Cleaned fact(s) recorded"),
-        "{out}"
-    );
-    assert!(out.contains(&gone), "{out}");
-    assert!(out.contains(&bad), "{out}");
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
-    let cleaned: Vec<&serde_json::Value> = records
-        .iter()
-        .filter(|r| r["kind"] == "workspace_cleaned")
-        .collect();
-    assert_eq!(
-        cleaned.len(),
-        1,
-        "only the verified absence recorded: {records:?}"
-    );
-    assert_eq!(
-        cleaned[0]["payload"]["workspace"],
-        json!(1),
-        "the departed birth is the cleaned one"
-    );
-    assert_eq!(
-        sh(
-            &rig.root,
-            &[
-                "rev-parse",
-                "--verify",
-                &format!("refs/heads/{kept_branch}")
-            ]
-        ),
-        sh(&rig.root, &["rev-parse", "HEAD"]),
-        "the preserved workspace's branch stands"
-    );
-    let _ = gone_branch;
-
-    // the recorded-Cleaned arm verifies the same doors the cleanup ran:
-    // an orphan terminal the host still names is a conflict, never a
-    // reconciled state, and --apply lands no fact for it
-    let (_, _, ws_orphan) = rig_provision(&rig, "orphaned");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_orphan]);
-    assert!(ok, "the orphan setup clean refuses: {err}");
-    rig_open_terminal(&rig, "orphan_term_7", &ws_orphan);
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let records_before_orphan = body.clone();
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
-    assert!(ok, "reconcile fails: {out}{err}");
-    assert!(
-        out.contains("the host names 1 live terminal(s) at a workspace recorded Cleaned"),
-        "{out}"
-    );
-    assert!(out.contains("applied - no new facts recorded"), "{out}");
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    assert_eq!(
-        json_of(&records_before_orphan)["records"],
-        json_of(&body)["records"],
-        "the orphan conflict landed no fact"
-    );
-    std::fs::write(&rig.host_state, b"").unwrap();
-
-    // the healed host answers again: verified absence of a
-    // recorded-Cleaned workspace reads as the verified preserved fact
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
-    assert!(ok, "the final reconcile fails: {out}{err}");
-    assert!(
-        out.contains(
-            "verified: recorded Cleaned, checkout absent, the host names no terminals there"
-        ),
-        "{out}"
-    );
-}
-
 /// A recorded path addresses its own birth: a historical establishment
 /// whose stored string carries a symlink segment resolves through it -
 /// stored identity preserved, and two stored paths aliasing one
@@ -7763,12 +7596,6 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
         assert!(!ok, "the aliased directory resolved to one birth: {err}");
         assert!(err.contains("workspace_ambiguous_path"), "{err}");
     }
-
-    // reconcile surfaces the twin spellings as shared-path conflicts
-    // for both births, instead of processing them as separate targets
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
-    assert!(ok, "reconcile fails: {out}{err}");
-    assert!(out.contains("share this path"), "{out}");
 }
 
 #[test]

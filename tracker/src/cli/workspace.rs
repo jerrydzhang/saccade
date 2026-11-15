@@ -134,7 +134,6 @@ pub(super) fn workspace_door(
         } => workspace_switch_door(cli, destination, incarnation, to, *resume, prompt),
         WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
         WorkspaceVerb::Restore { path } => workspace_restore_door(cli, destination, path),
-        WorkspaceVerb::Reconcile { apply } => workspace_reconcile_door(cli, destination, *apply),
         WorkspaceVerb::Root { verb } => match verb {
             RootVerb::Bind => root_bind_door(cli, destination),
             RootVerb::Show => root_show_door(cli, destination),
@@ -232,58 +231,5 @@ pub(super) fn workspace_restore_door(
     Ok(format!(
         "workspace {} ({}, branch {})\n  {}{}",
         reply.workspace.path, reply.workspace.seq, reply.workspace.branch, fact, tip
-    ))
-}
-
-/// `sac workspace reconcile`: the one-time cutover verification.
-/// Dry run by default; --apply records the verified Cleaned facts.
-pub(super) fn workspace_reconcile_door(
-    cli: &Cli,
-    destination: &Destination,
-    apply: bool,
-) -> Result<String, Fail> {
-    let url = server_url(destination, "workspace reconcile")?;
-    client::handshake(&url);
-    let reply = client::reconcile_workspaces(&url, apply).map_err(Fail::Client)?;
-    if cli.json {
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "applied": reply.applied,
-            "cleaned": reply.cleaned,
-            "preserved": reply.preserved,
-            "conflicts": reply.conflicts,
-            "records": reply.records,
-        }))
-        .expect("plain data"));
-    }
-    // the header says only what actually landed: an applied run over
-    // conflicts records no facts and says so
-    let mode = if !apply {
-        "dry run - nothing recorded (pass --apply to record)".to_string()
-    } else if !reply.records.is_empty() {
-        format!(
-            "applied - {} verified Cleaned fact(s) recorded",
-            reply.records.len()
-        )
-    } else {
-        "applied - no new facts recorded".to_string()
-    };
-    let section = |name: &str, rows: &[client::ReconcileEntry]| -> String {
-        if rows.is_empty() {
-            return String::new();
-        }
-        format!(
-            "\n{}:\n{}",
-            name,
-            rows.iter()
-                .map(|r| format!("  - record {} {} ({})", r.seq, r.path, r.reason))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
-    Ok(format!(
-        "workspace reconciliation over every recorded birth\n  {mode}{}{}{}",
-        section("cleaned (verified absent)", &reply.cleaned),
-        section("preserved", &reply.preserved),
-        section("conflicts (surfaced, never classified)", &reply.conflicts),
     ))
 }

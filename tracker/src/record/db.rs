@@ -57,7 +57,7 @@ impl std::fmt::Display for DbError {
             }
             DbError::OlderSchema(v) => write!(
                 f,
-                "this log's schema v{v} predates sac {} (the board cutover); read it with the pinned archive - nix run .#sac-archive -- clone --at <seq> --out <path> - and carry workspaces over with sac import-workspaces --from <this database> --into <fresh tracker>",
+                "this log's schema v{v} predates sac {} (the board cutover); read it with the pinned archive - nix run .#sac-archive -- clone --at <seq> --out <path>",
                 env!("CARGO_PKG_VERSION")
             ),
             DbError::Missing(path) => write!(
@@ -1351,8 +1351,8 @@ mod test {
         ));
         let line = DbError::OlderSchema(SCHEMA_VERSION - 1).to_string();
         assert!(
-            line.contains(".#sac-archive") && line.contains("import-workspaces"),
-            "the old-format refusal teaches the archive and the import: {line}"
+            line.contains(".#sac-archive"),
+            "the old-format refusal teaches the archive: {line}"
         );
         assert!(matches!(
             verify(&stamped(SCHEMA_VERSION + 1)),

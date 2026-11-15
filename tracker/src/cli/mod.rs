@@ -286,18 +286,6 @@ enum Cmd {
         #[arg(value_enum)]
         kind: CompleteKind,
     },
-    /// The cutover import: carry workspaces, branches and the root
-    /// association from the pre-board log into a fresh tracker. No
-    /// tasks, comments, messages, incarnations or saved sessions. The
-    /// destination must be fresh
-    ImportWorkspaces {
-        /// The pre-board database to read
-        #[arg(long)]
-        from: PathBuf,
-        /// The fresh tracker to write; it must hold no records
-        #[arg(long)]
-        into: PathBuf,
-    },
     /// Clone the log's prefix through a storage seq into a fresh
     /// tracker: the reproduction recipe's cursor half
     Clone {
@@ -403,16 +391,6 @@ enum WorkspaceVerb {
     Root {
         #[command(subcommand)]
         verb: RootVerb,
-    },
-    /// The one-time cutover verification over every recorded
-    /// workspace: absent resources verified against git and the host,
-    /// matching present ones preserved, conflicts surfaced. Dry run
-    /// unless --apply records the verified Cleaned facts.
-    Reconcile {
-        /// Record the verified Cleaned facts; without this the door
-        /// only verifies and reports
-        #[arg(long)]
-        apply: bool,
     },
 }
 
@@ -603,7 +581,6 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Identity => "identity".into(),
         Cmd::Completions { .. } => "completions".into(),
         Cmd::Complete { .. } => "complete".into(),
-        Cmd::ImportWorkspaces { .. } => "import-workspaces".into(),
         Cmd::Clone { .. } => "clone".into(),
         Cmd::Skill { .. } => "skill".into(),
         Cmd::Wait { .. } => "wait".into(),
@@ -622,7 +599,6 @@ fn verb_name(verb: &WorkspaceVerb) -> &'static str {
             RootVerb::Show => "root-show",
             RootVerb::Clear => "root-clear",
         },
-        WorkspaceVerb::Reconcile { .. } => "reconcile",
     }
 }
 
@@ -709,7 +685,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
         | Cmd::Messages { .. }
         | Cmd::Completions { .. }
         | Cmd::Clone { .. }
-        | Cmd::ImportWorkspaces { .. }
         | Cmd::Skill { .. }
         | Cmd::Complete { .. } => {}
         Cmd::Launch {
@@ -776,11 +751,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
             }
             WorkspaceVerb::Clean { .. } | WorkspaceVerb::Restore { .. } => {}
             WorkspaceVerb::Root { .. } => {}
-            WorkspaceVerb::Reconcile { apply } => {
-                if *apply {
-                    push(&mut flags, "--apply");
-                }
-            }
         },
         Cmd::Wait {
             after,
@@ -959,11 +929,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     } = &cli.command
     {
         return serve_door(cli, bind, port, allow_origin, allow_host);
-    }
-    // the cutover import names both databases itself; it lands no
-    // record through any server
-    if let Cmd::ImportWorkspaces { from, into } = &cli.command {
-        return task::import_door(cli, from, into);
     }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {
@@ -1150,9 +1115,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
-        Cmd::ImportWorkspaces { .. } => {
-            unreachable!("the import door dispatches before the destination resolves")
-        }
     };
 
     // Identity is required only where it is recorded: mutating commands.

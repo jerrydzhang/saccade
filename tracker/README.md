@@ -280,7 +280,7 @@ record authority.
   file gains the width column and its version stamp in one
   transaction (its rows read width as absent), a newer version
   refuses to serve rather than guessing. Whatever reproduces
-  the log (clone, import, a fresh db) carries no window store, which is
+  the log (clone, a fresh db) carries no window store, which is
   correct: losing the window store loses window arrangements, never the
   record.
 - **Sync is the pages' hold contract on the window store's own sequence**:

@@ -731,35 +731,6 @@ pub fn restore_workspace(url: &str, path: &std::path::Path) -> Result<RestoreRep
     )
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ReconcileEntry {
-    pub seq: usize,
-    pub path: String,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ReconcileReply {
-    pub applied: bool,
-    pub cleaned: Vec<ReconcileEntry>,
-    pub preserved: Vec<ReconcileEntry>,
-    pub conflicts: Vec<ReconcileEntry>,
-    pub records: Vec<StoredRecord>,
-}
-
-/// The one-time cutover verification: dry run by default, recording
-/// only under `--apply`.
-pub fn reconcile_workspaces(url: &str, apply: bool) -> Result<ReconcileReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/reconcile",
-        serde_json::json!({
-            "apply": apply,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
 /// The launch door's own birth: the pre-allocated native id and the
 /// opaque host address, recorded before the harness's first save. The
 /// association exists at launch time - no correlation token, no

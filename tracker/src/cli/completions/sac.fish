@@ -101,7 +101,6 @@ function __saccade_verbs
     printf 'launch\tLaunch the composed native Pi in a workspace\n'
     printf 'workspace\tThe task-free workspace controller\n'
     printf 'identity\tReport this session declared identity and routing\n'
-    printf 'import-workspaces\tCarry workspaces from the pre-board log into a fresh tracker\n'
     printf 'clone\tClone the log prefix through a storage seq into a fresh tracker\n'
     printf 'skill\tDeploy this binary embedded skill, or verify the copy\n'
     printf 'wait\tBlock until a matching record lands on the target\n'
@@ -123,7 +122,6 @@ function __saccade_workspace_verbs
     printf 'switch\tMove a stopped native session saved directory\n'
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
     printf 'restore\tBring an exact recorded cleaned workspace back\n'
-    printf 'reconcile\tVerify every recorded workspace; Cleaned facts ride --apply\n'
     printf 'root\tBind, show, or clear the primary checkout destination\n'
 end
 
@@ -197,7 +195,6 @@ complete -c sac -n '__saccade_verb workspace switch' -l resume -d 'resume the se
 complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -d 'the selected directory: it must already exist' -a '(__saccade_candidates workspaces)' -k
 complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -a '(__fish_complete_directories)'
 complete -c sac -n '__saccade_verb workspace switch; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates incarnations)'
-complete -c sac -n '__saccade_verb workspace reconcile' -l apply -d 'record the verified Cleaned facts'
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'
