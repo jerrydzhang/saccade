@@ -1,0 +1,27 @@
+/* Select labels: the overlay and its chips, beside what they name.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* The shared label overlay (LabelOverlay.svelte): an absolutely
+ * positioned layer COVERING the positioning host (inset 0), so a
+ * chip's host-relative coordinates land beside its part. The old
+ * sibling-after-the-host layer (F3) drew every chip a full
+ * content-height low; this layer makes that shape impossible. */
+.port-label-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* the typed part of a label chip (the prototype's hintKey span.typed) */
+.port-label-typed {
+  opacity: 0.5;
+}
+.port-label-chip {
+  position: absolute;
+  padding: 0 0.25rem;
+  border: 1px solid var(--port-color-muted);
+  background: var(--port-color-paper);
+  color: var(--port-color-paper-ink);
+  font-size: 0.75rem;
+  line-height: 1.25;
+}

@@ -1,11 +1,13 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
+import "./fonts.ts";
 import "./styles/tokens.css";
 import "./styles/app.css";
-// the theme overlay: the ONE design-language injection point (r93/r94
-// - swappable by construction; remove this import to restore the
-// placement-only base exactly)
+// the language: the ONE place token values are chosen (light and dark)
 import "./styles/theme.css";
+import { followThemePreference } from "./lib/theme-mode.ts";
+
+followThemePreference(document.documentElement, window.matchMedia("(prefers-color-scheme: dark)"));
 
 const target = document.getElementById("app");
 if (!target) {

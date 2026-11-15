@@ -1,0 +1,30 @@
+/* The strip: the window's one line of chrome - the app, the location, the link.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+.port-strip {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: var(--port-space-strip);
+  border-bottom: 1px solid var(--port-color-line);
+  font-size: 0.875rem;
+}
+.port-strip-name {
+  font-family: var(--port-font-mono);
+  color: var(--port-color-muted);
+}
+.port-strip-location {
+  font-family: var(--port-font-mono);
+}
+.port-strip-status {
+  color: var(--port-color-muted);
+}
+.port-strip-note,
+.port-strip-chip {
+  color: var(--port-color-accent);
+}
+/* the link state, information only (the floor's law: form open) */
+.port-strip-link {
+  font-family: var(--port-font-mono);
+  color: var(--port-color-muted);
+}

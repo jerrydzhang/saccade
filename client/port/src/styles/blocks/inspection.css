@@ -1,0 +1,36 @@
+/* The figure viewer: a figure enlarged over the content area.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* the figure viewer (the prototype's #lightbox, components16.css) */
+.port-inspection {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--port-color-background) 96%, transparent);
+  cursor: grab;
+}
+.port-inspection-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: 0 0;
+  background: var(--port-figure-backdrop);
+  padding: 12px;
+  border-radius: 4px;
+}
+.port-inspection-stage > img,
+.port-inspection-stage > svg {
+  display: block;
+}
+.port-inspection-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  color: var(--port-color-muted);
+}
+.port-inspection-text {
+  font-family: var(--port-font-mono);
+  white-space: pre;
+  margin: 0;
+}

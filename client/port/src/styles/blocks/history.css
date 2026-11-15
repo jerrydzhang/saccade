@@ -1,0 +1,76 @@
+/* History: a revision's diff marks, the changed parts, and its commit.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* history mode (t-49): the words a revision added and removed, the
+ * parts it changed (a rule at the part's edge: the change ruler), the
+ * commit beside the board in the right margin, above it when narrow */
+.port-diff-ins {
+  color: var(--port-diff-added);
+  background: var(--port-diff-added-background);
+  text-decoration: none;
+}
+.port-diff-del {
+  color: var(--port-diff-removed);
+  background: var(--port-diff-removed-background);
+  text-decoration: line-through;
+}
+.port-board-view .chg-add,
+.port-board-view .chg-mod,
+.port-board-view .chg-move,
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-color-accent);
+  /* the rule sits clear of the text it marks */
+  padding-left: 0.75rem;
+}
+.port-board-view .chg-add {
+  box-shadow: inset 3px 0 0 var(--port-diff-added);
+}
+.port-board-view .chg-del {
+  box-shadow: inset 3px 0 0 var(--port-diff-removed);
+  opacity: 0.8;
+}
+.port-history {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 18rem;
+  margin-left: 1rem;
+  font-size: 0.85rem;
+  color: var(--port-color-ink);
+}
+/* the card follows the reading: it sticks to the view's top while the
+ * board scrolls under it */
+.port-history-card {
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 0.75rem;
+  border-left: 1px solid var(--port-color-line);
+}
+.port-history-head {
+  color: var(--port-color-muted);
+  margin-bottom: 0.5rem;
+}
+.port-history-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 80rem) {
+  .port-history {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    width: auto;
+    margin: 0 0 0.5rem 0;
+    background: var(--port-color-background);
+    border-bottom: 1px solid var(--port-color-line);
+  }
+
+  .port-history-card {
+    position: static;
+    max-height: 30vh;
+    border-left: 0;
+  }
+}

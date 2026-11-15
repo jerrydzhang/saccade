@@ -1,0 +1,40 @@
+/* Find in a board: the field, the matches.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* Placement only: the find bar. */
+.port-find {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--port-color-background);
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: var(--port-space-block);
+  border-top: 1px solid var(--port-color-muted);
+}
+/* D2's marks and indicator: behaviour-level feedback, form open.
+ * The match tint and the active tint ride the tokens. */
+[data-port-find-match] {
+  background: var(--port-color-hover);
+}
+[data-port-find-active] {
+  background: var(--port-color-selection);
+}
+.port-find-indicator {
+  padding: 0.125rem 0.5rem;
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-muted);
+}
+.port-find input {
+  flex: 1;
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+}
+.port-find-status {
+  color: var(--port-color-muted);
+  font-size: 0.875rem;
+}

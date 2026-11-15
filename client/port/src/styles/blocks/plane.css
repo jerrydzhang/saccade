@@ -1,0 +1,94 @@
+/* The plane's rail: projects, and the current project's agents by word.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* the control plane (t-48): the rail of projects and their running
+ * agents beside the list; on a narrow window the rail sits above it */
+.port-plane {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 40rem) {
+  .port-plane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.port-plane-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.port-plane-project {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.port-plane-name,
+.port-plane-agent {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0.125rem 0.5rem;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.port-plane-name[aria-current] {
+  color: var(--port-color-ink-strong);
+  font-weight: 600;
+}
+.port-plane-agent {
+  display: flex;
+  gap: 0.5rem;
+  padding-left: 1rem;
+}
+/* the foot group's heading names the group; it is no target */
+.port-plane-group {
+  cursor: default;
+  color: var(--port-color-muted);
+}
+/* an agent no tracker registered (t-55): marked, never hidden */
+.port-plane-agent[data-port-unregistered] .port-plane-task {
+  color: var(--port-color-muted);
+  font-style: italic;
+}
+/* a named agent shows its name; the incarnation stays small beside it */
+.port-plane-incarnation-aside {
+  color: var(--port-color-muted);
+  font-size: 0.85em;
+}
+.port-plane-msg {
+  color: var(--port-color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-plane-word,
+.port-plane-note {
+  padding: 0 0.5rem 0 1rem;
+  color: var(--port-color-muted);
+  font-size: 0.85em;
+}
+.port-plane-add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+.port-plane-add input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--port-color-muted);
+  padding: 0.125rem 0;
+  min-width: 0;
+}

@@ -1,0 +1,47 @@
+/* The picker: open a location. A floating surface.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* Placement only (t-36@r64: no design language until every
+   instrument composes): a row between strip and content. */
+.port-picker {
+  display: flex;
+  padding: var(--port-space-block);
+  border-top: 1px solid var(--port-color-muted);
+}
+/* The picker's ranked list (F1): the discovery surface. */
+.port-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--port-color-line);
+}
+.port-picker-row {
+  display: grid;
+  grid-template-columns: 4rem 5rem 1fr auto;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.125rem 0.5rem;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.port-picker-row:hover,
+.port-picker-selected {
+  background: var(--port-color-hover);
+}
+.port-picker-kind,
+.port-picker-name {
+  color: var(--port-color-muted);
+}
+.port-picker-here {
+  color: var(--port-color-accent);
+}
+.port-picker input {
+  flex: 1;
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+}

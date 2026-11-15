@@ -1,0 +1,71 @@
+/* The plane's pipeline: the tasks by stage, one grid per list.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* the tasks stage: the label overlay's positioning context, exactly
+ * the host's box */
+.port-tasks-stage {
+  position: relative;
+  min-width: 0;
+}
+/* F4 as information: the five-column grid (tid, title, agents,
+ * latest commit, age). The sparklane's future column rides UNDER a
+ * row, never a sixth column - the grid leaves it alone. Every cell is
+ * one line, cut with an ellipsis (t-41: the human keeps the list
+ * narrow); the fr tracks may shrink below their text. */
+.port-tasks-view {
+  container-type: inline-size;
+}
+.port-tasks-columns,
+.port-tasks-row {
+  display: grid;
+  grid-template-columns: 3em minmax(0, 1.4fr) 7em minmax(0, 1fr) 3em;
+  gap: 0.5rem;
+  padding: 0.125rem 0.5rem;
+}
+.port-tasks-columns > *,
+.port-tasks-row > * {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* as the list narrows the lesser columns drop out before the title is
+ * squeezed - agents first, then the latest commit - from the header
+ * and the rows alike, so the two stay aligned; id, title and age stay */
+@container (max-width: 44rem) {
+  .port-tasks-columns,
+  .port-tasks-row {
+    grid-template-columns: 3em minmax(0, 1.4fr) minmax(0, 1fr) 3em;
+  }
+
+  .port-tasks-agents {
+    display: none;
+  }
+}
+@container (max-width: 30rem) {
+  .port-tasks-columns,
+  .port-tasks-row {
+    grid-template-columns: 3em minmax(0, 1fr) 3em;
+  }
+
+  .port-tasks-commit {
+    display: none;
+  }
+}
+.port-tasks-columns {
+  color: var(--port-color-muted);
+}
+/* the pointer's row (TasksView: real pointer movement only, never
+ * :hover under a resting pointer); the prototype's ledger row: brighter
+ * ink, no shading */
+.port-tasks-row[data-port-hover] {
+  color: var(--port-color-ink-strong);
+}
+.port-tasks-none {
+  padding: 0.125rem 0.5rem;
+  color: var(--port-color-muted);
+}
+.port-tasks-age {
+  text-align: right;
+  color: var(--port-color-muted);
+}
