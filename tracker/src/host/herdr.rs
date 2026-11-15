@@ -528,7 +528,7 @@ impl HostContract for HerdrCore {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
@@ -625,7 +625,7 @@ esac
     /// while a concurrent writer's descriptor is still settling; a
     /// retrying warmup spawn burns that window so the pinned verbs
     /// spawn cleanly under the parallel suite.
-    fn warmup(script: &Path) {
+    pub(crate) fn warmup(script: &Path) {
         for _ in 0..50 {
             match std::process::Command::new(script).arg("--warmup").output() {
                 Ok(_) => return,

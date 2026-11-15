@@ -244,6 +244,11 @@ printf '{"terminals":[{"address":"a1","cwd":"/exact/ws","state":"live"},{"addres
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // the same warmup herdr's fake harness uses: a spawn burns the
+        // ETXTBSY window before the pinned read spawns; this script
+        // ignores its arguments, so a --warmup ask answers the usual
+        // table and the answer is discarded
+        crate::host::herdr::test::warmup(&hc);
         let addresses =
             workspace_terminals(&crate::herdr::HerdrCore::over(&hc), "/exact/ws").unwrap();
         // the exact path's terminals only: a deeper path is a stranger
