@@ -532,9 +532,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         raw: String::from_utf8_lossy(&body).into_owned(),
     };
     // a send command rides the send operation like the send face: the
-    // an accept runs the effect layer's checkpoint guard in the same
-    // locked stretch that records it (D6): no actor of the task may
-    // hold unsaved checkpoints when the acceptance lands
     if let Command::AcceptBoard { task } = &command {
         let accept_task = *task;
         let accept_context = context.clone();
@@ -543,22 +540,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
         let outcome: Result<Vec<StoredRecord>, ApiFail> = (|| {
             let inner = board_ready(&mut guard)?;
-            if let Some(root) = app.repo_root() {
-                let boards = crate::boards::Boards::open(&crate::paths::state_dir(root)).map_err(
-                    |fail| {
-                        ApiFail::Refused(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            fail.code(),
-                            fail.detail(),
-                        )
-                    },
-                )?;
-                boards
-                    .accept_guard(&accept_task.0.to_string())
-                    .map_err(|fail| {
-                        ApiFail::Refused(StatusCode::CONFLICT, fail.code(), fail.detail())
-                    })?;
-            }
             db::record(
                 &mut inner.conn,
                 &accept_context,
@@ -853,14 +834,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/log", get(board_log))
         .route("/api/v1/boards/search", post(board_search))
         .route(
-            "/api/v1/boards/checkpoint",
-            post(board_checkpoint).layer(board_body_limit()),
-        )
-        .route(
             "/api/v1/boards/commit",
             post(board_commit).layer(board_body_limit()),
         )
-        .route("/api/v1/boards/discard", post(board_discard))
         .route(
             "/api/v1/boards/update",
             post(board_update).layer(board_body_limit()),
@@ -2941,9 +2917,8 @@ async fn records(State(app): State<AppState>) -> Response {
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::serve::board_wire::{
-    BoardFile, BoardFiles, CheckpointReply, CheckpointRequest, CommitReply, CommitRequest,
-    DiffQuery, DiffReply, DiscardReply, DiscardRequest, EditQuery, EditReply, GetQuery, GetReply,
-    MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
+    BoardFile, BoardFiles, CommitReply, CommitRequest, DiffQuery, DiffReply, EditQuery, EditReply,
+    GetQuery, GetReply, MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
 };
 use axum::extract::rejection::BytesRejection;
 use base64::Engine as _;
@@ -3015,10 +2990,9 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         | BoardsFail::UnknownSourceRevision { .. }
         | BoardsFail::TaskMismatch { .. }
         | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
-        BoardsFail::MissingCommit { .. }
-        | BoardsFail::Unchanged { .. }
-        | BoardsFail::UnsavedCheckpoints { .. }
-        | BoardsFail::Record(_) => StatusCode::CONFLICT,
+        BoardsFail::MissingCommit { .. } | BoardsFail::Unchanged { .. } | BoardsFail::Record(_) => {
+            StatusCode::CONFLICT
+        }
         BoardsFail::MissingCommits { .. } | BoardsFail::Git(_) | BoardsFail::Io { .. } => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
@@ -3041,67 +3015,6 @@ fn board_ready(guard: &mut ServerState) -> Result<&mut crate::serve::api::Inner,
         ServerState::Ready(inner) => Ok(inner),
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     }
-}
-
-async fn board_checkpoint(
-    State(app): State<AppState>,
-    body: Result<Bytes, BytesRejection>,
-) -> Response {
-    let body = match board_body(body) {
-        Ok(body) => body,
-        Err(fail) => return api_failure(fail),
-    };
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: CheckpointRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.context_client(),
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = board_checkpoint_operation(&app, &mut guard, &request);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-fn board_checkpoint_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    request: &CheckpointRequest,
-) -> Result<CheckpointReply, ApiFail> {
-    let _inner = board_ready(guard)?;
-    let boards = boards_of(app)?;
-    let workdir = board_tempdir(&format!("checkpoint-{}", request.task));
-    let outcome = (|| {
-        request
-            .files
-            .write_to(&workdir)
-            .map_err(ApiFail::Malformed)?;
-        let actor = request.context.actor.as_str().to_string();
-        boards
-            .checkpoint(
-                &request.task.to_string(),
-                &actor,
-                &workdir,
-                &request.base,
-                &request.message,
-            )
-            .map(|commit| CheckpointReply { commit })
-            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
-    })();
-    let _ = std::fs::remove_dir_all(&workdir);
-    outcome
 }
 
 async fn board_commit(
@@ -3207,48 +3120,6 @@ fn board_commit_operation(
     })
 }
 
-async fn board_discard(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: DiscardRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.context_client(),
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = board_discard_operation(&app, &mut guard, &request);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-fn board_discard_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    request: &DiscardRequest,
-) -> Result<DiscardReply, ApiFail> {
-    let _inner = board_ready(guard)?;
-    let boards = boards_of(app)?;
-    let actor = request.context.actor.as_str().to_string();
-    boards
-        .discard_checkpoint(&request.task.to_string(), &actor)
-        .map(|_| DiscardReply {
-            task: format!("t-{}", request.task),
-            actor,
-        })
-        .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
-}
-
 async fn board_update(
     State(app): State<AppState>,
     body: Result<Bytes, BytesRejection>,
@@ -3334,14 +3205,7 @@ async fn board_edit(
         };
         let boards = boards_of(&app)?;
         let current = ctx.commits.last().map(|c| c.commit.as_str().to_string());
-        let checkpoint = match query.actor.as_deref() {
-            Some(actor) if !actor.is_empty() => boards
-                .checkpoint_tip(&query.task.to_string(), actor)
-                .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?
-                .filter(|tip| current.as_ref() != Some(tip)),
-            _ => None,
-        };
-        let chosen = checkpoint.clone().or_else(|| current.clone());
+        let chosen = current.clone();
         let files = match &chosen {
             Some(commit) => {
                 let workdir = board_tempdir(&format!("edit-{}", query.task));

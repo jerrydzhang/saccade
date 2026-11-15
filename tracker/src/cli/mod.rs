@@ -301,7 +301,7 @@ enum Cmd {
         #[command(subcommand)]
         verb: SkillVerb,
     },
-    /// The task board controller: author, checkpoint, commit, and
+    /// The task board controller: author, commit, and
     /// read board revisions. Working directories are local to this
     /// machine; the server does every Git effect
     Board {
@@ -606,10 +606,8 @@ fn board_verb_name(verb: &BoardVerb) -> &'static str {
     match verb {
         BoardVerb::Edit { .. } => "edit",
         BoardVerb::Check { .. } => "check",
-        BoardVerb::Checkpoint { .. } => "checkpoint",
         BoardVerb::Commit { .. } => "commit",
         BoardVerb::Update { .. } => "update",
-        BoardVerb::Discard { .. } => "discard",
         BoardVerb::Get { .. } => "get",
         BoardVerb::Diff { .. } => "diff",
         BoardVerb::Log { .. } => "log",
@@ -769,9 +767,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
             }
         }
         Cmd::Board { verb } => match verb {
-            BoardVerb::Edit { dir, .. }
-            | BoardVerb::Checkpoint { dir, .. }
-            | BoardVerb::Update { dir, .. } => {
+            BoardVerb::Edit { dir, .. } | BoardVerb::Update { dir, .. } => {
                 if dir.is_some() {
                     push(&mut flags, "dir");
                 }
@@ -797,10 +793,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "--file");
                 }
             }
-            BoardVerb::Discard { .. }
-            | BoardVerb::Diff { .. }
-            | BoardVerb::Log { .. }
-            | BoardVerb::Path { .. } => {}
+            BoardVerb::Diff { .. } | BoardVerb::Log { .. } | BoardVerb::Path { .. } => {}
         },
     }
     flags

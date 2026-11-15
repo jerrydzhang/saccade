@@ -910,16 +910,8 @@ fn board_read<T: serde::de::DeserializeOwned>(url: &str, route: &str) -> Result<
 pub fn board_edit(
     url: &str,
     task: usize,
-    actor: Option<&str>,
 ) -> Result<crate::serve::board_wire::EditReply, ClientFail> {
-    let actor = actor.map(|a| query_escape(a.to_string()));
-    board_read(
-        url,
-        &format!(
-            "/api/v1/boards/edit?task={task}{}",
-            actor.map(|a| format!("&actor={a}")).unwrap_or_default()
-        ),
-    )
+    board_read(url, &format!("/api/v1/boards/edit?task={task}"))
 }
 
 fn query_escape(value: String) -> String {
@@ -932,29 +924,6 @@ fn query_escape(value: String) -> String {
         .replace('=', "%3D")
         .replace('?', "%3F")
         .replace('#', "%23")
-}
-
-pub fn board_checkpoint(
-    url: &str,
-    context: &Context,
-    task: usize,
-    files: &crate::serve::board_wire::BoardFiles,
-    base: &str,
-    message: &str,
-) -> Result<crate::serve::board_wire::CheckpointReply, ClientFail> {
-    board_post_files(
-        url,
-        "/api/v1/boards/checkpoint",
-        &crate::serve::board_wire::CheckpointRequest {
-            context: wire_context(context),
-            task,
-            files: files.clone(),
-            base: base.to_string(),
-            message: message.to_string(),
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
-        files,
-    )
 }
 
 pub fn board_commit(
@@ -975,22 +944,6 @@ pub fn board_commit(
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
         files,
-    )
-}
-
-pub fn board_discard(
-    url: &str,
-    context: &Context,
-    task: usize,
-) -> Result<crate::serve::board_wire::DiscardReply, ClientFail> {
-    board_post(
-        url,
-        "/api/v1/boards/discard",
-        &crate::serve::board_wire::DiscardRequest {
-            context: wire_context(context),
-            task,
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
     )
 }
 

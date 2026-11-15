@@ -1,5 +1,5 @@
 //! The board store's Git effects: one bare repository per tracker holds
-//! task board revisions, actor checkpoints, and the materialized current
+//! task board revisions and the materialized current
 //! checkout. Git objects are written before anything names them (D7): a
 //! commit lands as objects first, the event records it, and only then a
 //! ref moves, so refs and the checkout are derived caches the log can
@@ -26,7 +26,7 @@ use board_grammar::{ErrorKind, ParseError, Where as GrammarWhere};
 use crate::objects::task::TaskId as FoldTaskId;
 use crate::store::World;
 
-/// The largest figure a commit or checkpoint accepts: 8 MiB.
+/// The largest figure a commit accepts: 8 MiB.
 pub const MAX_FIGURE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The working-directory bookkeeping file beside board.yaml, outside the
@@ -80,8 +80,6 @@ pub enum BoardsFail {
     },
     /// The store refused the TaskCommitted the publish attempted.
     Record(String),
-    /// An acceptance was attempted while checkpoints stood unsaved.
-    UnsavedCheckpoints { actors: Vec<String> },
     /// A git command failed; the detail is its stderr.
     Git(String),
     /// A filesystem effect failed.
@@ -105,7 +103,6 @@ impl BoardsFail {
             BoardsFail::UnknownSourceRevision { .. } => "boards_unknown_source_revision",
             BoardsFail::TaskMismatch { .. } => "boards_task_mismatch",
             BoardsFail::Record(_) => "boards_record_refused",
-            BoardsFail::UnsavedCheckpoints { .. } => "boards_unsaved_checkpoints",
             BoardsFail::WorkingBoard { .. } => "boards_working_board_unreadable",
             BoardsFail::Git(_) => "boards_effect",
             BoardsFail::Io { .. } => "boards_io",
@@ -172,10 +169,6 @@ impl BoardsFail {
                 "the board names {board_task}, but this account belongs to {expected}; the board's task field must carry the committing task"
             ),
             BoardsFail::Record(detail) => detail.clone(),
-            BoardsFail::UnsavedCheckpoints { actors } => format!(
-                "checkpoints by {} stand unsaved for this task; discard them or commit first - acceptance certifies the recorded revisions alone",
-                actors.join(", ")
-            ),
             BoardsFail::WorkingBoard { path, detail } => {
                 format!("could not read {}: {detail}", path.display())
             }
@@ -302,103 +295,6 @@ impl Boards {
             None,
         )?;
         Ok(())
-    }
-
-    /// Commit the working directory onto the actor's checkpoint chain
-    /// without validation - a checkpoint is a snapshot mid-edit, never
-    /// a published revision, and it never touches the commit ref.
-    /// The chain's first commit hangs off `base`, the commit the actor
-    /// started from; later checkpoints chain onto the actor's tip.
-    pub fn checkpoint(
-        &self,
-        task: &str,
-        actor: &str,
-        workdir: &Path,
-        base: &str,
-        message: &str,
-    ) -> Result<String, BoardsFail> {
-        single_component(task)?;
-        single_component(actor)?;
-        if !self.commit_exists(base) {
-            return Err(BoardsFail::MissingCommit {
-                task: task.to_string(),
-                commit: base.to_string(),
-            });
-        }
-        let parent = match self.read_ref(&format!("{COMMIT_REF_PREFIX}/{task}/wip/{actor}"))? {
-            Some(tip) => tip,
-            None => base.to_string(),
-        };
-        // a checkpoint validates nothing: the tree carries board.yaml and
-        // whatever referenced figures currently exist on disk
-        let board_path = workdir.join(BOARD_FILE);
-        let board_text =
-            std::fs::read_to_string(&board_path).map_err(|error| BoardsFail::WorkingBoard {
-                path: board_path,
-                detail: error.to_string(),
-            })?;
-        let board = match parse(&board_text) {
-            Ok(board) => board,
-            Err(_) => Board {
-                task: String::new(),
-                content: Vec::new(),
-            },
-        };
-        let mut files = vec![(
-            BOARD_FILE.to_string(),
-            self.write_blob(board_text.as_bytes())?,
-        )];
-        for path in board_grammar::figures(&board) {
-            if let Ok(bytes) = std::fs::read(workdir.join(&path)) {
-                files.push((path, self.write_blob(&bytes)?));
-            }
-        }
-        let tree = self.write_tree(&files)?;
-        let args: Vec<&str> = vec!["commit-tree", &tree, "-p", &parent, "-m", message];
-        let commit = run_ok(&self.repo, &args, None)?;
-        run_ok(
-            &self.repo,
-            &[
-                "update-ref",
-                &format!("{COMMIT_REF_PREFIX}/{task}/wip/{actor}"),
-                commit.trim(),
-            ],
-            None,
-        )?;
-        Ok(commit.trim().to_string())
-    }
-
-    /// Delete the actor's checkpoint chain reference; the chain's
-    /// objects stay in the repository, retained.
-    pub fn discard_checkpoint(&self, task: &str, actor: &str) -> Result<(), BoardsFail> {
-        single_component(task)?;
-        single_component(actor)?;
-        run_ok(
-            &self.repo,
-            &[
-                "update-ref",
-                "-d",
-                &format!("{COMMIT_REF_PREFIX}/{task}/wip/{actor}"),
-            ],
-            None,
-        )?;
-        Ok(())
-    }
-
-    /// The actors whose checkpoint chains currently hold unsaved work.
-    pub fn unsaved_checkpoints(&self, task: &str) -> Result<Vec<String>, BoardsFail> {
-        single_component(task)?;
-        let prefix = format!("{COMMIT_REF_PREFIX}/{task}/wip/");
-        let refs = run_ok(
-            &self.repo,
-            &["for-each-ref", "--format=%(refname)", &format!("{prefix}*")],
-            None,
-        )?;
-        Ok(refs
-            .lines()
-            .filter_map(|line| line.strip_prefix(&prefix))
-            .map(str::to_string)
-            .collect())
     }
 
     /// Whether the repository holds the commit object.
@@ -635,17 +531,6 @@ impl Boards {
         self.advance_commit(ref_key, &landed.commit)?;
         self.materialize(ref_key, &landed.commit)?;
         Ok(landed.commit)
-    }
-
-    /// The accept door's effect: no actor of the task may hold
-    /// unsaved checkpoints when the acceptance records.
-    pub fn accept_guard(&self, task: &str) -> Result<(), BoardsFail> {
-        let actors = self.unsaved_checkpoints(task)?;
-        if actors.is_empty() {
-            Ok(())
-        } else {
-            Err(BoardsFail::UnsavedCheckpoints { actors })
-        }
     }
 
     /// Set every commit ref and materialized checkout to what the log
@@ -889,13 +774,6 @@ impl Boards {
         Ok(Some(out.stdout))
     }
 
-    /// The actor's checkpoint chain tip, when one stands.
-    pub fn checkpoint_tip(&self, task: &str, actor: &str) -> Result<Option<String>, BoardsFail> {
-        single_component(task)?;
-        single_component(actor)?;
-        self.read_ref(&format!("{COMMIT_REF_PREFIX}/{task}/wip/{actor}"))
-    }
-
     /// One file's bytes inside a stored revision.
     pub fn file_bytes(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>, BoardsFail> {
         self.blob_at(commit, path)
@@ -933,6 +811,8 @@ impl Boards {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
+    // the surviving tests read refs; no door does
+    #[cfg(test)]
     fn read_ref(&self, refname: &str) -> Result<Option<String>, BoardsFail> {
         let out = run(
             &self.repo,
@@ -988,7 +868,7 @@ pub fn recorded_base(workdir: &Path) -> Result<String, BoardsFail> {
 fn figures_in(board_text: &str) -> std::collections::BTreeSet<String> {
     match parse(board_text) {
         Ok(board) => board_grammar::figures(&board).into_iter().collect(),
-        // checkpoint trees can hold mid-edit boards; their figures are
+        // a tree can hold a board that does not parse; its figures are
         // simply unknown to the merge
         Err(_) => std::collections::BTreeSet::new(),
     }
@@ -1689,119 +1569,6 @@ content:
         );
     }
 
-    // checkpoints hang off the actor's own chain, seeded by the commit
-    // the session started from, and stay invisible at the commit ref
-    #[test]
-    fn a_checkpoint_never_becomes_the_commit_ref() {
-        let tag = "checkpoint";
-        let store = boards(tag);
-        let base = first_commit(
-            &store,
-            tag,
-            "finding",
-            &plinth_board("The sweep found the peak at 7 Hz.", "The mat was on."),
-        );
-        let dir = workdir(tag, "drafting");
-        write(
-            &dir,
-            BOARD_FILE,
-            plinth_board("Drafting: the peak moved to 7.2 Hz.", "The mat was on.").as_bytes(),
-        );
-        let first = store
-            .checkpoint(
-                "tone-arm-resonance",
-                "pi",
-                &dir,
-                &base,
-                "checkpoint: drafting",
-            )
-            .expect("the first checkpoint lands");
-        assert_eq!(
-            store
-                .read_ref(&format!("{COMMIT_REF_PREFIX}/tone-arm-resonance/wip/pi"))
-                .expect("the wip ref reads"),
-            Some(first.clone())
-        );
-        assert_eq!(
-            store
-                .read_ref(&format!("{COMMIT_REF_PREFIX}/tone-arm-resonance/commit"))
-                .expect("the commit ref reads"),
-            Some(base.clone()),
-            "the checkpoint never shows at the commit ref"
-        );
-        assert_eq!(
-            run_ok(&store.repo, &["rev-parse", &format!("{first}^")], None)
-                .expect("the chain parent reads"),
-            base,
-            "the first checkpoint hangs off the session's base"
-        );
-        write(
-            &dir,
-            BOARD_FILE,
-            plinth_board("Drafting: the peak at 7.4 Hz.", "The mat was off.").as_bytes(),
-        );
-        let second = store
-            .checkpoint(
-                "tone-arm-resonance",
-                "pi",
-                &dir,
-                &base,
-                "checkpoint: drafting again",
-            )
-            .expect("the second checkpoint lands");
-        assert_eq!(
-            run_ok(&store.repo, &["rev-parse", &format!("{second}^")], None)
-                .expect("the chain parent reads"),
-            first,
-            "later checkpoints chain onto the actor's tip"
-        );
-        assert_eq!(
-            store
-                .unsaved_checkpoints("tone-arm-resonance")
-                .expect("the actors list"),
-            vec!["pi".to_string()]
-        );
-        store
-            .discard_checkpoint("tone-arm-resonance", "pi")
-            .expect("the discard lands");
-        assert_eq!(
-            store
-                .unsaved_checkpoints("tone-arm-resonance")
-                .expect("the actors list"),
-            Vec::<String>::new()
-        );
-        assert!(
-            store.commit_exists(&second),
-            "discarding the reference retains the chain's objects"
-        );
-    }
-
-    // checkpoints skip grammar and figure checks: a snapshot mid-edit
-    // lands even while the board does not parse
-    #[test]
-    fn a_checkpoint_snapshots_without_validation() {
-        let tag = "checkpoint-raw";
-        let store = boards(tag);
-        let base = first_commit(
-            &store,
-            tag,
-            "finding",
-            &plinth_board("The sweep found the peak at 7 Hz.", "The mat was on."),
-        );
-        let dir = workdir(tag, "mid-edit");
-        write(&dir, BOARD_FILE, b"grammar: 2\ntask: t-4\ncontent: []\n");
-        let saved = store
-            .checkpoint(
-                "tone-arm-resonance",
-                "claude",
-                &dir,
-                &base,
-                "checkpoint: mid-edit",
-            )
-            .expect("the checkpoint lands without validation");
-        assert!(store.commit_exists(&saved));
-    }
-
     // the checkout is a symlink swap: the task's path resolves to a
     // complete tree at every instant, and the previous tree leaves only
     // after the swap has landed
@@ -2173,9 +1940,5 @@ content:
                 .expect_err("the unsafe key refuses");
             assert_eq!(error.code(), "boards_invalid_key");
         }
-        let error = store
-            .discard_checkpoint("tone-arm-resonance", "pi/chain")
-            .expect_err("the unsafe actor refuses");
-        assert_eq!(error.code(), "boards_invalid_key");
     }
 }

@@ -1768,14 +1768,6 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     let (ok, _, _) = sac(&["offer", &consumer]);
     assert!(ok);
 
-    // a checkpoint refuses the acceptance until it is discarded
-    let (ok, out, _) = sac(&["board", "checkpoint", &consumer, con.to_str().unwrap()]);
-    assert!(ok, "{out}");
-    let (ok, _, err) = sac(&["accept", &consumer]);
-    assert!(!ok, "unsaved checkpoints refuse the acceptance");
-    assert!(err.contains("boards_unsaved_checkpoints"), "{err}");
-    let (ok, out, _) = sac(&["board", "discard", &consumer]);
-    assert!(ok, "{out}");
     let (ok, out, _) = sac(&["accept", &consumer]);
     assert!(ok, "{out}");
     assert!(out.contains("t-1 concluded"), "{out}");

@@ -175,7 +175,7 @@ complete -c sac -n '__saccade_verb search' -l within -r -f -d 'narrow to one tas
 complete -c sac -n '__saccade_verb offer' -r -f -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb accept' -r -f -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reject' -l grounds -r -f -d 'the grounds that reopen the task'
-complete -c sac -n '__saccade_verb board' -r -f -a 'edit check checkpoint commit update discard get diff log path'
+complete -c sac -n '__saccade_verb board' -r -f -a 'edit check commit update get diff log path'
 complete -c sac -n '__saccade_verb board; and __fish_seen_subcommand_from get diff' -r -f -a 't-(commandline -ot)'
 complete -c sac -n '__saccade_verb serve' -l bind -r -f -d 'the address to bind'
 complete -c sac -n '__saccade_verb serve' -l port -r -f -d 'the port to serve on'

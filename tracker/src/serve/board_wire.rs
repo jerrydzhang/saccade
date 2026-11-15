@@ -15,7 +15,7 @@ use crate::store::World;
 use crate::wire;
 
 pub const MAX_BOARD_FILE_BYTES: usize = 8 * 1024 * 1024;
-/// The body limit of one board request (commit, checkpoint, update):
+/// The body limit of one board request (commit, update):
 /// the whole board rides inline, its files base64.
 pub const BOARD_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
 /// The body limit servers through sac 0.20.2 apply: axum's default.
@@ -177,28 +177,6 @@ fn safe_relative(value: &str) -> Result<PathBuf, String> {
 // -- wire requests ---------------------------------------------------
 
 #[derive(Deserialize, Serialize)]
-pub struct CheckpointRequest {
-    pub context: WireContext,
-    pub task: usize,
-    pub files: BoardFiles,
-    pub base: String,
-    pub message: String,
-    #[serde(default)]
-    pub client: Option<String>,
-}
-
-impl CheckpointRequest {
-    pub fn context_client(&self) -> Option<String> {
-        self.client.clone()
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CheckpointReply {
-    pub commit: String,
-}
-
-#[derive(Deserialize, Serialize)]
 pub struct CommitRequest {
     pub context: WireContext,
     pub task: usize,
@@ -222,26 +200,6 @@ pub struct CommitReply {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct DiscardRequest {
-    pub context: WireContext,
-    pub task: usize,
-    #[serde(default)]
-    pub client: Option<String>,
-}
-
-impl DiscardRequest {
-    pub fn context_client(&self) -> Option<String> {
-        self.client.clone()
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct DiscardReply {
-    pub task: String,
-    pub actor: String,
-}
-
-#[derive(Deserialize, Serialize)]
 pub struct UpdateRequest {
     pub task: usize,
     pub base: String,
@@ -260,7 +218,6 @@ pub struct UpdateReply {
 #[derive(Deserialize, Serialize)]
 pub struct EditQuery {
     pub task: usize,
-    pub actor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

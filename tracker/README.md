@@ -159,10 +159,10 @@ them.
   offered revision cannot move.
 - A commit whose board matches its parent refuses, naming the parent
   revision: a published revision is a change (t-26). Revisions already
-  published empty stay; checkpoints are unaffected.
+  published empty stay.
 - A board crosses the wire whole, in one request, its files base64
   (8 MiB each, no total bound in the grammar). The board doors that
-  carry it (commit, checkpoint, update) take a deliberate 32 MiB body
+  carry it (commit, update) take a deliberate 32 MiB body
   limit (`DefaultBodyLimit`), about 24 MiB of files; past it the
   refusal is `request_too_large` in the error envelope. Servers through
   sac 0.20.2 apply axum's 2 MB default. `sac` names the board's total
@@ -171,9 +171,6 @@ them.
 - Acceptance requires every incorporation to cite exactly its source's
   accepted revision; reconciliation onto an accepted revision is an
   ordinary commit.
-- Checkpoints are snapshots mid-edit: they validate nothing, carry no
-  event, chain onto the actor's own ref, and must be discarded before
-  anything accepts the task.
 
 ## The pages (/view/v1)
 
