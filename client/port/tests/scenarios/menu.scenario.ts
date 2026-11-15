@@ -56,6 +56,17 @@ test("after s and a label, Enter runs the first act", { tags: ["native"] }, asyn
   await expect.poll(() => app.menuOpen()).toBe(false);
 });
 
+test("while the act menu is open its target is highlighted; closing it restores the target's look", async ({ app, tracker }) => {
+  await scrolledLongBoard(app, tracker);
+  const part = await selectVisibleParagraph(app);
+  const open = await app.partLook(part);
+  await app.press("Escape");
+  await expect.poll(() => app.menuOpen()).toBe(false);
+  const closed = await app.partLook(part);
+  // selection highlights its target as the pointer does (t-59)
+  expect(open!.background).not.toBe(closed!.background);
+});
+
 test("a right-click on a scrolled board opens the menu at the pointer", { tags: ["native"] }, async ({ app, tracker }) => {
   await scrolledLongBoard(app, tracker);
   await app.press("s");

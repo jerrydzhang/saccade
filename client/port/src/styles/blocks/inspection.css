@@ -1,0 +1,40 @@
+/* The figure viewer: a figure enlarged over the content area.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* the veil is the window itself, nearly opaque; the figure sits on
+ * its own backdrop, as on the sheet */
+.port-inspection {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--port-color-background) 96%, transparent);
+  cursor: grab;
+}
+.port-inspection-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: 0 0;
+  background: var(--port-figure-backdrop);
+  padding: 14px;
+  border-radius: var(--port-radius);
+}
+.port-inspection-stage > img,
+.port-inspection-stage > svg {
+  display: block;
+}
+.port-inspection-hint {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 1rem;
+  font-family: var(--port-font-ui);
+  font-size: var(--port-size-small);
+  color: var(--port-color-faint);
+}
+.port-inspection-text {
+  font-family: var(--port-font-mono);
+  white-space: pre;
+  margin: 0;
+  color: var(--port-code-foreground);
+}

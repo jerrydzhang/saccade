@@ -71,7 +71,7 @@ test("the pinned window chords run back/forward through the host matcher", () =>
       trailBack: (): boolean => { ran.push("back"); return true; },
       trailForward: (): boolean => { ran.push("forward"); return true; },
       linkByLabels: () => {},
-    enterFind: () => {}, unlink: () => {}, showHelp: () => {},
+    unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
   );
@@ -113,7 +113,7 @@ test("the seam carve-out names the prototype's six Ctrl chords and the column-wi
 
 test("the real port contexts validate at construction", () => {
   windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false, linkByLabels: () => {},
-    enterFind: () => {}, unlink: () => {}, showHelp: () => {} });
+    unlink: () => {}, showHelp: () => {} });
   boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, scrollDown: () => {}, scrollUp: () => {}, scrollFraction: () => {}, enterSelect: () => {}, enterFind: () => {}, nextMatch: () => {}, prevMatch: () => {}, clearSearch: () => {}, readingLayout: () => {} });
 });
 
@@ -178,6 +178,45 @@ test("the matcher's expiry fires the completed spelling when it is its own bindi
   assert.deepEqual(ran, []);
 });
 
+test("a stray key ends the pending sequence, closing its which-key, and still runs on its own", () => {
+  const windowEvents: string[] = [];
+  const bufferEvents: KeyInput[] = [];
+  const scheduler = manualScheduler();
+  const windowHost = createHostMatcher(
+    windowContext({
+      openPicker: () => windowEvents.push("picker"),
+      closeOverlays: () => windowEvents.push("close"),
+      pickerIsOpen: () => false,
+      trailBack: (): boolean => true,
+      trailForward: (): boolean => true,
+      linkByLabels: () => {},
+      unlink: () => {}, showHelp: () => {},
+    }),
+    { scheduler, expirySuspended: () => true },
+  );
+  const buffer = {
+    handleKey(input: KeyInput): KeyDisposition {
+      bufferEvents.push(input);
+      return "consume";
+    },
+  };
+  let notified = 0;
+  windowHost.subscribePending(() => { notified += 1; });
+  // space opens a pending sequence (the which-key popup's source)
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  assert.notEqual(windowHost.pendingView(), null);
+  // j continues nothing under space: the sequence ends and j runs
+  const before = notified;
+  dispatchStroke(windowHost, buffer, stroke("j"));
+  assert.equal(windowHost.pendingView(), null, "the popup's pending is gone");
+  assert.ok(notified > before, "the popup is told");
+  assert.equal(bufferEvents.at(-1)?.key, "j", "the stray key runs");
+  // a later space starts fresh: space space still opens the picker
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  assert.deepEqual(windowEvents, ["picker"]);
+});
+
 test("the window chain: space-space opens the picker at the window level; other keys reach the buffer", () => {
   const windowEvents: string[] = [];
   const bufferEvents: KeyInput[] = [];
@@ -191,7 +230,7 @@ test("the window chain: space-space opens the picker at the window level; other 
       trailBack: (): boolean => { windowEvents.push("back"); return true; },
       trailForward: (): boolean => { windowEvents.push("forward"); return true; },
       linkByLabels: () => {},
-    enterFind: () => {}, unlink: () => {}, showHelp: () => {},
+    unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
   );
@@ -270,4 +309,28 @@ test("m-552: a printable character carries its own Shift; letters keep their cas
   assert.ok(!strokeMatches(plain("o"), at("o", { alt: true })));
   // a named key keeps Shift exact (Shift+Enter is not Enter)
   assert.ok(!strokeMatches(plain("Enter"), at("Enter", { shift: true })));
+});
+
+test("find is / alone: the window binds no space /, so / after space reaches the reading context", () => {
+  const bufferEvents: KeyInput[] = [];
+  const windowHost = createHostMatcher(
+    windowContext({
+      openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
+      trailBack: (): boolean => true, trailForward: (): boolean => true,
+      linkByLabels: () => {}, unlink: () => {}, showHelp: () => {},
+    }),
+    { scheduler: manualScheduler() },
+  );
+  const continuations = windowHost.allView().entries.map((entry) => entry.keys);
+  assert.ok(!continuations.includes("spc /"), "no space / in the window's table");
+  const buffer = {
+    handleKey(input: KeyInput): KeyDisposition {
+      bufferEvents.push(input);
+      return "consume";
+    },
+  };
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  dispatchStroke(windowHost, buffer, stroke("/"));
+  assert.equal(windowHost.pendingView(), null);
+  assert.equal(bufferEvents.at(-1)?.key, "/", "/ is the reading context's own key");
 });

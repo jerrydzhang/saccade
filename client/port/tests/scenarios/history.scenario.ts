@@ -74,6 +74,38 @@ test("history shows a revision's changes, steps time, and leaves in place", asyn
   expect(left.trail.depth).toBe(trailBefore);
 });
 
+test("the commit reads whole: a card in the margin when wide, a footer at the reading width when narrow", async ({ app, tracker }) => {
+  const task = await tracker.createTask("history: the commit never cut");
+  const message = Array.from({ length: 6 }, (_, index) => `Sentence ${index + 1} of a long commit message that wraps over several lines.`).join(" ");
+  await tracker.commit(task, R1(task), "first account");
+  await tracker.commit(task, R2(task), message);
+  await submitLocation(app, spec(tracker, task));
+  await expect.poll(async () => (await app.readout()).board.location, { timeout: 20_000 }).toBe(`${tracker.repo}/${task}@r2`);
+  await app.press(" ", "h");
+  await expect.poll(async () => (await app.readout()).board.history?.revision ?? null, { timeout: 20_000 }).toBe(2);
+  expect(await app.controlText("history-message")).toBe(message);
+
+  // wide: beside the board's column, in the right margin
+  await app.resize(1600, 900);
+  await expect.poll(async () => {
+    const card = await app.controlBox("history-message");
+    const part = await app.partBox("/content/0");
+    return card !== null && part !== null && card.left > part.right;
+  }).toBe(true);
+
+  // narrow: under the board's column, inside the window, its text no
+  // wider than the column and centred with it
+  await app.resize(800, 700);
+  await expect.poll(async () => {
+    const card = await app.controlBox("history-message");
+    const part = await app.partBox("/content/0");
+    if (card === null || part === null) return false;
+    const centred = Math.abs((card.left + card.right) / 2 - (part.left + part.right) / 2) <= 2;
+    return card.top >= part.bottom && card.bottom <= 700 && card.right - card.left <= part.right - part.left + 1 && centred;
+  }).toBe(true);
+  expect(await app.controlText("history-message")).toBe(message);
+});
+
 /** A board of headed sections (each text its own key, so the tracker
  * aligns them by heading): `lead` sections first, then 30 sections
  * whose bodies read `word`, then a tail when asked. */

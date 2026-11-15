@@ -677,7 +677,8 @@ fn cursor(snapshot: &Snapshot) -> Option<usize> {
 /// The record kinds whose landing can change the agents page: the
 /// registration family (who the sessions are, what they are called,
 /// where their terminals and saved sessions live), the claims that
-/// move ownership, and the
+/// move ownership, the stops and resumptions that move an owned task
+/// out of or back into play (the page's open tasks), and the
 /// board commits whose recorded scope names a session - the page
 /// carries each session's last commit, so a commit landing wakes it.
 const AGENTS_WATCH: &[&str] = &[
@@ -686,6 +687,9 @@ const AGENTS_WATCH: &[&str] = &[
     "host_address_assigned",
     "incarnation_named",
     "task_claimed",
+    "task_accepted",
+    "task_cancelled",
+    "task_reopened",
     "task_committed",
 ];
 
@@ -748,15 +752,33 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
             facts.push(fact("harness", harness.as_str().to_string()));
         }
         let owned = owned_tasks(world, *id);
+        let names = |tasks: &[usize]| {
+            tasks
+                .iter()
+                .map(|task| format!("t-{task}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         if !owned.is_empty() {
-            facts.push(fact(
-                "tasks",
-                owned
-                    .iter()
-                    .map(|task| format!("t-{task}"))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ));
+            facts.push(fact("tasks", names(&owned)));
+        }
+        // the owned tasks still in play (open or offered): ownership
+        // outlives a conclusion, so "tasks" keeps every owned task and
+        // this names what the session is still answerable for - present
+        // (possibly empty) whenever "tasks" is, so a reader tells "none
+        // open" from a page that predates the fact
+        if !owned.is_empty() {
+            let open: Vec<usize> = owned
+                .iter()
+                .copied()
+                .filter(|task| {
+                    matches!(
+                        world.tasks[*task].task.state,
+                        TaskState::Open | TaskState::Offered
+                    )
+                })
+                .collect();
+            facts.push(fact("open tasks", names(&open)));
         }
         if let Some(harness) = ctx.incarnation.harness()
             && let Some(locator) = ctx.incarnation.saved_session()

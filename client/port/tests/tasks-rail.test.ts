@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ViewPage } from "../src/lib/pages.ts";
-import { NO_WORDS, agentFactsOf, railOf, wordFor, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
+import { NO_WORDS, agentFactsOf, railOf, wordFor, wordRunsOf, wordsByIncarnationOf, wordsOf, type WordsSnapshot } from "../src/lib/tasks/rail.ts";
 
 function agentsPage(): ViewPage {
   const agent = (n: number, address: string | null, tasks: string | null, name: string | null = null) => ({
@@ -54,6 +54,28 @@ test("an agents page restates its incarnations with their terminals and tasks", 
   assert.deepEqual(facts[1], { incarnation: "i-2", name: null, address: "t11", tasks: [] });
   assert.equal(facts[2]?.name, "theory", "a recorded name rides its own fact");
   assert.equal(facts[3]?.address, null);
+});
+
+test("an agent's tasks are the ones still open: the page's open tasks, else every owned task from an older tracker", () => {
+  const page = (facts: { label: string; value: string }[]): ViewPage => ({
+    view: { major: 1 },
+    kind: "document",
+    location: "agents",
+    seq: null,
+    content: [
+      {
+        kind: "group",
+        location: "i-1",
+        content: [{ kind: "fact", label: "incarnation", value: "i-1" }, ...facts.map((fact) => ({ kind: "fact" as const, ...fact }))],
+      },
+    ],
+  });
+  // ownership outlives a conclusion: only the open ones are shown
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-9 t-4 t-2" }, { label: "open tasks", value: "t-9" }]))[0]?.tasks, ["t-9"]);
+  // every owned task has ended: an empty open list, never the owned one
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-4 t-2" }, { label: "open tasks", value: "" }]))[0]?.tasks, []);
+  // a tracker before sac 0.20.8 sends no open tasks: the owned list stands
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-4 t-2" }]))[0]?.tasks, ["t-4", "t-2"]);
 });
 
 test("the rail shows running agents only, by Herdr's word in t-14's order, within a word by task", () => {
@@ -341,8 +363,8 @@ test("a stray agent no project holds shows at the foot, by word then name; shell
     rail.unregistered.map((agent) => [agent.state, agent.label, agent.address]),
     [
       ["error", "pi run", "t7q"],
-      ["working", null, "t7r"],
       ["done", "elsewhere / 1", "t7x"],
+      ["working", null, "t7r"],
     ],
   );
   const shown = [...rail.projects.flatMap((p) => p.groups.flatMap((g) => g.agents)), ...rail.unregistered].map((a) => a.address);
@@ -386,8 +408,8 @@ test("every agent is a target with y copying hc attach <address> as the local co
       [terminalPart("t63"), "saccade / general t63", "saccade", null, "t63"],
       [terminalPart("t6r"), "pi t6r", "saccade", null, "t6r"],
       [terminalPart("t7q"), "pi run t7q", null, null, "t7q"],
-      [terminalPart("t7r"), "t7r", null, null, "t7r"],
       [terminalPart("t7x"), "elsewhere / 1 t7x", null, null, "t7x"],
+      [terminalPart("t7r"), "t7r", null, null, "t7r"],
     ],
     "projects in name order, each followed by its agents; the foot group last",
   );
@@ -426,4 +448,42 @@ test("a named agent's menu heading reads by its name, the incarnation beside it 
   const base = { address: "t12", state: "working", msg: null, progress: null, tasks: ["t-2"], at: 1, label: null };
   assert.equal(railAgentText({ ...base, incarnation: "i-3", name: "theory" }), "theory (i-3) t-2");
   assert.equal(railAgentText({ ...base, incarnation: "i-3", name: null }), "i-3 t-2");
+});
+
+test("words in importance order: error, blocked, done, working, idle, any other word alphabetically, then no word", () => {
+  const states = ["idle", "", "working", "zeal", "done", "blocked", "compacting", "error"];
+  const agents = states.map((state, index) => ({ incarnation: `i-${index}`, name: null, address: `t${index}`, tasks: [] }));
+  const rail = railOf(
+    [{ name: "pyrimel", agents, problem: null }],
+    {
+      generation: 1,
+      connected: true,
+      words: Object.fromEntries(states.map((state, index) => [`t${index}`, state === "" ? { at: 1 } : { state, at: 1 }])),
+    },
+    "pyrimel",
+  );
+  assert.deepEqual(
+    rail.projects[0]?.groups.map((group) => group.state),
+    ["error", "blocked", "done", "working", "idle", "compacting", "zeal", ""],
+  );
+  // the pipeline's join: each registered agent's live word, none for no word
+  const joined = wordsByIncarnationOf(rail);
+  assert.equal(joined.get("i-7"), "error");
+  assert.equal(joined.get("i-4"), "done");
+  assert.equal(joined.has("i-1"), false, "an agent with no word carries no word");
+  // only the shown project's agents join
+  const unshown = railOf([{ name: "pyrimel", agents, problem: null }], { generation: 1, connected: true, words: {} }, null);
+  assert.equal(wordsByIncarnationOf(unshown).size, 0);
+});
+
+test("the foot group reads as runs of one word, in its own order", () => {
+  const runs = wordRunsOf(strayRail().unregistered);
+  assert.deepEqual(
+    runs.map((run) => [run.state, run.agents.map((agent) => agent.address)]),
+    [
+      ["error", ["t7q"]],
+      ["done", ["t7x"]],
+      ["working", ["t7r"]],
+    ],
+  );
 });

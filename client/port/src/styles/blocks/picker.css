@@ -1,0 +1,75 @@
+/* The picker: open a location. The float surface (float.css), centred
+ * near the top of the window: the field, a line under it, then the
+ * ranked rows - kind (faint), id (mono), name - the selected one lit.
+ * The ask (which window?) wears the same surface with its field only.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+.port-picker {
+  position: fixed;
+  z-index: 25;
+  top: 4.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(45rem, calc(100vw - 2rem));
+}
+.port-picker-field {
+  padding: 0.5rem 0.75rem 0.625rem;
+  border: none;
+  border-bottom: 1px solid var(--port-color-line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  caret-color: var(--port-float-ink);
+  outline: none;
+}
+/* the rows share one grid, so the columns line up across rows */
+.port-picker-list {
+  display: grid;
+  grid-template-columns: max-content max-content 1fr max-content;
+  margin: 0.375rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.port-picker-list > li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+.port-picker-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  column-gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.375rem 0.75rem;
+  border: none;
+  border-radius: var(--port-radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.port-picker-row:hover {
+  background: var(--port-color-hover);
+}
+.port-picker-row.port-picker-selected {
+  background: var(--port-color-selection);
+}
+.port-picker-kind {
+  color: var(--port-color-faint);
+}
+.port-picker-id {
+  font-family: var(--port-font-mono);
+  font-size: 0.92em;
+}
+.port-picker-here {
+  grid-column: 4;
+  color: var(--port-color-faint);
+  font-size: var(--port-size-small);
+}

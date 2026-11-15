@@ -1,34 +1,63 @@
-/* The port's centralized style tokens (t-36 r63 decision 2): the look
- * layer composes through this file from the base onward. Placement
- * only - values are neutral defaults, no design language. The round-16
- * language lands through this file in its own pass; if applying a
- * theme would need component restructuring, structure leaked styling
- * and that is a defect to fix here. */
+/* The port's tokens: the one vocabulary every block reads (t-59, "The
+ * language so far"). Placement only - the values here are neutral, so
+ * the base stands alone; theme.css assigns the language, light on
+ * :root and dark on :root[data-theme="dark"] (lib/theme-mode.ts sets
+ * the attribute from the system's preference). A block that needs a
+ * value no token names adds the token here first. */
 
 :root {
-  /* type */
-  --port-font-sans: sans-serif;
+  /* type: one face for the tools and the document, mono for ids,
+   * keys, hashes and code */
+  --port-font-ui: serif;
+  --port-font-text: serif;
   --port-font-mono: monospace;
-  --port-font-world: Georgia, serif;
+  --port-size-small: 0.8125rem;
 
-  /* color: neutral surfaces and text, no palette decisions */
+  /* the window and its ink */
   --port-color-background: #ffffff;
   --port-color-ink-strong: #000000;
-  --port-color-foreground: #111111;
+  --port-color-ink: #111111;
   --port-color-muted: #555555;
-  --port-color-line: #cccccc;
-  --port-color-accent: #00427a;
-
   --port-color-faint: #777777;
-  --port-color-line-soft: #dddddd;
-  --port-color-selection: #dddddd;
+  --port-color-line: #cccccc;
+  /* the one accent: links and keys; it belongs to no state */
+  --port-color-accent: #00427a;
+  /* the pointer's row and the selected target share one highlight */
   --port-color-hover: #eeeeee;
-  --port-world-background: #ffffff;
-  --port-world-foreground: #111111;
+  --port-color-selection: #dddddd;
+  --port-color-error: #8a1f1f;
+
+  /* the board's sheet */
+  --port-color-paper: #ffffff;
+  --port-color-paper-ink: #111111;
+  --port-paper-shadow: none;
+  --port-figure-backdrop: #ffffff;
+
+  /* every float - the act menu, the picker, which-key, help - is one
+   * surface: these three tokens and nothing else */
+  --port-float-background: #ffffff;
+  --port-float-ink: #111111;
+  --port-float-shadow: none;
+
+  /* select labels: a stamp beside what it names */
+  --port-label-background: #000000;
+  --port-label-ink: #ffffff;
+  --port-label-size: 0.9375rem;
+
+  /* states: one hue per meaning, shared by an agent's word and the
+   * pipeline stage that mirrors it (working / in flight, blocked /
+   * awaiting judgment, done / concluded; idle and waiting neutral) */
+  --port-state-working: #555555;
+  --port-state-blocked: #555555;
+  --port-state-done: #555555;
+  --port-state-idle: #777777;
+  --port-state-error: #8a1f1f;
+
+  /* history: what rests while the changed parts are read */
+  --port-history-rest-opacity: 1;
 
   /* code: a fenced block's surface and its syntax colours (t-40,
-   * lib/highlight.ts kinds); neutral here - every kind reads in the
-   * block's own ink until a theme assigns a colour */
+   * lib/highlight.ts kinds) */
   --port-code-background: #f4f4f4;
   --port-code-foreground: #111111;
   --port-code-line: #dddddd;
@@ -44,7 +73,7 @@
   --port-code-deletion: currentColor;
 
   /* history mode's marks (t-49): the words a revision added and the
-   * ones it removed, and the parts it changed */
+   * ones it removed */
   --port-diff-added: #0a5c1f;
   --port-diff-added-background: #e3f1e6;
   --port-diff-removed: #8a1020;
@@ -60,4 +89,12 @@
   --port-reading-width: 1;
   --port-world-leading: 1.5;
   --port-radius: 0;
+
+  /* the board */
+  /* the document's base text size, before the reading zoom */
+  --port-text-size: 1rem;
+  /* the sheet's corners, and the margin beside it where history's
+   * commit card reads */
+  --port-sheet-radius: 0;
+  --port-margin-width: 18rem;
 }

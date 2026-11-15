@@ -14,7 +14,9 @@ async function twoVisibleParts(app: AppDriver): Promise<[string, string]> {
   const labels = await app.labels();
   await app.press("Escape");
   await expect.poll(async () => (await app.labels()).length).toBe(0);
-  return [labels[1]!.part, labels[3]!.part];
+  // the second part is the last one labelled: far enough below the
+  // first that the menu opened beside the first never covers it
+  return [labels[1]!.part, labels.at(-1)!.part];
 }
 
 test("a left click outside the open menu closes it without acting", { tags: ["native"] }, async ({ app, tracker }) => {

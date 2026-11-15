@@ -23,8 +23,18 @@ test("D1 j scrolls a window born by the task row's Enter, with the driver in it"
   expect(first, "the D1 task's row is listed").toBeDefined();
   await whenBound(app);
   await app.press("Escape");
+  // labels name what is on screen: page the list (d, half a view) until
+  // the row is in view - earlier scenarios' tasks can push it past the fold
+  const inView = async (): Promise<boolean> => {
+    const box = await app.partBox(first.part);
+    return box !== null && box.top >= 0 && box.bottom <= (await app.readout()).viewport.height;
+  };
+  for (let page = 0; page < 20 && !(await inView()); page++) await app.press("d");
+  expect(await inView(), "the D1 row is on screen").toBe(true);
   await app.press("s");
-  await expect.poll(async () => (await app.labels()).length).toBeGreaterThan(0);
+  // select mode measures twice (it reserves inline room, then places):
+  // wait for the row's own chip, not merely for some chip
+  await expect.poll(async () => (await app.labels()).some((label) => label.part === first.part)).toBe(true);
   const chip = (await app.labels()).find((label) => label.part === first.part)!;
   await app.type(chip.label.toLowerCase());
   await expect.poll(() => app.menuOpen()).toBe(true);

@@ -1,0 +1,51 @@
+/* The strip: the window's one line of chrome - the app (faint), the
+ * location (ink, set apart by weight), a note or jump chip, and the
+ * link at the right edge. The load status shows only when loading or
+ * failed (lib/strip.ts).
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+.port-strip {
+  display: flex;
+  gap: 1.1em;
+  align-items: baseline;
+  min-height: 2.25rem;
+  box-sizing: border-box;
+  padding: var(--port-space-strip);
+  align-content: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--port-color-line);
+  color: var(--port-color-faint);
+  font-size: 0.875rem;
+}
+.port-strip-location {
+  color: var(--port-color-ink);
+  font-weight: 600;
+}
+.port-strip-status {
+  color: var(--port-color-muted);
+}
+.port-strip-status[data-port-strip-failed] {
+  color: var(--port-color-error);
+}
+.port-strip-note {
+  color: var(--port-color-muted);
+}
+/* the jump chip: this window's stamp while a link is asked for, worn
+ * like every select label */
+.port-strip-chip {
+  padding: 0.1875rem 0.375rem;
+  background: var(--port-label-background);
+  color: var(--port-label-ink);
+  font-family: var(--port-font-mono);
+  font-size: var(--port-label-size);
+  font-weight: 600;
+  line-height: 1;
+}
+/* the link state, information only: the linked window's name in ink */
+.port-strip-link {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.port-strip-link-name {
+  color: var(--port-color-ink);
+}

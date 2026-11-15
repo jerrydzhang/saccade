@@ -8,7 +8,7 @@
   // kept scrolled into view. Composition only - the ranking lives in
   // lib/picker/model.ts.
   import { pickList, isPathMode, type PickContext } from "../lib/picker/model.ts";
-import { parseOpenSpec } from "../instruments/board.ts";
+  import { parseOpenSpec } from "../instruments/board.ts";
 
   let {
     context,
@@ -92,12 +92,17 @@ import { parseOpenSpec } from "../instruments/board.ts";
   }
 </script>
 
-<div class="port-picker" data-port-picker="">
+<!-- one floating surface (t-59): the field, then the ranked rows;
+no placeholder - a picker carries no instructions -->
+<div class="port-float port-picker" data-port-picker="">
   <input
+    class="port-picker-field"
     bind:this={field}
     bind:value={query}
     data-port-control="picker-input"
-    placeholder="open: host:8811/tracker/t-N, a task name, /absolute/path, plane"
+    aria-label="open a location"
+    spellcheck="false"
+    autocomplete="off"
     onkeydown={onKeydown}
   />
   {#if entries.length > 0}
@@ -116,9 +121,9 @@ import { parseOpenSpec } from "../instruments/board.ts";
             <span class="port-picker-kind">{entry.kind}</span>
             <span class="port-picker-id">{entry.id}</span>
             <span class="port-picker-name">{entry.name}</span>
-            <span class="port-picker-here" aria-hidden="true">
-              {context.openHere === entry.spec ? "open here" : ""}
-            </span>
+            {#if context.openHere === entry.spec}
+              <span class="port-picker-here">open here</span>
+            {/if}
           </button>
         </li>
       {/each}

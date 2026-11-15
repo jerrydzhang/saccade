@@ -10435,6 +10435,7 @@ async fn the_agents_page_names_sessions_ownership_and_workspaces() {
         Some("tA")
     );
     assert_eq!(fact_value(&doc, &theirs, "tasks"), None);
+    assert_eq!(fact_value(&doc, &theirs, "open tasks"), None);
     assert_eq!(fact_value(&doc, &theirs, "workspace"), None);
 
     // ownership: the page carries every owned task, latest claim first
@@ -10446,6 +10447,45 @@ async fn the_agents_page_names_sessions_ownership_and_workspaces() {
         fact_value(&doc, &me, "tasks").as_deref(),
         Some("t-1 t-0"),
         "latest claim first"
+    );
+    assert_eq!(
+        fact_value(&doc, &me, "open tasks").as_deref(),
+        Some("t-1 t-0"),
+        "both owned tasks are still open"
+    );
+
+    // a task that leaves play stays owned but is no longer open: the
+    // human cancels t-0 (human tier: no actor, a terminal attached)
+    let out = run_with_terminals(
+        env!("CARGO_BIN_EXE_sac"),
+        &[
+            "--server",
+            &url,
+            "cancel",
+            "t-0",
+            "--explanation",
+            "set aside",
+        ]
+        .map(str::to_string),
+        true,
+        true,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    assert_eq!(
+        fact_value(&doc, &me, "tasks").as_deref(),
+        Some("t-1 t-0"),
+        "ownership outlives the task's end"
+    );
+    assert_eq!(
+        fact_value(&doc, &me, "open tasks").as_deref(),
+        Some("t-1"),
+        "a cancelled task is no longer open"
     );
 
     // supersession: a fresh holder of the same address removes the
@@ -10512,6 +10552,51 @@ async fn the_agents_page_names_sessions_ownership_and_workspaces() {
     let (status, body) = wait.join().unwrap();
     assert_eq!(status, 200, "{body}");
     assert!(json_of(&body)["seq"].as_u64().unwrap() > cursor);
+
+    // and when an owned task comes back into play: the open tasks are
+    // the page's too (the human reopens the cancelled t-0)
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let hold_started = std::time::Instant::now();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/agents?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let out = run_with_terminals(
+        env!("CARGO_BIN_EXE_sac"),
+        &[
+            "--server",
+            &url,
+            "reopen",
+            "t-0",
+            "--explanation",
+            "back in play",
+        ]
+        .map(str::to_string),
+        true,
+        true,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        hold_started.elapsed() < std::time::Duration::from_secs(6),
+        "the reopen woke the hold, well before its bound"
+    );
+    let doc = json_of(&body);
+    assert!(doc["seq"].as_u64().unwrap() > cursor);
+    assert_eq!(
+        fact_value(&doc, &me, "open tasks").as_deref(),
+        Some("t-0 t-1"),
+        "the reopened task is open again, the latest claim first"
+    );
 
     // an unrelated landing keeps the hold quiet for its bound: a task
     // creation is not the agents page's subject

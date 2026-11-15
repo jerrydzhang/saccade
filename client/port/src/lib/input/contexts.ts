@@ -17,16 +17,14 @@ import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 // The window's own surfaces. The picker is the open-location input (a
 // window surface, not a board-content action): space-space opens it,
 // Escape closes the picker only while it is open. Find belongs to
-// the reading instrument, not this window command table.
+// the reading instrument, not this window command table: it is `/`
+// alone, bound in the board's reading context (t-59 removed space /).
 export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
   pickerIsOpen(): boolean;
   trailBack(): boolean;
   trailForward(): boolean;
-  /** space-/: find in the active board (the leader's find command;
-   * the bare-/ reading binding stays). */
-  enterFind(): void;
   /** space-h: history mode on the active board (t-49): enter or leave. */
   toggleHistory?(): void;
   /** space-l: the link act - labels over windows, a key sets the
@@ -95,14 +93,6 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.openPicker(),
       },
       keys: [sequence(key(" "), key(" "))],
-    },
-    {
-      action: {
-        id: "window.find",
-        label: "find in this board",
-        run: () => actions.enterFind(),
-      },
-      keys: [sequence(key(" "), key("/"))],
     },
     ...(actions.toggleHistory === undefined
       ? []

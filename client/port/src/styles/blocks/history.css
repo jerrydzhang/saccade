@@ -1,0 +1,106 @@
+/* History: light is news. The parts a revision changed are lit with
+ * their word diff; every other part rests. The commit that landed it
+ * reads whole: in a card in the board's margin, or in a footer at the
+ * reading width when the window has no margin.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+
+/* the words a revision added and removed (t-49) */
+.port-diff-ins {
+  color: var(--port-diff-added);
+  background: var(--port-diff-added-background);
+  text-decoration: none;
+  border-radius: 2px;
+}
+.port-diff-del {
+  color: var(--port-diff-removed);
+  background: var(--port-diff-removed-background);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  border-radius: 2px;
+}
+/* a group the revision added or removed: its title as its words */
+.port-board-view .chg-add > .group-title {
+  color: var(--port-diff-added);
+}
+.port-board-view .chg-del > .group-title {
+  color: var(--port-diff-removed);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* the rest: every part neither changed nor inside a changed part */
+.port-board[data-port-history] .port-board-view
+  :is(.block-text, .block-annotation, .block-figure, .block-unknown, .block-group > .group-title, .block-incorporation > .provenance):not(
+    [class*="chg-"],
+    [class*="chg-"] *
+  ) {
+  opacity: var(--port-history-rest-opacity);
+}
+
+/* The margin: the aside spans the board's height beside the sheet;
+ * its card sticks to the view's top while the board scrolls. The
+ * refusal takes the same place and form. */
+.port-history {
+  position: absolute;
+  top: 1.25rem;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  width: var(--port-margin-width);
+  font-family: var(--port-font-text);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+.port-history-card {
+  position: sticky;
+  top: 1.25rem;
+  box-sizing: border-box;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  padding: 1rem 1.15rem 1.1rem;
+  background: var(--port-float-background);
+  color: var(--port-float-ink);
+  border-radius: var(--port-radius);
+}
+.port-history-head {
+  color: var(--port-color-faint);
+  font-size: 0.875em;
+}
+.port-history-head + .port-history-message {
+  margin-top: 0.45rem;
+}
+.port-history-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* No margin: the footer, stuck to the bottom of the content area and
+ * last in the board's flow, so the board's scroll ends above it and no
+ * text hides under it. The message at the reading width, centred with
+ * the board's column, whole, wrapping and growing as it needs. */
+@container port-board (max-width: 77rem) {
+  .port-history {
+    position: sticky;
+    top: auto;
+    bottom: 0;
+    right: auto;
+    z-index: 1;
+    width: auto;
+    margin: 0 -1.25rem -1.25rem;
+    padding: 0.85rem 2.75rem 1rem;
+    background: var(--port-color-background);
+    font-size: var(--port-text-size);
+  }
+  .port-history-card {
+    position: static;
+    max-width: calc(var(--port-measure) * var(--port-reading-zoom) * var(--port-reading-width));
+    max-height: 60vh;
+    margin: 0 auto;
+    padding: 0;
+    background: transparent;
+    color: var(--port-color-ink);
+    border-radius: 0;
+  }
+  .port-history-message {
+    font-size: 0.94em;
+  }
+}

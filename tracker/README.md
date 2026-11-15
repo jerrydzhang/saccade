@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.7"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.8"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -194,10 +194,12 @@ nothing writes through `/view/v1`.
   the view grammar majors and board grammar range, and the page
   families), `agents` (the registered native sessions: one group per
   session with its recorded name when it carries one, its terminal
-  address, harness, owned tasks, the workspace
+  address, harness, owned tasks, its open tasks (the owned ones still
+  open or offered, present whenever owned tasks are), the workspace
   derived from the saved session's own header, and the session's last
   board commit from the scope recorded on each commit; waiting wakes on
-  the registration family, the namings, the claims and the commits), `tasks` (the
+  the registration family, the namings, the claims, the accepts,
+  cancels and reopens, and the commits), `tasks` (the
   pipeline: one table per recorded state - waiting, in flight,
   awaiting judgment, concluded last 24h - each row task, title,
   agents, latest commit, latest revision (rN, the revision that commit

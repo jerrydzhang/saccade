@@ -147,3 +147,25 @@ export function taskRowOf(model: TasksPageModel, part: string): TaskRow | undefi
   }
   return undefined;
 }
+
+/** The state a pipeline stage mirrors, by the stage's title as the
+ * tracker's pipeline page names it (tracker/src/serve/pages.rs): its
+ * title takes that state's hue (t-59). Null for a stage it does not
+ * know. */
+export function stageStateOf(title: string): string | null {
+  if (title === "waiting") return "idle";
+  if (title === "in flight") return "working";
+  if (title === "awaiting judgment") return "blocked";
+  if (title.startsWith("concluded")) return "done";
+  return null;
+}
+
+/** A commit as the list names it: its first seven characters. */
+export function shortHash(commit: string): string {
+  return commit.slice(0, 7);
+}
+
+/** The agents a row's agents cell names, one per word. */
+export function rowAgentsOf(row: TaskRow): string[] {
+  return row.agents.split(/[\s,]+/).filter((agent) => agent.length > 0);
+}

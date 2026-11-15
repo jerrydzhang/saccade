@@ -96,6 +96,8 @@ export function createHostMatcher(
         timer = scheduler.schedule(SEQUENCE_TIMEOUT_MS, drain);
         notifyPending();
       } else {
+        // a sequence ended by a stray key leaves no clock running
+        if (matcher.pendingSince() === null) clearTimer();
         notifyPending();
       }
       return resolution;

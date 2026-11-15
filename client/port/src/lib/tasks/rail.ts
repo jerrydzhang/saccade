@@ -86,7 +86,8 @@ export type RailProject = {
   home: boolean;
   /** The host this device reached it at, when registered. */
   host: string | null;
-  /** Herdr's words in t-14's section order, empty sections left out. */
+  /** Herdr's words in importance order (WORD_ORDER), empty sections
+   * left out. */
   groups: { state: string; agents: RailAgent[] }[];
   /** Why this project's agents could not be read, when they could not. */
   problem: string | null;
@@ -95,19 +96,49 @@ export type RailProject = {
 export type Rail = {
   projects: RailProject[];
   /** Agents no tracker registered and no project's repo holds, at the
-   * rail's foot: by word in t-14's order, then label, then address. */
+   * rail's foot: by word in importance order, then label, then
+   * address. */
   unregistered: RailAgent[];
   /** Herdr core unreachable: why, so the human can fix it. */
   herdr: string | null;
 };
 
-/** t-14's sections: error, blocked, working, idle, done; any other
- * word the core sends follows them, alphabetically. */
-export const WORD_ORDER = ["error", "blocked", "working", "idle", "done"] as const;
+/** The words in importance order (t-59, "The language so far"):
+ * error, blocked, done, working, idle; any other word the core sends
+ * follows them, alphabetically; an agent with no word comes last. */
+export const WORD_ORDER = ["error", "blocked", "done", "working", "idle"] as const;
 
 function wordRank(state: string): number {
+  if (state === "") return WORD_ORDER.length + 1;
   const index = (WORD_ORDER as readonly string[]).indexOf(state);
   return index === -1 ? WORD_ORDER.length : index;
+}
+
+/** A word list's agents as runs of one word, in the list's own order:
+ * the foot group's headings, as a project's groups are. */
+export function wordRunsOf(agents: readonly RailAgent[]): { state: string; agents: RailAgent[] }[] {
+  const out: { state: string; agents: RailAgent[] }[] = [];
+  for (const agent of agents) {
+    const last = out[out.length - 1];
+    if (last !== undefined && last.state === agent.state) last.agents.push(agent);
+    else out.push({ state: agent.state, agents: [agent] });
+  }
+  return out;
+}
+
+/** The live word of each registered agent the rail shows under the
+ * shown project, by incarnation: the pipeline marks a row's agents
+ * with it. An agent with no word is absent. */
+export function wordsByIncarnationOf(rail: Rail): Map<string, string> {
+  const out = new Map<string, string>();
+  const project = rail.projects.find((entry) => entry.current);
+  for (const group of project?.groups ?? []) {
+    if (group.state === "") continue;
+    for (const agent of group.agents) {
+      if (agent.incarnation !== null) out.set(agent.incarnation, group.state);
+    }
+  }
+  return out;
 }
 
 /** The incarnations an agents page lists: one group per incarnation,
@@ -124,7 +155,13 @@ export function agentFactsOf(page: ViewPage): AgentFacts[] {
     };
     const incarnation = fact("incarnation") ?? part.location ?? null;
     if (incarnation === null) continue;
-    const tasks = fact("tasks");
+    // the tasks a session is still answerable for: the page's "open
+    // tasks" (owned and open or offered; sac 0.20.8), else - from a
+    // tracker that predates it - every owned task. Ownership outlives a
+    // conclusion, so the bare "tasks" fact keeps concluded ones.
+    const owned = fact("tasks");
+    const open = fact("open tasks");
+    const tasks = open ?? owned;
     out.push({
       incarnation,
       name: fact("name"),

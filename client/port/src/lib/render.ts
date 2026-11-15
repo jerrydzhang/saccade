@@ -231,19 +231,20 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
     }
     case "incorporation": {
       const div = el("div", { class: "block block-incorporation" });
-      const select = block.source.select ? ` select ${block.source.select.join("/")}` : "";
-      // The citation names its source as t-N@rK, the revision read
-      // straight from the authored number; hydration turns it into a
-      // link to that revision. The SELECT path rides the span as an
-      // attribute, never as display text alone: hydration's link
+      // The source line names the citation once, t-N@rK, the revision
+      // read straight from the authored number; hydration turns it
+      // into a link to that revision. The SELECT path rides the span
+      // as an attribute, never as display text: hydration's link
       // carries it (data-cite-select) so the citation activation can
       // open anchored at the named part - without it the open is
       // unanchored and a fold on the destination survives the arrival
-      // (the S08 live finding).
+      // (the S08 live finding). The line's title carries it for the
+      // reader who asks.
+      const select = block.source.select && block.source.select.length > 0 ? block.source.select.join(" ") : null;
       div.append(
         el(
           "p",
-          { class: "provenance" },
+          { class: "provenance", ...(select !== null ? { title: `select ${select}` } : {}) },
           "incorporates ",
           el(
             "span",
@@ -251,10 +252,8 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
               class: "citation",
               ...citationAttributes(block.source),
             },
-            block.source.task,
+            `${block.source.task}@r${block.source.revision}`,
           ),
-          el("span", { class: "provenance-hash" }, ` @r${block.source.revision}`),
-          ...(select ? [el("span", {}, select)] : []),
         ),
       );
       let childCounter = 0;

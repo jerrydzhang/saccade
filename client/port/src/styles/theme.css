@@ -1,47 +1,50 @@
-/* The port's theme overlay (t-36 r93/r94): the ONE injection point
- * for the design language. This file only ASSIGNS token values on
- * :root - no selectors, no component rules, no !important. Removing
- * this file (and its import in main.ts) restores the placement-only
- * base exactly; replacing it swaps the whole language. The values are
- * the round-16 prototype's compiled tokens (saccade-mockups-r16.html,
- * provenance t-22@r3), transcribed - the visual judgment is deferred
- * to vision-capable review per r94; every value here is reviewable.
- *
- * The instrument's own token block, extracted verbatim:
- * fonts JetBrains Mono (UI) / Source Serif 4 (world) / Inter (heads);
- * app-bg #0d0f13; inks #d6dae2 / #8b93a3 / #5b6372; accent #4c8dff;
- * selection rgba(76,141,255,.28); lines rgba(255,255,255,.09);
- * radii 3px/5px; the paper world #f4f1ea.
- */
+/* The language (t-59, "The language so far"): the ONE place token
+ * values are chosen. This file only ASSIGNS tokens - a light :root and
+ * a dark :root[data-theme="dark"], nothing else (tests/theme.test.ts).
+ * Light is warm paper; dark is the human's Mountain (Boosted) base16
+ * scheme, its meaning colours raised in chroma with their hues kept so
+ * states and the diff stay apart. The accent is pale teal (base0C),
+ * the one hue no state uses. */
 
 :root {
-  /* type: the prototype's stack, its own fallbacks */
-  --port-font-sans: Inter, system-ui, sans-serif;
-  --port-font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
-  --port-font-world: "Source Serif 4", Georgia, serif;
+  --port-font-ui: "Source Serif 4", Georgia, serif;
+  --port-font-text: "Source Serif 4", Georgia, serif;
+  --port-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  /* color: the r16 dark palette */
-  --port-color-background: #0d0f13;
-  --port-color-ink-strong: #ffffff;
-  --port-color-foreground: #d6dae2;
-  --port-color-muted: #8b93a3;
-  --port-color-faint: #5b6372;
-  --port-color-line: rgba(255, 255, 255, 0.09);
-  --port-color-line-soft: rgba(255, 255, 255, 0.05);
-  --port-color-accent: #4c8dff;
-  --port-color-selection: rgba(76, 141, 255, 0.28);
-  --port-color-hover: rgba(76, 141, 255, 0.13);
+  --port-color-background: #f4efe7;
+  --port-color-ink-strong: #1f1b17;
+  --port-color-ink: #2b2621;
+  --port-color-muted: #6f665c;
+  --port-color-faint: #9a9084;
+  --port-color-line: #e6dfd3;
+  --port-color-accent: #1f6b6e;
+  --port-color-hover: #ebe2d3;
+  --port-color-selection: #e2d5c0;
+  --port-color-error: #b0283a;
 
-  /* the world: the paper the board's prose sits on (r16's w-*) */
-  --port-world-background: #f4f1ea;
-  --port-world-foreground: #1c1b19;
+  --port-color-paper: #fbf8f3;
+  --port-color-paper-ink: #25201b;
+  --port-paper-shadow: 0 1px 3px rgba(60, 40, 20, 0.08);
+  --port-figure-backdrop: #ffffff;
 
-  /* code on the paper (t-40; not in r16, chosen for this pass): a
-   * slightly deeper paper with a hairline, and a light IDE palette,
-   * every colour at least 4.5:1 on the code surface */
-  --port-code-background: #ebe7dd;
+  --port-float-background: #fffdf9;
+  --port-float-ink: #25201b;
+  --port-float-shadow: 0 10px 30px rgba(60, 40, 20, 0.14), 0 1px 3px rgba(60, 40, 20, 0.1);
+
+  --port-label-background: #25201b;
+  --port-label-ink: #fbf8f3;
+
+  --port-state-working: #3f8a3a;
+  --port-state-blocked: #c0641c;
+  --port-state-done: #4a6aa8;
+  --port-state-idle: #9a9084;
+  --port-state-error: #b0283a;
+
+  --port-history-rest-opacity: 0.42;
+
+  --port-code-background: #f2ede4;
   --port-code-foreground: #24221e;
-  --port-code-line: rgba(28, 27, 25, 0.08);
+  --port-code-line: transparent;
   --port-code-keyword: #8a2f8f;
   --port-code-string: #3b6e23;
   --port-code-number: #9a4f00;
@@ -52,15 +55,69 @@
   --port-code-meta: #5d5591;
   --port-code-addition: #2f6a1d;
   --port-code-deletion: #a32a2a;
-  --port-diff-added: #2f6b1f;
-  --port-diff-added-background: rgba(59, 110, 35, 0.14);
-  --port-diff-removed: #9b2335;
-  --port-diff-removed-background: rgba(155, 35, 53, 0.12);
 
-  /* space and line: the prototype's world rhythm */
-  --port-space-strip: 0.25rem 0.75rem;
+  --port-diff-added: #245f1f;
+  --port-diff-added-background: rgba(63, 138, 58, 0.16);
+  --port-diff-removed: #9a2420;
+  --port-diff-removed-background: rgba(190, 50, 40, 0.13);
+
+  --port-space-strip: 0.4rem 1.4rem;
   --port-space-block: 0.85rem 0;
-  --port-measure: 44rem;
+  --port-measure: 36em;
   --port-world-leading: 1.62;
-  --port-radius: 3px;
+  --port-radius: 6px;
+
+  /* the board */
+  --port-text-size: 16.5px;
+  --port-sheet-radius: 10px;
+  --port-margin-width: 20rem;
+}
+
+:root[data-theme="dark"] {
+  --port-color-background: #100f0e;
+  --port-color-ink-strong: #fafafa;
+  --port-color-ink: #d4ceca;
+  --port-color-muted: #a69e99;
+  --port-color-faint: #6d6562;
+  --port-color-line: #292624;
+  --port-color-accent: #a2c3c4;
+  --port-color-hover: #2e2a27;
+  --port-color-selection: #3a3431;
+  --port-color-error: #f08a94;
+
+  --port-color-paper: #1b1918;
+  --port-color-paper-ink: #e8e2dd;
+  --port-paper-shadow: none;
+  --port-figure-backdrop: #e8e2dd;
+
+  --port-float-background: #151413;
+  --port-float-ink: #ece6e1;
+  --port-float-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  --port-label-background: #a2c3c4;
+  --port-label-ink: #100f0e;
+
+  --port-state-working: #7fcf8a;
+  --port-state-blocked: #e9b56a;
+  --port-state-done: #9db4e8;
+  --port-state-idle: #8a817c;
+  --port-state-error: #f08a94;
+
+  --port-code-background: #232120;
+  --port-code-foreground: #e8e2dd;
+  --port-code-keyword: #d6a6d6;
+  --port-code-string: #a8d4a0;
+  --port-code-number: #e5c08a;
+  --port-code-comment: #8a817c;
+  --port-code-title: #a9c2f0;
+  --port-code-type: #a2d0d2;
+  --port-code-attribute: #e8a89a;
+  --port-code-meta: #bab4e0;
+  --port-code-addition: #9be0a2;
+  --port-code-deletion: #f0a0a6;
+
+  --port-diff-added: #9be0a2;
+  --port-diff-added-background: rgba(110, 200, 120, 0.18);
+  --port-diff-removed: #f0a0a6;
+  --port-diff-removed-background: rgba(230, 100, 110, 0.18);
 }
