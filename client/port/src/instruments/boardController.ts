@@ -50,6 +50,8 @@ import { createFollow } from "../lib/board/follow.ts";
 import type { ReadingLayoutChange } from "../lib/board/reading-layout.ts";
 import { createFindInteraction, type FindView } from "../lib/find/interaction.ts";
 import { findUnitsOf } from "../lib/find/units.ts";
+import { createExpansions, type Expansion } from "../lib/board/expansion.ts";
+export type { Expansion } from "../lib/board/expansion.ts";
 export type { FindView } from "../lib/find/interaction.ts";
 import type { HydrationHost } from "../lib/board/hydrate.ts";
 import { formatLocation, instrumentPath } from "../lib/location.ts";
@@ -146,6 +148,14 @@ export interface BoardUI extends HydrationHost {
   toggleFold(part: string): void;
   /** Whether a group part path is folded. */
   isFolded(part: string): boolean;
+  /** Expand or collapse an incorporation part (t-58). */
+  toggleExpansion(part: string): void;
+  /** The shown board's expanded incorporations. */
+  expansions(): readonly Expansion[];
+  subscribeExpansions(observer: (expansions: readonly Expansion[]) => void): () => void;
+  /** A plain click on an incorporation's source line: its first act
+   * (expand or collapse) through the shared menu path. */
+  incorporationPrimaryClick(part: string): void;
   /** Open the act menu for a target (selection or right-click). */
   openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
   /** A plain click on a citation runs its FIRST act directly - the
@@ -263,6 +273,28 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
   });
 
+  // Incorporation expansions (t-58): buffer view state beside the
+  // folds, keyed by part and source; the cited revision is read on
+  // the shown board's machine and decoded like any board.
+  const expansionObservers = new Set<(expansions: readonly Expansion[]) => void>();
+  const expansions = createExpansions({
+    async load(machine, path) {
+      const loaded = await sourceFor(machine).loadText({ machine, path });
+      const decoded = decodeBoard(loaded.text);
+      if (decoded.status !== "ok") throw new Error(`${path} does not decode`);
+      return { board: decoded.board, location: loaded.location };
+    },
+    machine: () => scope.frame().resolved?.machine ?? null,
+    sourceAt(part) {
+      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "incorporation");
+      return target?.source ?? null;
+    },
+    onChange() {
+      const view = expansions.view();
+      for (const observer of [...expansionObservers]) observer(view);
+    },
+  });
+
   const host: BoardUI = {
     displayedGeneration,
     findView: find.view,
@@ -304,6 +336,25 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     isFolded(part) {
       return foldedSet.has(part);
+    },
+    toggleExpansion(part) {
+      expansions.toggle(part);
+    },
+    expansions() {
+      return expansions.view();
+    },
+    subscribeExpansions(observer) {
+      expansionObservers.add(observer);
+      observer(expansions.view());
+      return () => {
+        expansionObservers.delete(observer);
+      };
+    },
+    incorporationPrimaryClick(part) {
+      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "incorporation");
+      if (target === undefined) return;
+      boardMenu.session.primaryClick({ kind: "incorporation", label: target.text, part });
+      notifyMenu();
     },
     openMenuFor(target, at) {
       boardMenu.openFor(target, at);
@@ -866,6 +917,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   const boardMenu = createBoardMenu({
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),
+    isExpanded: (part) => expansions.isExpanded(part),
+    toggleExpansion: (part) => expansions.toggle(part),
     referenceOf: (part) => {
       const target = scope.frame().targets.find((entry) => entry.part === part);
       if (target === undefined || target.source === undefined) return null;

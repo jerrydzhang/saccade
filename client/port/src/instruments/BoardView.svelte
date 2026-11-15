@@ -14,6 +14,7 @@ import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
   import { paintDiffMarks } from "../lib/board/history-diff.ts";
+  import { paintExpansions } from "../lib/board/expansion-paint.ts";
   import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
   let { content, controller }: { content: BoardData; controller: BoardUI } = $props();
@@ -200,6 +201,31 @@ import { partMeasureIn } from "../lib/select/measure.ts";
       if (folded.has(part)) group.setAttribute("data-port-folded", "");
       else group.removeAttribute("data-port-folded");
     }
+  });
+
+  // t-58: the expanded incorporations, painted onto the board as it
+  // stands (as a fold): after every render and every toggle, each
+  // fresh cited container hydrated against the cited revision.
+  let expansionChanges = $state(0);
+  $effect(() => controller.subscribeExpansions(() => {
+    expansionChanges += 1;
+  }));
+  $effect(() => {
+    const element = host;
+    void renders;
+    void expansionChanges;
+    if (element === null) return;
+    untrack(() => {
+      const generation = content.generation;
+      paintExpansions(
+        element,
+        controller.expansions(),
+        () => ({ unitIndex: new Map(), onDiagnostic: (diagnostic) => renderNotes.push(diagnostic.message) }),
+        (container, expansion) => {
+          if (expansion.location !== null) void hydrate(container, controller, expansion.location, generation, []);
+        },
+      );
+    });
   });
 
   // D2: the match marks on the matched TEXT (lib/find/marks.ts): a

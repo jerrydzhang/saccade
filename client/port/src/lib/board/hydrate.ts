@@ -53,6 +53,20 @@ export interface HydrationHost {
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
   /** A plain click on a prose ref: its first act (follow here). */
   refPrimaryClick(part: string): void;
+  /** A plain click on an incorporation's source line (off its
+   * citation link): its first act, expand or collapse (t-58). */
+  incorporationPrimaryClick?(part: string): void;
+}
+
+/** The elements of `container` matching `selector` that it owns: an
+ * expanded incorporation's cited components (.incorporation-cited)
+ * hydrate on their own, against the cited revision's location, so a
+ * board's hydration never reaches into them (t-58). */
+function ownAll(container: HTMLElement, selector: string): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter((node) => {
+    const cited = node.closest(".incorporation-cited");
+    return cited === null || cited === container || !container.contains(cited);
+  });
 }
 
 export async function hydrate(
@@ -64,19 +78,19 @@ export async function hydrate(
 ): Promise<RenderOutcome[]> {
   const stale = (): boolean => host.displayedGeneration() !== generation;
 
-  const mathPending = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="math"]'));
+  const mathPending = ownAll(container, '[data-pending="math"]');
   for (const span of mathPending) {
     await hydrateMath(span, collected);
     if (stale()) return collected;
   }
 
-  const mermaidPending = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="mermaid"]'));
+  const mermaidPending = ownAll(container, '[data-pending="mermaid"]');
   for (const div of mermaidPending) {
     await hydrateMermaid(div, collected, host);
     if (stale()) return collected;
   }
 
-  const figures = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="figure"]'));
+  const figures = ownAll(container, '[data-pending="figure"]');
   // the figures load SIX at a time (lib/board/pool.ts), never one round
   // trip after another; each figure's outcome keeps its document place
   const figureOutcomes: RenderOutcome[][] = figures.map(() => []);
@@ -87,16 +101,41 @@ export async function hydrate(
   if (stale()) return collected;
   for (const outcomes of figureOutcomes) collected.push(...outcomes);
 
-  const images = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="image"]'));
+  const images = ownAll(container, '[data-pending="image"]');
   for (const span of images) {
     await hydrateImage(span, host, location, collected);
     if (stale()) return collected;
   }
 
+  hydrateIncorporations(container, host);
   await hydrateCitations(container, host, location);
   if (stale()) return collected;
 
   return collected;
+}
+
+/** A plain click on an incorporation's own chrome - its source line,
+ * its edges, never a part inside it - runs its first act (expand or
+ * collapse, t-58) through the same session path the menu runs. The
+ * citation link, the receiving text and the cited components are
+ * parts of their own and keep their own clicks; the right-gesture
+ * guard as figures. */
+function hydrateIncorporations(container: HTMLElement, host: HydrationHost): void {
+  const act = host.incorporationPrimaryClick;
+  if (act === undefined) return;
+  for (const block of ownAll(container, ".block-incorporation[data-port-part]")) {
+    const part = block.getAttribute("data-port-part")!;
+    let contextmenuAt = 0;
+    block.addEventListener("contextmenu", () => {
+      contextmenuAt = performance.now();
+    });
+    block.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement | null)?.closest?.("[data-port-part]") !== block) return;
+      if (event.button !== 0 || event.shiftKey) return;
+      if (performance.now() - contextmenuAt < 250) return;
+      act.call(host, part);
+    });
+  }
 }
 
 /** The incorporation citations carry their revision number in the
@@ -111,7 +150,7 @@ async function hydrateCitations(
   const source = sourceFor(location.machine);
   if (!(source instanceof TrackerSource)) return;
   const spans = Array.from(
-    container.querySelectorAll<HTMLElement>(".citation[data-cite-task][data-cite-revision]"),
+    ownAll(container, ".citation[data-cite-task][data-cite-revision]"),
   );
   for (const span of spans) {
     const task = span.dataset.citeTask ?? "";
@@ -166,7 +205,7 @@ async function hydrateCitations(
 
   // a prose ref's plain click runs its first act (follow here), as the
   // prototype's primary on a ref; the right-gesture guard as citations
-  for (const ref of Array.from(container.querySelectorAll<HTMLElement>(".port-ref[data-port-part]"))) {
+  for (const ref of ownAll(container, ".port-ref[data-port-part]")) {
     const part = ref.getAttribute("data-port-part")!;
     let refContextmenuAt = 0;
     ref.addEventListener("contextmenu", () => {
@@ -188,7 +227,7 @@ async function hydrateCitations(
   // 4) through the same shared menu path; the right-gesture guard
   // applies identically (the synthesized post-contextmenu click never
   // enlarges)
-  const figureBlocks = Array.from(container.querySelectorAll<HTMLElement>(".block-figure"));
+  const figureBlocks = ownAll(container, ".block-figure");
   for (const block of figureBlocks) {
     const part = block.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
     if (part === null) continue;

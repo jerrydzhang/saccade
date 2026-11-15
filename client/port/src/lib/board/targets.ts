@@ -70,6 +70,8 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       if (block.kind === "text" || block.kind === "annotation") text = block.markdown;
       else if (block.kind === "group") text = block.title ?? "";
       else if (block.kind === "figure") text = block.caption;
+      // an incorporation reads as its source line (its menu head)
+      else if (block.kind === "incorporation") text = `incorporates ${block.source.task}@r${block.source.revision}`;
       const base = { part, kind: block.kind as BoardTargetKind, text };
       out.push(
         block.kind === "incorporation"
