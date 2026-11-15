@@ -11,7 +11,8 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  overflow: hidden;
+  /* a block's chip stands in the margin, left of the text column */
+  overflow: visible;
 }
 .port-label-chip {
   position: absolute;
@@ -25,15 +26,32 @@
   line-height: 1;
   white-space: nowrap;
 }
-/* the anchor is the chip's right edge: a block's chip stands in the
- * margin, level with the block's top; an inline target's stands just
- * before it, centred on its line; "inside" keeps the anchor as the
- * chip's top-left */
+/* the anchor: a block's chip has its right edge there, centred on the
+ * block's first line; an inline target's has its left edge there, in
+ * the room its line reserves, centred on the line; so does a block's in
+ * the indent select mode gives a block with no margin */
 .port-label-chip[data-port-label-side="margin"] {
-  transform: translateX(-100%);
-}
-.port-label-chip[data-port-label-side="before"] {
   transform: translate(-100%, -50%);
+}
+.port-label-chip[data-port-label-side="inline"],
+.port-label-chip[data-port-label-side="inside"] {
+  transform: translateY(-50%);
+}
+/* select mode's room for an inline target's chip (lib/select/measure.ts
+ * reserveInlineRoom): an invisible stamp of the same label, just before
+ * the target in its line, which the painted chip covers exactly */
+[data-port-label-room]::before {
+  content: attr(data-port-label-room);
+  display: inline-block;
+  visibility: hidden;
+  margin-right: 0.3em;
+  padding: 0.1875rem 0.375rem;
+  font-family: var(--port-font-mono);
+  font-size: var(--port-label-size);
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  text-indent: 0;
 }
 /* the typed part of a label chip (the prototype's hintKey span.typed) */
 .port-label-typed {

@@ -7,7 +7,7 @@ import { test } from "vitest";
 
 import { CHIP_GAP, CHIP_MARGIN_ROOM, chipPlacements, estimatedChipSize, isWithinHost } from "../src/lib/select/overlay.ts";
 
-test("a block's chip sits in the margin to its left, level with its top", () => {
+test("a block's chip sits in the margin to its left, centred on its first line", () => {
   const placements = chipPlacements(
     [
       { part: "/content/0", label: "A" },
@@ -15,16 +15,21 @@ test("a block's chip sits in the margin to its left, level with its top", () => 
     ],
     (part) =>
       part === "/content/0"
-        ? { left: 120, top: 340, width: 500, height: 60 }
+        ? { left: 0, top: 340, width: 500, height: 30, room: 400 }
         : { left: 48, top: 11279, width: 500, height: 30 },
   );
   assert.deepEqual(placements, [
-    { part: "/content/0", label: "A", left: 120 - CHIP_GAP, top: 340, side: "margin" },
-    { part: "/content/3", label: "S", left: 48 - CHIP_GAP, top: 11279, side: "margin" },
+    { part: "/content/0", label: "A", left: -CHIP_GAP, top: 355, side: "margin" },
+    { part: "/content/3", label: "S", left: 48 - CHIP_GAP, top: 11294, side: "margin" },
   ]);
 });
 
-test("an inline target's chip stands just before it, centred on its line - its text stays clear", () => {
+test("the margin is the room on screen, not inside the host: a column at the host's edge still has one", () => {
+  const [placement] = chipPlacements([{ part: "/content/0", label: "A" }], () => ({ left: 0, top: 10, room: 380 }));
+  assert.equal(placement!.side, "margin", "the sheet's margin left of the column is room");
+});
+
+test("an inline target's chip stands in the room its line reserves before it, centred on its line", () => {
   const [placement] = chipPlacements([{ part: "/content/2/ref/0", label: "D" }], () => ({
     left: 300,
     top: 400,
@@ -32,14 +37,17 @@ test("an inline target's chip stands just before it, centred on its line - its t
     height: 20,
     inline: true,
   }));
-  assert.equal(placement!.side, "before");
-  assert.ok(placement!.left < 300, "the chip's right edge is left of the link's first character");
-  assert.equal(placement!.top, 410, "centred on the link's line");
+  assert.deepEqual(placement, { part: "/content/2/ref/0", label: "D", left: 300, top: 410, side: "inline" });
 });
 
-test("a block with no margin to stand in takes the chip inside its top-left corner", () => {
-  const [placement] = chipPlacements([{ part: "/row", label: "A" }], () => ({ left: CHIP_MARGIN_ROOM - 1, top: 10 }));
-  assert.deepEqual(placement, { part: "/row", label: "A", left: CHIP_MARGIN_ROOM - 1, top: 10, side: "inside" });
+test("a block with no margin to stand in holds the chip inside, in the indent select mode gives it", () => {
+  const [placement] = chipPlacements([{ part: "/row", label: "A" }], () => ({
+    left: 0,
+    top: 10,
+    height: 20,
+    room: CHIP_MARGIN_ROOM - 1,
+  }));
+  assert.deepEqual(placement, { part: "/row", label: "A", left: 0, top: 20, side: "inside" });
 });
 
 test("an unmeasurable part gets no chip - a label over nothing is a lie", () => {
@@ -77,21 +85,15 @@ test("F3's arithmetic caught as a visibility failure: a chip placed a content-he
   );
 });
 
-test("a link that opens its block keeps the nearest chip; the block's steps further into the margin", () => {
-  const boxes: Record<string, { left: number; top: number; width: number; height: number; inline?: boolean }> = {
-    "/content/2": { left: 120, top: 200, width: 500, height: 52 },
-    "/content/2/ref/0": { left: 120, top: 203, width: 24, height: 20, inline: true },
-  };
+test("two margin chips on one line stand side by side, the later further out", () => {
   const placements = chipPlacements(
     [
       { part: "/content/2", label: "J" },
-      { part: "/content/2/ref/0", label: "K" },
+      { part: "/content/2/content/0", label: "K" },
     ],
-    (part) => boxes[part] ?? null,
+    () => ({ left: 120, top: 200, width: 500, height: 30 }),
   );
-  assert.deepEqual(placements.map((entry) => entry.part), ["/content/2", "/content/2/ref/0"], "the input order holds");
-  const [block, link] = placements;
-  assert.equal(link!.left, 120 - CHIP_GAP / 2, "the link's chip stands just before it");
-  const width = estimatedChipSize("K").width;
-  assert.ok(block!.left <= link!.left - width, "the block's chip clears the link's");
+  const [group, block] = placements;
+  assert.equal(group!.left, 120 - CHIP_GAP);
+  assert.ok(block!.left <= group!.left - estimatedChipSize("J").width, "the second clears the first");
 });
