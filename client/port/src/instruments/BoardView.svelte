@@ -208,6 +208,10 @@ import { partMeasureIn } from "../lib/select/measure.ts";
   // stands (as a fold): after every render and every toggle, each
   // fresh cited container hydrated against the cited revision.
   let expansionChanges = $state(0);
+  let historyRefusal: string | null = $state(null);
+  $effect(() => controller.subscribeHistoryRefusal((next) => {
+    historyRefusal = next;
+  }));
   $effect(() => controller.subscribeExpansions(() => {
     expansionChanges += 1;
   }));
@@ -270,6 +274,13 @@ import { partMeasureIn } from "../lib/select/measure.ts";
   </div>
 {/if}
 <div class="port-board-stage">
+  {#if historyRefusal !== null && !content.history}
+    <aside class="port-history" data-port-control="history-refusal" aria-label="history">
+      <div class="port-history-card">
+        <div class="port-history-message">{historyRefusal}</div>
+      </div>
+    </aside>
+  {/if}
   {#if content.history}
     <!-- the aside spans the board's height; its card sticks to the
     top of the view, so the commit message reads beside the change

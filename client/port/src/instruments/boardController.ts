@@ -157,6 +157,9 @@ export interface BoardUI extends HydrationHost {
   /** The shown board's expanded incorporations. */
   expansions(): readonly Expansion[];
   subscribeExpansions(observer: (expansions: readonly Expansion[]) => void): () => void;
+  /** Why history mode would not open, shown in its card's place until
+   * the next open or toggle; null when there is nothing to say. */
+  subscribeHistoryRefusal(observer: (refusal: string | null) => void): () => void;
   /** A plain click on an incorporation's source line: its first act
    * (expand or collapse) through the shared menu path. */
   incorporationPrimaryClick(part: string): void;
@@ -289,6 +292,15 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // folds, keyed by part and source; the cited revision is read on
   // the shown board's machine and decoded like any board.
   const expansionObservers = new Set<(expansions: readonly Expansion[]) => void>();
+  // history's refusal, shown where its card would be: a console line
+  // alone read as a flicker (the human, 2026-11-14)
+  const refusalObservers = new Set<(refusal: string | null) => void>();
+  let historyRefusal: string | null = null;
+  function setHistoryRefusal(next: string | null): void {
+    if (historyRefusal === next) return;
+    historyRefusal = next;
+    for (const observer of [...refusalObservers]) observer(next);
+  }
   const expansions = createExpansions({
     async load(machine, path) {
       const loaded = await sourceFor(machine).loadText({ machine, path });
@@ -354,6 +366,13 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     expansions() {
       return expansions.view();
+    },
+    subscribeHistoryRefusal(observer) {
+      refusalObservers.add(observer);
+      observer(historyRefusal);
+      return () => {
+        refusalObservers.delete(observer);
+      };
     },
     subscribeExpansions(observer) {
       expansionObservers.add(observer);
@@ -750,6 +769,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   }
 
   async function toggleHistory(): Promise<void> {
+    setHistoryRefusal(null);
     if (history !== null) {
       await leaveHistory();
       return;
@@ -774,6 +794,25 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return;
     }
     if (intent !== historyIntent) return;
+    // the tracker must serve component changes (sac 0.20.7): ask once
+    // before entering, so an older tracker refuses in words, never by
+    // opening and falling back
+    if (Number(spec[2]) > 1) {
+      try {
+        await source.revisionChanges(Number(spec[1]), Number(spec[2]) - 1, Number(spec[2]));
+      } catch (error) {
+        if (intent !== historyIntent) return;
+        const message = error instanceof Error ? error.message : String(error);
+        note(message);
+        setHistoryRefusal(
+          /component changes/.test(message)
+            ? "history needs this project's tracker at sac 0.20.7 or later (its diff page serves no component changes)"
+            : `history could not open: ${message}`,
+        );
+        return;
+      }
+      if (intent !== historyIntent) return;
+    }
     const messages = new Map<number, string>();
     let latest = Number(spec[2]);
     for (const entry of page.entries ?? []) {
@@ -1001,8 +1040,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // call load directly and do not end the interaction.
       requestLog.push(formatLocation(address));
       if (requestLog.length > 6) requestLog.shift();
-      // an open from anywhere ends history mode
+      // an open from anywhere ends history mode, and any refusal note
       history = null;
+      setHistoryRefusal(null);
       historyIntent++;
       find.navigateAway();
       // Follow the asked bare address, never the pinned resolution.

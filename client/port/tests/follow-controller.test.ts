@@ -174,3 +174,44 @@ test("a bare board captures bare and its restore follows again; a pinned one sta
   assert.equal(forward.snapshot(), "restored");
   assert.equal(followState().armed, false, "the restored pinned board does not follow");
 });
+
+// An older tracker (before sac 0.20.7) serves no component changes:
+// history refuses in words where its card would stand, and never
+// opens to fall straight back (the human saw only a flicker).
+test("history on a tracker without component changes refuses visibly and stays out of the mode", async () => {
+  const machine = "tracker:history-old-test";
+  const source = sourceFor(machine) as TrackerSource;
+  vi.spyOn(source, "loadText").mockImplementation(async () => ({
+    text: "grammar: 1\ntask: t-5\ncontent:\n  - text: revision 3\n",
+    location: { machine, path: "t-5@r3" },
+  }));
+  vi.spyOn(source, "currentBoardPage").mockImplementation(async () => ({ location: "t-5@r3" }) as never);
+  vi.spyOn(source, "history").mockImplementation(async () => ({ entries: [] }) as never);
+  vi.spyOn(source, "revisionChanges").mockImplementation(async () => {
+    throw new Error("the tracker's diff page for t-5@r2..r3 carries no component changes; move the binaries in step");
+  });
+  let attachment!: InstrumentAttachment<BoardUI, BoardAnchor>;
+  const controller = new SliceBufferHost<BoardData, BoardUI, BoardAnchor>({
+    context: { windowId: "w", bufferId: "b" },
+    viewport: createViewport(),
+    diagnostics: { report: () => "", unexpected: () => "" },
+    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+  });
+  const built = controller.wire();
+  onTestFinished(() => built.host.destroy());
+  await attachment.places.request({ machine, path: "t-5" });
+  let refusal: string | null = null;
+  const off = attachment.presentation.subscribeHistoryRefusal((next) => {
+    refusal = next;
+  });
+  onTestFinished(off);
+  attachment.presentation.toggleHistory();
+  for (let tries = 0; tries < 50 && refusal === null; tries++) await new Promise((resolve) => setImmediate(resolve));
+  assert.match(refusal ?? "", /sac 0\.20\.7/);
+  const state = built.host.snapshot();
+  assert.ok(state.kind === "alive" && state.content.kind === "available");
+  assert.equal((state.content.value.value as BoardData).history ?? null, null, "the mode never opened");
+  // the next open clears the note
+  await attachment.places.request({ machine, path: "t-5" });
+  assert.equal(refusal, null);
+});
