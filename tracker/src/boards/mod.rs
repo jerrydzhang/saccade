@@ -47,6 +47,9 @@ pub enum BoardsFail {
     MissingFigure { path: String },
     /// A referenced figure file exceeds the size bound.
     FigureTooLarge { path: String, size: u64 },
+    /// A text or annotation embeds an image as Markdown (t-23): a
+    /// figure component carries images.
+    MarkdownImage { part: String, src: String },
     /// A commit the effect needed does not exist in the repository.
     MissingCommit { task: String, commit: String },
     /// The committed tree matches its parent's: nothing changed. The
@@ -91,6 +94,7 @@ impl BoardsFail {
             BoardsFail::BoardInvalid(_) => "boards_board_invalid",
             BoardsFail::MissingFigure { .. } => "boards_figure_missing",
             BoardsFail::FigureTooLarge { .. } => "boards_figure_too_large",
+            BoardsFail::MarkdownImage { .. } => "boards_markdown_image",
             BoardsFail::MissingCommit { .. } => "boards_missing_commit",
             BoardsFail::Unchanged { .. } => "boards_unchanged",
             BoardsFail::MissingCommits { .. } => "boards_missing_commit",
@@ -113,6 +117,9 @@ impl BoardsFail {
             BoardsFail::BoardInvalid(error) => error.to_string(),
             BoardsFail::MissingFigure { path } => format!(
                 "the figure {path} is missing from the working directory; place the file there or drop the figure"
+            ),
+            BoardsFail::MarkdownImage { part, src } => format!(
+                "the text at {part} embeds the image {src} as Markdown; a board carries images as figure components (- figure: {{input: figures/<file>, caption: ...}}), which keep a caption and enlarge"
             ),
             BoardsFail::FigureTooLarge { path, size } => format!(
                 "the figure {path} holds {size} bytes; figures stay at most {MAX_FIGURE_BYTES} bytes - shrink it or link an artifact instead"
@@ -258,6 +265,11 @@ impl Boards {
     /// The local validation shared by `board check` and commit.
     pub fn validate_workdir(workdir: &Path) -> Result<Board, BoardsFail> {
         let board = read_working_board(workdir)?;
+        // the write side refuses Markdown images; reading stays lenient,
+        // so an older revision holding one still opens (t-23)
+        if let Some((part, src)) = board_grammar::markdown_images(&board).into_iter().next() {
+            return Err(BoardsFail::MarkdownImage { part, src });
+        }
         for path in board_grammar::figures(&board) {
             let file = workdir.join(&path);
             let meta = std::fs::metadata(&file)
@@ -1481,6 +1493,33 @@ content:
                 "the section was redrawn",
             )
             .expect("a changed figure is a change");
+    }
+
+    #[test]
+    fn a_markdown_image_refuses_naming_the_part_and_the_figure_kind() {
+        let tag = "markdown-image";
+        let store = boards(tag);
+        let dir = workdir(tag, "plinth");
+        write(
+            &dir,
+            BOARD_FILE,
+            b"grammar: 1\ntask: t-4\ncontent:\n  - text: |\n      The section: ![section](figures/plinth-section.png)\n",
+        );
+        let error = Boards::validate_workdir(&dir).expect_err("board check refuses the image");
+        assert_eq!(error.code(), "boards_markdown_image");
+        assert!(error.detail().contains("/content/0"), "{}", error.detail());
+        assert!(error.detail().contains("figure"), "{}", error.detail());
+        let error = store
+            .commit("tone-arm-resonance", &dir, None, "an inline image")
+            .expect_err("commit refuses it too");
+        assert_eq!(error.code(), "boards_markdown_image");
+        // code that shows the syntax is no image
+        write(
+            &dir,
+            BOARD_FILE,
+            b"grammar: 1\ntask: t-4\ncontent:\n  - text: |\n      Write `![alt](src)` for an image elsewhere.\n",
+        );
+        Boards::validate_workdir(&dir).expect("a code span is not an image");
     }
 
     #[test]

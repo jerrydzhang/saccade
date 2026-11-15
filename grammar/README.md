@@ -53,6 +53,11 @@ is refused; a new kind is admitted only by ratification. The five kinds:
 
 `text` holds the component's markdown, dollar math included. Tables and
 Mermaid fenced blocks are ordinary text content, not separate kinds.
+An image is a `figure`, never Markdown: `markdown_images` finds
+`![alt](src)`, `![alt][ref]` and `<img>` in texts and annotations
+(code excluded). Parsing still accepts them, so any revision holding
+one reads; the tracker's write side (`board check`, commit) refuses
+them (t-23).
 
 ### group
 

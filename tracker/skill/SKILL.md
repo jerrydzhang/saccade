@@ -103,7 +103,7 @@ Markdown renderers; the app renders it (client/port/src/lib/render.ts).
 the board tree plus a caption; `incorporation` cites another task's
 revision **by number** with select paths and its own receiving text;
 `annotation` is a review concern placed near what it addresses. The
-file is one YAML document: no anchors, no aliases, no duplicate keys.
+file is one YAML document: no anchors, no aliases, no duplicate keys. Images are `figure` components, never Markdown images: `board check` and commit refuse `![alt](src)` in a text.
 
 The steps: `sac create task "..."`, `sac board edit t-N [dir]`, write
 board.yaml and its figures with your own tools, `sac board check

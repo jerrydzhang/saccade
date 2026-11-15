@@ -3271,6 +3271,7 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         BoardsFail::BoardInvalid(_)
         | BoardsFail::MissingFigure { .. }
         | BoardsFail::FigureTooLarge { .. }
+        | BoardsFail::MarkdownImage { .. }
         | BoardsFail::MissingBase { .. }
         | BoardsFail::BadBase { .. }
         | BoardsFail::InvalidKey { .. }
