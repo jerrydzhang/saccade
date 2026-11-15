@@ -130,9 +130,6 @@ export interface BoardUI extends HydrationHost {
   getSelection(): BoardTarget | null;
   /** The menu's live view; null when closed. */
   subscribeMenu(observer: (view: MenuView | null) => void): () => void;
-  /** Enter find from the window command (space-/): the same entry
-   * the reading context's bare / runs. */
-  enterFind(): void;
   /** space h: enter or leave history mode (t-49). */
   toggleHistory(): void;
   /** The follow state as information (the S15 diagnosis): the
@@ -459,9 +456,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     getSelection() {
       return selection;
-    },
-    enterFind() {
-      if (scope.frame().board != null) find.enter();
     },
     toggleHistory() {
       void toggleHistory();

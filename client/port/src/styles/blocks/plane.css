@@ -184,3 +184,7 @@
   padding: 0.125rem 0;
   min-width: 0;
 }
+/* the add field's focus: its rule takes the accent */
+.port-plane-add input:focus {
+  border-bottom-color: var(--port-color-accent);
+}

@@ -49,3 +49,14 @@ body {
   padding: var(--port-space-block);
   color: var(--port-color-muted);
 }
+
+/* focus, wherever the keyboard lands: the accent, never the platform's
+ * default ring */
+:focus-visible {
+  outline: 2px solid var(--port-color-accent);
+  outline-offset: 2px;
+}
+input:focus,
+input:focus-visible {
+  outline: none;
+}
