@@ -10,8 +10,8 @@
 // data-block-id names belong to its observation surface and are never
 // ported. Hydration plumbing attributes (data-pending, data-unit-* and
 // friends) stay: they are the renderer's own machinery. History change
-// marks (chg-*) keep their hook here; the history diff itself is a later
-// slice, so changeOf reads the (absent) painted mark until then.
+// marks (chg-*) keep their hook here: the history diff
+// (lib/board/history-diff.ts) sets them on the board it hands over.
 
 import type { Root, RootContent, PhrasingContent } from "mdast";
 import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice, displayDelimited } from "./markdown.ts";
@@ -21,9 +21,8 @@ import { diagramPart } from "./board/targets.ts";
 import { refPart, splitRefs } from "./board/refs.ts";
 import { highlightCode } from "./highlight.ts";
 
-/** The history diff's painted change mark on a block. The history mode
- * paints it; until that slice lands, blocks carry no mark. */
-type ChangeMark = "add" | "mod" | "del";
+/** The history diff's change mark on a block (history mode only). */
+type ChangeMark = "add" | "mod" | "del" | "move";
 
 function changeOf(block: Block): ChangeMark | undefined {
   return (block as Block & { change?: ChangeMark }).change;

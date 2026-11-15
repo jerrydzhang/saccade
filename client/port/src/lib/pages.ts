@@ -104,6 +104,15 @@ export type HistoryEntry = {
   refs: HistoryEntryRef[];
 };
 
+/** One component change on the diff page (t-57): what `sac board
+ * diff` names, select paths in the revision each side names. */
+export type PageChange = {
+  change: "added" | "removed" | "changed" | "moved";
+  label: string;
+  from?: string;
+  to?: string;
+};
+
 export type GrammarRange = { min: number; max: number };
 
 /** One page document. The kind names the family ("root", "document",
@@ -128,6 +137,9 @@ export type ViewPage = {
   revision?: number;
   content?: ViewPart[];
   entries?: HistoryEntry[];
+  /** The diff page's component changes; absent on every other page
+   * (and from a tracker older than t-57). */
+  changes?: PageChange[];
 };
 
 /** A refusal document, raised: the code names the refusal, the detail
@@ -281,6 +293,7 @@ export function decodePage(value: unknown): ViewPage {
   const entries = Array.isArray(raw.entries) ? raw.entries : undefined;
   const grammar = asRecord(raw.board_grammar);
   const majors = Array.isArray(raw.view_majors) ? raw.view_majors : undefined;
+  const changes = Array.isArray(raw.changes) ? raw.changes : undefined;
   return {
     view: {
       major: view !== null && typeof view.major === "number" ? view.major : 0,
@@ -337,7 +350,25 @@ export function decodePage(value: unknown): ViewPage {
                 }
               : decodeHistoryEntry(record);
           }),
+    changes: changes === undefined ? undefined : changes.flatMap((entry) => decodeChange(entry)),
   };
+}
+
+const CHANGE_KINDS: readonly PageChange["change"][] = ["added", "removed", "changed", "moved"];
+
+/** One served change, or none when it is not one (a later kind rides
+ * past, never refusing the page). */
+function decodeChange(value: unknown): PageChange[] {
+  const record = asRecord(value);
+  if (record === null) return [];
+  const kind = CHANGE_KINDS.find((known) => known === record.change);
+  if (kind === undefined) return [];
+  const change: PageChange = { change: kind, label: typeof record.label === "string" ? record.label : "" };
+  const from = optionalString(record, "from");
+  const to = optionalString(record, "to");
+  if (from !== undefined) change.from = from;
+  if (to !== undefined) change.to = to;
+  return [change];
 }
 
 /** One page document off the wire: a refusal document raises, any

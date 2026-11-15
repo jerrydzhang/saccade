@@ -83,7 +83,7 @@ export type PortObservation = {
     pinnedRevision: number | null;
     /** History mode (t-49): the revision shown against its
      * predecessor, the newest, the changed parts; null outside it. */
-    history: Readonly<{ revision: number; latest: number; changed: readonly string[]; at: number }> | null;
+    history: Readonly<{ revision: number; latest: number; changed: readonly string[]; at: number; tracked: string | null }> | null;
   }>;
   errors: readonly StructuredIssue[];
   render: readonly RenderOutcome[];
@@ -381,6 +381,7 @@ export function buildReadout(
               latest: frame.history.latest,
               changed: frame.history.changed,
               at: frame.history.at,
+              tracked: frame.history.tracked,
             }
           : null,
     },

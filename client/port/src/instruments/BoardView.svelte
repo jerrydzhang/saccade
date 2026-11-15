@@ -177,6 +177,7 @@ import { partMeasureIn } from "../lib/select/measure.ts";
     element.replaceChildren(container);
     renders += 1;
     controller.reportPresentation({ renders, hydrated });
+    controller.reportRendered(generation);
     const collected: RenderOutcome[] = [];
     void hydrate(container, controller, location, generation, collected).then(
       (outcomes) => {
@@ -278,6 +279,9 @@ import { partMeasureIn } from "../lib/select/measure.ts";
         <div class="port-history-head" data-port-control="history-revision">
           {content.history.task}@r{content.history.revision} of r{content.history.latest} - {content.history.changed.length} changed
         </div>
+        {#if content.history.tracked !== null}
+          <div class="port-history-head" data-port-control="history-tracked">tracking {content.history.trackedLabel}</div>
+        {/if}
         <div class="port-history-message" data-port-control="history-message">{content.history.message}</div>
       </div>
     </aside>

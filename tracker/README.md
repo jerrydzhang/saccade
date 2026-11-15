@@ -208,7 +208,9 @@ nothing writes through `/view/v1`.
   `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
   commits interleaved with decisions in record order; a pinned
   revision cuts the timeline at the commit that landed it),
-  `t-N@rA..rB/diff` (the stored unified diff, one text part),
+  `t-N@rA..rB/diff` (the stored unified diff, one text part, and
+  `changes`: the component changes `sac board diff` names, select
+  paths in the revision each side names - t-57, additive),
   `t-N[@rK]/file/<path>` (raw file bytes, typed by extension), and
   `t-N@rK/content/<select path>` (one pinned component). Only the
   file family answers with bytes; every other answer is a view
