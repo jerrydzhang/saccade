@@ -3,7 +3,6 @@
 //! holds in process.
 
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -268,54 +267,11 @@ async fn the_tier_law_holds_through_http() {
     for command in [
         json!({"cancel_task": {"id": 0, "explanation": "stop"}}),
         json!({"reopen_task": {"id": 0, "explanation": "resume"}}),
-        json!({"bind_root_space": {"space": "spaX", "tab": "tbX"}}),
-        json!({"clear_root_space": {}}),
     ] {
         let (status, body) = post_command(&base_url, &envelope("pi", "agent", command));
         assert_eq!(status, 400);
         assert_eq!(json_of(&body)["error"]["code"], "human_only");
     }
-
-    // the root destination: the human's explicit bind lands, a rebind
-    // replaces, a clear removes - the log keeps every choice
-    let (status, body) = post_command(
-        &base_url,
-        &envelope(
-            "jerry",
-            "human",
-            json!({"bind_root_space": {"space": "spaManual", "tab": "tbManual"}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["records"][0]["kind"], "root_space_bound");
-    let (status, body) = post_command(
-        &base_url,
-        &envelope(
-            "jerry",
-            "human",
-            json!({"bind_root_space": {"space": "spaSecond", "tab": "tbSecond"}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = post_command(
-        &base_url,
-        &envelope("jerry", "human", json!({"clear_root_space": {}})),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["records"][0]["kind"], "root_space_cleared");
-    let (_, records_json) = get_json(&base_url, "/api/v1/records");
-    let records = json_of(&records_json);
-    let roots: Vec<&Value> = records["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|r| r["kind"].as_str().unwrap().starts_with("root_space"))
-        .collect();
-    assert_eq!(
-        roots.len(),
-        3,
-        "bind, rebind, and clear all stand: {roots:?}"
-    );
 
     // system authorship is unrepresentable on the wire
     let (status, body) = post_command(
@@ -3850,7 +3806,7 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
         hc_argv(&db.parent().unwrap().join("hc-bin"), "attach"),
         vec!["t1".to_string()]
     );
-    // exactly one host run carried the launch, and placement was never consulted
+    // exactly one host run carried the launch, and no label was asked
     // the fake logs one word per line; every ask starts with its verb
     let asks = |verb: &str| {
         std::fs::read_to_string(
@@ -3868,7 +3824,7 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
     assert_eq!(asks("label"), 0);
     assert_eq!(asks("ls"), 0);
     assert_eq!(asks("get"), 0);
-    // the json face claims no placement: no space, no tab, no refusal
+    // the json face carries no space, no tab, no refusal
     assert_eq!(launched.get("space"), None);
     assert_eq!(launched.get("tab"), None);
     assert_eq!(launched.get("place_refusal"), None);
@@ -3899,7 +3855,7 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
     assert!(text.contains("the session keeps running"), "{text}");
     assert!(text.contains("hc attach t1"), "{text}");
 
-    // the resumed here face: one get is the liveness ask, no placement asks
+    // the resumed here face: one get is the liveness ask, no label asks
     let here_saved = db.parent().unwrap().join("hereres1.jsonl");
     std::fs::write(
         &here_saved,
@@ -4807,16 +4763,12 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         "{out}"
     );
     assert_eq!(launched["terminal"], "t9", "{out}");
-    // the resumed workspace is an unrecorded directory: the launch
-    // declares no placement and consults no label ask
+    // the launch consults no label ask
     assert_eq!(launched["space"], Value::Null, "{out}");
     assert_eq!(launched["tab"], Value::Null, "{out}");
     assert_eq!(launched["place_refusal"], Value::Null, "{out}");
     let label: Vec<String> = hc_argv(fx.hcs.parent().unwrap(), "label");
-    assert!(
-        label.is_empty(),
-        "no placement ask rides an unrecorded resume: {label:?}"
-    );
+    assert!(label.is_empty(), "no label ask rides a resume: {label:?}");
 
     // the composition rode the host argv: the resume session, its
     // locator, the settled flags
@@ -6197,26 +6149,13 @@ async fn the_task_free_controller_creates_workspaces() {
     );
     assert!(!launched["launch"]["terminal"].as_str().unwrap().is_empty());
     // the provisioned workspace is a recorded birth: the launch
-    // declares its derived pair, one label ask after the address
-    // returns - the app nests the worktree space from its own git facts
-    let provisioned = PathBuf::from(launched["provisioned"]["path"].as_str().unwrap());
-    let expected = saccade::placement::derived(&provisioned);
-    assert_eq!(
-        launched["launch"]["space"],
-        expected.space.as_str(),
-        "{out}"
-    );
-    assert_eq!(launched["launch"]["tab"], expected.tab.as_str(), "{out}");
+    // carries no space, and no label ask rides it
+    assert_eq!(launched["launch"]["space"], Value::Null, "{out}");
+    assert_eq!(launched["launch"]["tab"], Value::Null, "{out}");
     assert_eq!(launched["launch"]["place_refusal"], Value::Null, "{out}");
-    let label = std::fs::read_to_string(home.join("hc-bin").join("argv-label.log")).unwrap();
-    assert!(
-        label.contains(&format!("herdr.space={}", expected.space)),
-        "{label}"
-    );
-    assert!(
-        label.contains(&format!("herdr.tab={}", expected.tab)),
-        "{label}"
-    );
+    let label =
+        std::fs::read_to_string(home.join("hc-bin").join("argv-label.log")).unwrap_or_default();
+    assert!(label.is_empty(), "{label}");
 
     // a failed launch over the standing provision: the birth pointer
     // and path ride the failure face, never a success claim
@@ -6998,14 +6937,13 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
     );
     let reply: Value = serde_json::from_str(&text).expect("the launch face is json");
     assert_eq!(reply["terminal"], "t1", "{text}");
-    // the destination is an unrecorded directory, not the root: the
-    // launch declares no placement, and no label ask rides the launch
+    // no label ask rides the launch
     assert_eq!(reply["space"], Value::Null, "{text}");
     assert_eq!(reply["tab"], Value::Null, "{text}");
     assert_eq!(reply["place_refusal"], Value::Null, "{text}");
     assert!(
         !fake_dir.join("argv-label.log").exists(),
-        "no placement ask rides an unrecorded destination"
+        "no label ask rides the launch"
     );
 
     // the composed argv carries the settled parentage law, the
@@ -7104,65 +7042,6 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
             .map(str::to_string),
         Some("t9".to_string()),
         "the address moved with the relaunch"
-    );
-
-    // a refused placement never fails the launch: the human binds the
-    // root, the door declares the bound pair at the primary checkout,
-    // the host refuses the label ask, the disclosure rides the face,
-    // and the identity still lands
-    let refusing = fake_dir.join("hc-label-refusing");
-    std::fs::write(
-        &refusing,
-        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = label ]; then\n  printf '{\"error\":{\"kind\":\"not_found\",\"message\":\"gone\"}}\\n' >&2\n  exit 3\nfi\nprintf '{\"address\":\"t2\",\"cwd\":\"x\",\"state\":\"live\",\"turn\":0}\\n'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&refusing, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (status, body) = post_command(
-        &url,
-        &envelope(
-            "jerry",
-            "human",
-            json!({"bind_root_space": {"space": "spaBound", "tab": "tbBound"}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    let out = scrubbed(std::process::Command::new(bin))
-        .args(["launch", "--json", "--workspace"])
-        .arg(&dir)
-        .env("SACCADE_SERVER", &url)
-        .env("SACCADE_HERDR", &refusing)
-        .env("SACCADE_PI", &pi)
-        .env("SACCADE_REPO", &dir)
-        .output()
-        .expect("spawn sac");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(
-        out.status.success(),
-        "a refused placement does not fail the launch: {text}{err}"
-    );
-    let reply: Value = serde_json::from_str(&text).expect("the launch face is json");
-    assert_eq!(reply["terminal"], "t2", "{text}");
-    assert_eq!(reply["space"], "spaBound", "{text}");
-    assert_eq!(reply["tab"], "tbBound", "{text}");
-    assert!(
-        reply["place_refusal"]
-            .as_str()
-            .is_some_and(|d| d.contains("gone")),
-        "{text}"
-    );
-    // the second door birth stands beside the first
-    let conn = saccade::db::open_read(&db).unwrap();
-    let world = match saccade::db::load(&conn).unwrap().state {
-        saccade::db::LoadState::Full(world) => world,
-        _ => panic!("the log will not fold"),
-    };
-    assert!(
-        world
-            .incarnations
-            .iter()
-            .any(|(_, ctx)| ctx.incarnation.address() == Some("t2")),
-        "the disclosed launch still birthed its identity"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -7377,319 +7256,6 @@ fn hc_argv_all(bin_dir: &std::path::Path, verb: &str) -> Vec<String> {
         .lines()
         .map(str::to_string)
         .collect()
-}
-
-#[test]
-fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() {
-    let bin = env!("CARGO_BIN_EXE_sac");
-    let db = scratch_db("root-bind");
-    let dir = db.parent().unwrap();
-    let (root, _first, _head) = scratch_repo(dir);
-    // the fake host answers the bind's one get per terminal: tc1
-    // stands in the manual space pair, tc2 is live but unlabeled, and
-    // the run/label verbs serve the placed root launch
-    let fake_dir = dir.join("fake");
-    std::fs::create_dir_all(&fake_dir).unwrap();
-    let fake = fake_dir.join("hc");
-    std::fs::write(
-        &fake,
-        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = get ]; then\n  if [ \"$2\" = tc1 ]; then\n    printf '{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaManual\",\"herdr.tab\":\"tbManual\"}}\\n'\n    exit 0\n  fi\n  if [ \"$2\" = tc3 ]; then\n    printf '{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaSecond\",\"herdr.tab\":\"tbSecond\"}}\\n'\n    exit 0\n  fi\n  printf '{\"state\":\"live\"}\\n'\n  exit 0\nfi\nif [ \"$1\" = label ]; then\n  exit 0\nfi\nprintf '{\"address\":\"t7\",\"cwd\":\"x\",\"state\":\"live\",\"turn\":0}\\n'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let pi = stub_pi(dir);
-    let (url, mut serve) = spawn_serving_subprocess(&db, &root, bin, &fake_dir, None, &[]);
-    let base = |envs: &[(&str, &str)]| -> std::process::Command {
-        let mut cmd = scrubbed(std::process::Command::new(bin));
-        cmd.arg("--server")
-            .arg(&url)
-            .arg("--repo")
-            .arg(root.to_str().unwrap())
-            .env("SACCADE_HERDR", fake.to_str().unwrap())
-            // the pane declaration is the bind's own input: the test
-            // process's value must never stand in for it
-            .env_remove("HC_TERMINAL_ID")
-            .envs(envs.iter().copied());
-        cmd
-    };
-
-    // a pane that declares no host terminal refuses before any ask
-    let out = base(&[])
-        .args(["workspace", "root", "bind"])
-        .output()
-        .unwrap();
-    assert!(
-        !out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("HC_TERMINAL_ID absent"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!fake_dir.join("argv-get.log").exists());
-
-    // an unlabeled pane refuses: the bind records the exact pair
-    let out = base(&[])
-        .env("HC_TERMINAL_ID", "tc2")
-        .args(["workspace", "root", "bind"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("carries no live standing placement"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    // an agent's bind refuses at the store, after the one host ask
-    let out = base(&[("SACCADE_ACTOR", "pi"), ("HC_TERMINAL_ID", "tc1")])
-        .args(["workspace", "root", "bind"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("human_only"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let gets = std::fs::read_to_string(fake_dir.join("argv-get.log")).unwrap_or_default();
-    assert!(
-        gets.contains("tc1"),
-        "the bind asked the pane's terminal: {gets}"
-    );
-
-    // the human binds for real through the disposable pty harness: the
-    // unpossessed write rides the terminal-attached gate with a named
-    // actor, the exact pair lands, and the record is human-authored.
-    // The harness scrubs every tracker routing, scope, and pane key
-    // itself; the fake host is named explicitly
-    let fake_herdr = fake.to_str().unwrap().to_string();
-    let pty_envs = vec![
-        ("HC_TERMINAL_ID", "tc1".to_string()),
-        ("SACCADE_HERDR", fake_herdr.clone()),
-        ("SACCADE_PI", pi.to_str().unwrap().to_string()),
-    ];
-    let out = run_here_in_pty(
-        bin,
-        &[
-            "--server".to_string(),
-            url.clone(),
-            "--repo".to_string(),
-            root.to_str().unwrap().to_string(),
-            "--json".to_string(),
-            "workspace".to_string(),
-            "root".to_string(),
-            "bind".to_string(),
-            "--actor".to_string(),
-            "jerry".to_string(),
-        ],
-        &pty_envs,
-    );
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let reply: Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("the bind face is json");
-    assert_eq!(reply["bound"], true, "{}", reply);
-    assert_eq!(reply["space"], "spaManual", "{}", reply);
-    assert_eq!(reply["tab"], "tbManual", "{}", reply);
-    let conn = saccade::db::open_read(&db).unwrap();
-    let world = match saccade::db::load(&conn).unwrap().state {
-        saccade::db::LoadState::Full(world) => world,
-        _ => panic!("the log will not fold"),
-    };
-    assert_eq!(
-        world
-            .root_space
-            .as_ref()
-            .map(|b| (b.space.as_str(), b.tab.as_str())),
-        Some(("spaManual", "tbManual"))
-    );
-    let (_, records_json) = get_json(&url, "/api/v1/records");
-    let records = json_of(&records_json);
-    let bound = records["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["kind"] == "root_space_bound")
-        .expect("the bind record landed");
-    assert_eq!(bound["actor"], "jerry", "{bound}");
-    assert_eq!(bound["tier"], "human", "{bound}");
-
-    // a human rebind from another space's terminal replaces the pair
-    let out = run_here_in_pty(
-        bin,
-        &[
-            "--server".to_string(),
-            url.clone(),
-            "--repo".to_string(),
-            root.to_str().unwrap().to_string(),
-            "workspace".to_string(),
-            "root".to_string(),
-            "bind".to_string(),
-            "--actor".to_string(),
-            "jerry".to_string(),
-        ],
-        &[
-            ("HC_TERMINAL_ID", "tc3".to_string()),
-            ("SACCADE_HERDR", fake_herdr.clone()),
-        ],
-    );
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains("root space bound - spaSecond / tbSecond"),
-        "{}",
-        String::from_utf8_lossy(&out.stdout)
-    );
-    let conn = saccade::db::open_read(&db).unwrap();
-    let world = match saccade::db::load(&conn).unwrap().state {
-        saccade::db::LoadState::Full(world) => world,
-        _ => panic!("the log will not fold"),
-    };
-    assert_eq!(
-        world
-            .root_space
-            .as_ref()
-            .map(|b| (b.space.as_str(), b.tab.as_str())),
-        Some(("spaSecond", "tbSecond"))
-    );
-
-    // the human clears; root launches go back to unplaced
-    let out = run_here_in_pty(
-        bin,
-        &[
-            "--server".to_string(),
-            url.clone(),
-            "--repo".to_string(),
-            root.to_str().unwrap().to_string(),
-            "workspace".to_string(),
-            "root".to_string(),
-            "clear".to_string(),
-            "--actor".to_string(),
-            "jerry".to_string(),
-        ],
-        &[],
-    );
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let conn = saccade::db::open_read(&db).unwrap();
-    let world = match saccade::db::load(&conn).unwrap().state {
-        saccade::db::LoadState::Full(world) => world,
-        _ => panic!("the log will not fold"),
-    };
-    assert!(world.root_space.is_none());
-    let (_, records_json) = get_json(&url, "/api/v1/records");
-    let records = json_of(&records_json);
-    let cleared: Vec<&Value> = records["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|r| r["kind"] == "root_space_cleared")
-        .collect();
-    assert_eq!(cleared.len(), 1);
-    assert_eq!(cleared[0]["tier"], "human", "{}", cleared[0]);
-
-    // rebind for the placed-launch pins below: the human binds once more
-    let out = run_here_in_pty(
-        bin,
-        &[
-            "--server".to_string(),
-            url.clone(),
-            "--repo".to_string(),
-            root.to_str().unwrap().to_string(),
-            "workspace".to_string(),
-            "root".to_string(),
-            "bind".to_string(),
-            "--actor".to_string(),
-            "jerry".to_string(),
-        ],
-        &pty_envs,
-    );
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    // the human binds through the wire: the store holds the tier, the
-    // record lands, and show reads it back - a read, no host ask
-    let (status, body) = post_command(
-        &url,
-        &envelope(
-            "jerry",
-            "human",
-            json!({"bind_root_space": {"space": "spaManual", "tab": "tbManual"}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    let gets_before_show =
-        std::fs::read_to_string(fake_dir.join("argv-get.log")).unwrap_or_default();
-    let out = base(&[])
-        .args(["workspace", "root", "show"])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(text.contains("spaManual / tbManual"), "{text}");
-    let gets_after = std::fs::read_to_string(fake_dir.join("argv-get.log")).unwrap_or_default();
-    assert_eq!(
-        gets_after, gets_before_show,
-        "the show asked the host nothing"
-    );
-
-    // a launch at the primary checkout declares the bound pair, one
-    // label ask after the address returns
-    let out = base(&[("SACCADE_PI", pi.to_str().unwrap())])
-        .args(["launch", "--json", "--workspace"])
-        .arg(&root)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let reply: Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("the face is json");
-    assert_eq!(reply["space"], "spaManual", "{}", reply);
-    assert_eq!(reply["tab"], "tbManual", "{}", reply);
-    assert_eq!(reply["place_refusal"], Value::Null, "{}", reply);
-    let label = std::fs::read_to_string(fake_dir.join("argv-label.log")).unwrap();
-    assert!(
-        label.contains("herdr.space=spaManual") && label.contains("herdr.tab=tbManual"),
-        "{label}"
-    );
-
-    // an unbound-directory launch beside the root stays unplaced
-    let other = dir.join("other-dir");
-    std::fs::create_dir_all(&other).unwrap();
-    let out = base(&[("SACCADE_PI", pi.to_str().unwrap())])
-        .args(["launch", "--json", "--workspace"])
-        .arg(&other)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let reply: Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("the face is json");
-    assert_eq!(reply["space"], Value::Null, "{}", reply);
-
-    std::fs::remove_dir_all(dir).unwrap();
-    let _ = serve.kill();
 }
 
 #[test]

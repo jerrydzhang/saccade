@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 20] = [
+const KINDS: [&str; 18] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -39,8 +39,6 @@ const KINDS: [&str; 20] = [
     "task_workspace_checkpointed",
     "workspace_created",
     "workspace_cleaned",
-    "root_space_bound",
-    "root_space_cleared",
     "incarnation_registered",
     "saved_session_bound",
     "host_address_assigned",

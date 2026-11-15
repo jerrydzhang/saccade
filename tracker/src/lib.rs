@@ -8,9 +8,7 @@ pub mod telemetry;
 
 // the flat crate-root names stay: the wire, the CLI, and the tests
 // name these modules at the root, and the concerns are containers
-pub use host::{
-    attempts, harness, herdr, host_contract, launch, paths, pi_session, placement, workspace,
-};
+pub use host::{attempts, harness, herdr, host_contract, launch, paths, pi_session, workspace};
 pub use record::{db, decide, events, objects, refusals, store, types, views};
 pub use serve::{api, client, wire};
 pub use views::Target;
@@ -27,8 +25,7 @@ pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, I
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use objects::workspace::{
-    CreatedWorkspace, CreatedWorkspaceContext, RootSpaceBinding, WorkspaceId, WorkspaceStage,
-    WorkspaceStageFact,
+    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceId, WorkspaceStage, WorkspaceStageFact,
 };
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;

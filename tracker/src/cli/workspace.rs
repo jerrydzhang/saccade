@@ -39,11 +39,6 @@ pub(super) fn workspace_door(
             workspace_new_door(cli, destination, label.as_deref(), base.as_deref())
         }
         WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
-        WorkspaceVerb::Root { verb } => match verb {
-            RootVerb::Bind => root_bind_door(cli, destination),
-            RootVerb::Show => root_show_door(cli, destination),
-            RootVerb::Clear => root_clear_door(cli, destination),
-        },
     }
 }
 

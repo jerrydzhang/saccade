@@ -75,17 +75,6 @@ pub struct WorkspaceStageFact {
     pub at: u64,
 }
 
-/// The primary checkout's bound Herdr destination: the exact space and
-/// tab pair the human chose by running the bind inside the manual root
-/// space's terminal. A chosen destination, never a host-space-existence
-/// claim and never tied to any shell's lifetime; the latest choice
-/// stands and the log keeps every earlier bind and clear.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RootSpaceBinding {
-    pub space: String,
-    pub tab: String,
-}
-
 /// The task's working environment, born once by the establishment
 /// record: the facts that record established, never a promise that
 /// a directory or process still exists - existence checks live in

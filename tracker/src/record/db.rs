@@ -775,29 +775,6 @@ mod test {
             30,
         )
         .unwrap();
-        // the human's root destination rides the same round-trip:
-        // bind, clear, bind again - the final pair is the standing choice
-        record(
-            &mut conn,
-            &human(),
-            Command::BindRootSpace {
-                space: "spaRoot".into(),
-                tab: "tbRoot".into(),
-            },
-            31,
-        )
-        .unwrap();
-        record(&mut conn, &human(), Command::ClearRootSpace {}, 32).unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::BindRootSpace {
-                space: "spaSecond".into(),
-                tab: "tbSecond".into(),
-            },
-            33,
-        )
-        .unwrap();
 
         // the board family rides the same round-trip: the design task's
         // commit, offer, reject, recommit, acceptance, and the
@@ -940,11 +917,11 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 35);
+        assert_eq!(loadout.rows.len(), 32);
         // the namings: the latest one stands, the log keeps the rest
-        assert_eq!(loadout.rows[31].kind, "incarnation_named");
-        assert!(loadout.rows[31].payload.contains("th\u{e9}orie"));
-        assert_eq!(loadout.rows[33].kind, "incarnation_named");
+        assert_eq!(loadout.rows[28].kind, "incarnation_named");
+        assert!(loadout.rows[28].payload.contains("th\u{e9}orie"));
+        assert_eq!(loadout.rows[30].kind, "incarnation_named");
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(12))]
                 .name
@@ -1104,19 +1081,6 @@ mod test {
                 adopted: false,
                 harness: crate::Harness::ClaudeCode,
             }
-        );
-        // the human's root destination: both kinds ride the round-trip,
-        // the final bind is the standing choice; the closing checkpoint
-        // follows them
-        assert_eq!(loadout.rows[20].kind, "root_space_bound");
-        assert_eq!(loadout.rows[21].kind, "root_space_cleared");
-        assert_eq!(loadout.rows[22].kind, "root_space_bound");
-        assert_eq!(
-            world
-                .root_space
-                .as_ref()
-                .map(|b| (b.space.as_str(), b.tab.as_str())),
-            Some(("spaSecond", "tbSecond"))
         );
         assert_eq!(world.messages.len(), 1);
         let mctx = &world.messages[&crate::MessageId(RecordId(14))];

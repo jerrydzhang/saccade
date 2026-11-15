@@ -77,20 +77,6 @@ pub enum CloseRefusal {
     Unknown(String),
 }
 
-/// A placement refusal, naming the evidence. The terminal exists
-/// either way - the launch cannot be undone - so the caller discloses
-/// and carries on rather than failing a launch that already landed.
-#[derive(Debug)]
-pub enum PlaceRefusal {
-    /// The host named the address absent or finished.
-    AddressNotLive(String),
-    /// The host was asked and refused for its own reasons.
-    HostRefused(String),
-    /// The host could not be asked, its answer could not be read, or
-    /// the bounded ask expired.
-    Unknown(String),
-}
-
 /// A name-label refusal, naming the evidence. The name is recorded
 /// either way; the caller discloses and never fails the naming.
 #[derive(Debug)]
@@ -143,11 +129,6 @@ pub trait HostContract: Sync {
     /// supervises what it launched, and every launch passes the
     /// host's no-parent form (settled law).
     fn launch(&self, cwd: &Path, argv: &[String]) -> Result<HostAddress, LaunchRefusal>;
-    /// One placement declaration on a terminal the caller just
-    /// launched: the host's own grouping reads it and the terminal
-    /// shows where the author says it lives. One ask, right after the
-    /// launch's address returns; ids are local to that machine.
-    fn place(&self, address: &HostAddress, space: &str, tab: &str) -> Result<(), PlaceRefusal>;
     /// One name label on a terminal the record addresses, so the
     /// host's own listings show what the incarnation is called; None
     /// removes the label. One ask, right after the naming lands.
@@ -214,20 +195,6 @@ impl std::fmt::Display for CloseRefusal {
             CloseRefusal::AddressNotLive(detail) => write!(f, "the address is not live: {detail}"),
             CloseRefusal::HostRefused(detail) => write!(f, "the host refused the close: {detail}"),
             CloseRefusal::Unknown(detail) => write!(f, "the close could not be asked: {detail}"),
-        }
-    }
-}
-
-impl std::fmt::Display for PlaceRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlaceRefusal::AddressNotLive(detail) => write!(f, "the address is not live: {detail}"),
-            PlaceRefusal::HostRefused(detail) => {
-                write!(f, "the host refused the placement: {detail}")
-            }
-            PlaceRefusal::Unknown(detail) => {
-                write!(f, "the placement could not be asked: {detail}")
-            }
         }
     }
 }

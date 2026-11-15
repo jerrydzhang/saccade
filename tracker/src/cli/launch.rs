@@ -27,24 +27,6 @@ pub(super) fn harness_choice(value: &Option<String>) -> Result<Option<saccade::H
     value.as_deref().map(parse_harness).transpose()
 }
 
-/// The reply's placement line: how to look, descriptive never pushy;
-/// a refused declaration discloses instead of hinting.
-pub(super) fn placement_lines(
-    terminal: &str,
-    space: &Option<String>,
-    place_refusal: &Option<String>,
-) -> String {
-    match (space, place_refusal) {
-        (Some(_), Some(evidence)) => {
-            format!("  placement was refused: {evidence} - the session runs unlabeled")
-        }
-        (Some(_), None) => format!("  attach from a terminal: hc attach {terminal}"),
-        (None, _) => format!(
-            "  unplaced: no Herdr space was declared, attach from a terminal: hc attach {terminal}"
-        ),
-    }
-}
-
 /// The launch's --name, validated before anything launches.
 pub(super) fn launch_name(cli: &Cli) -> Result<Option<saccade::IncarnationName>, Fail> {
     match &cli.command {
@@ -128,11 +110,7 @@ pub(super) fn launch_door(
         h = launch_harness_name(&submitted),
         ws = submitted.workspace,
         t = submitted.terminal,
-        place = placement_lines(
-            &submitted.terminal,
-            &submitted.space,
-            &submitted.place_refusal
-        ),
+        place = format_args!("  attach from a terminal: hc attach {}", submitted.terminal),
     ))
 }
 
@@ -145,9 +123,6 @@ pub(super) fn submitted_face(submitted: &saccade::launch::Submitted) -> serde_js
     serde_json::json!({
         "workspace": submitted.workspace,
         "terminal": submitted.terminal,
-        "space": submitted.space,
-        "tab": submitted.tab,
-        "place_refusal": submitted.place_refusal,
         "harness": launch_harness_name(submitted),
         "native_id": fresh.map(|f| f.native_id.clone()),
         "resumed": submitted.resume.as_ref().map(|r| r.id.0.0),
@@ -195,9 +170,6 @@ pub(super) fn submitted_launch(
         url: url.clone(),
         exe: std::env::current_exe().ok(),
         arm,
-        // the host and ask doors declare placement; only --here stays
-        // unplaced
-        declare_placement: true,
     })?;
     let mut submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
@@ -240,8 +212,8 @@ pub(super) fn launch_arm<'a>(
 }
 
 /// The same-terminal launch door: an ordinary host launch - the same
-/// composition and submission the host door makes, address recorded,
-/// declared unplaced - then the caller's terminal attaches to it as a
+/// composition and submission the host door makes, address recorded;
+/// then the caller's terminal attaches to it as a
 /// viewer. No address is adopted: the session carries its own launched
 /// terminal, and detaching (ctrl+\) ends the attach and leaves the
 /// session running. The attach's own exit is the command's; the
@@ -395,9 +367,6 @@ pub(super) fn launch_here_run(
         url: url.clone(),
         exe: std::env::current_exe().ok(),
         arm,
-        // the invoking viewer's launch declares no placement: the new
-        // terminal stays unplaced, reachable at its own host address
-        declare_placement: false,
     })?;
     // the attach inherits this terminal's stdin: a pipe or file
     // carries no attach, and the door refuses before any launch
@@ -453,9 +422,6 @@ pub(super) fn launch_here_run(
 pub(super) struct AskOutcome {
     workspace: String,
     terminal: String,
-    space: Option<String>,
-    tab: Option<String>,
-    place_refusal: Option<String>,
     birth: usize,
     num: usize,
     /// the question's birth position when its record landed; a send
@@ -654,9 +620,6 @@ pub(super) fn ask_run(
     Ok(AskOutcome {
         workspace: submitted.workspace,
         terminal: submitted.terminal,
-        space: submitted.space,
-        tab: submitted.tab,
-        place_refusal: submitted.place_refusal,
         birth,
         num,
         message_seq: sent_message_seq,
@@ -680,9 +643,6 @@ pub(super) fn ask_door(
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": outcome.workspace,
             "terminal": outcome.terminal,
-            "space": outcome.space,
-            "tab": outcome.tab,
-            "place_refusal": outcome.place_refusal,
             "incarnation": {"seq": outcome.birth, "num": outcome.num},
             "question": {"num": outcome.message_num, "seq": outcome.message_seq},
             "submission": outcome.submission,
@@ -711,7 +671,7 @@ pub(super) fn ask_door(
         workspace = outcome.workspace,
         terminal = outcome.terminal,
         creator = outcome.creator,
-        place = placement_lines(&outcome.terminal, &outcome.space, &outcome.place_refusal),
+        place = format_args!("  attach from a terminal: hc attach {}", outcome.terminal),
     ))
 }
 
@@ -757,9 +717,6 @@ pub(super) fn launch_new_door(
                     Ok(outcome) => serde_json::json!({
                         "workspace": outcome.workspace,
                         "terminal": outcome.terminal,
-                        "space": outcome.space,
-                        "tab": outcome.tab,
-                        "place_refusal": outcome.place_refusal,
                         "incarnation": {"seq": outcome.birth, "num": outcome.num},
                         "question": {"num": outcome.message_num, "seq": outcome.message_seq},
                         "name": outcome.name,
@@ -804,7 +761,7 @@ pub(super) fn launch_new_door(
                 h = launch_harness_name(&launch),
                 ws = launch.workspace,
                 t = launch.terminal,
-                place = placement_lines(&launch.terminal, &launch.space, &launch.place_refusal),
+                place = format_args!("  attach from a terminal: hc attach {}", launch.terminal),
                 named = name_line(&launch.name, &launch.name_refusal)
                     .map(|line| format!("\n{line}"))
                     .unwrap_or_default(),

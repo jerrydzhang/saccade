@@ -5,7 +5,6 @@ pub mod completions;
 pub mod launch;
 pub mod message;
 pub mod name;
-pub mod root;
 pub mod serve;
 pub mod skill;
 pub mod task;
@@ -26,7 +25,6 @@ use self::completions::{FISH, Kind, complete_candidates};
 use self::launch::{ask_door, harness_choice, launch_door, launch_here_door, launch_new_door};
 use self::message::{messages_door, send_door};
 use self::name::name_door;
-use self::root::{root_bind_door, root_clear_door, root_show_door};
 use self::serve::serve_door;
 use self::skill::skill_door;
 use self::task::{born_of, parse_task_id, read_only, render_records};
@@ -237,7 +235,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "resume")]
         ask: Option<String>,
         /// Ask the host for one independent terminal running the
-        /// composed session, unplaced (no Herdr space), then attach
+        /// composed session, then attach
         /// this terminal as its viewer. Detaching (ctrl+\) ends the
         /// attach and leaves the session running at its recorded host
         /// address. Composes with --workspace and --resume
@@ -359,29 +357,6 @@ enum WorkspaceVerb {
         /// The workspace's exact recorded path
         path: PathBuf,
     },
-    /// The primary checkout's Herdr destination: bind the chosen
-    /// manual root space once, show the standing choice, or clear it.
-    /// Root launches declare the bound pair; an unbound root runs
-    /// unplaced.
-    Root {
-        #[command(subcommand)]
-        verb: RootVerb,
-    },
-}
-
-#[derive(Clone, Subcommand)]
-enum RootVerb {
-    /// Bind the chosen manual root space: run inside the terminal
-    /// standing in that space, in this repository's context. Records
-    /// the terminal's exact live space/tab pair; missing or unlabeled
-    /// terminal refuses. Human-only; a rebind replaces the latest
-    /// choice, the log keeps the history.
-    Bind,
-    /// Show the bound root destination, if any: a read, no host ask
-    Show,
-    /// Clear the bound root destination: root launches run unplaced
-    /// until a later bind. Human-only; the history stays in the log.
-    Clear,
 }
 
 #[derive(Clone, Copy, Subcommand)]
@@ -565,11 +540,6 @@ fn verb_name(verb: &WorkspaceVerb) -> &'static str {
     match verb {
         WorkspaceVerb::New { .. } => "new",
         WorkspaceVerb::Clean { .. } => "clean",
-        WorkspaceVerb::Root { verb } => match verb {
-            RootVerb::Bind => "root-bind",
-            RootVerb::Show => "root-show",
-            RootVerb::Clear => "root-clear",
-        },
     }
 }
 
@@ -705,7 +675,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                 }
             }
             WorkspaceVerb::Clean { .. } => {}
-            WorkspaceVerb::Root { .. } => {}
         },
         Cmd::Wait {
             after,

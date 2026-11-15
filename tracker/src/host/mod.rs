@@ -12,7 +12,6 @@ pub mod host_contract;
 pub mod launch;
 pub mod paths;
 pub mod pi_session;
-pub mod placement;
 pub mod workspace;
 
 use std::path::PathBuf;

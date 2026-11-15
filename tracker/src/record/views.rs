@@ -96,7 +96,7 @@ pub fn wait_matches(
         | Event::TaskAccepted { task: id } => *target == Target::Task(*id),
         Event::WorkspaceEstablished { task_id, .. }
         | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
-        // the root destination acts, the registrations, the relaunch
+        // the registrations, the relaunch
         // facts, the workspace lifecycle, and the messages name no
         // task the wait could wake on
         _ => false,

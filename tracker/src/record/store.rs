@@ -10,8 +10,8 @@ use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId
 use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
 use crate::objects::task::{BoardCommit, Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{
-    CreatedWorkspace, CreatedWorkspaceContext, RootSpaceBinding, Workspace, WorkspaceContext,
-    WorkspaceId, WorkspaceStage, WorkspaceStageFact,
+    CreatedWorkspace, CreatedWorkspaceContext, Workspace, WorkspaceContext, WorkspaceId,
+    WorkspaceStage, WorkspaceStageFact,
 };
 use crate::types::actor::ActorName;
 use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
@@ -204,10 +204,6 @@ pub struct World {
     /// any task or incarnation, identity at the birth record. No
     /// human-facing number derives from these births.
     pub workspaces: BTreeMap<WorkspaceId, CreatedWorkspaceContext>,
-    /// The primary checkout's bound Herdr destination: the latest
-    /// explicit human choice, None after a clear or before any bind.
-    /// A fact cache; the log keeps the history.
-    pub root_space: Option<RootSpaceBinding>,
     /// Every applied record: existence for the citation guard, its
     /// home thread where the fold gives one. A record without a home
     /// still exists. No residency - the named record stays the event
@@ -227,7 +223,6 @@ impl World {
             incarnations: BTreeMap::new(),
             messages: BTreeMap::new(),
             workspaces: BTreeMap::new(),
-            root_space: None,
             provenance: BTreeMap::new(),
             superseded: BTreeMap::new(),
         }
@@ -698,16 +693,6 @@ impl World {
                         stage_fact: None,
                     },
                 );
-            }
-            Event::RootSpaceBound { space, tab } => {
-                // the human's chosen root destination: latest choice
-                // wins, history stays in the log; no task home rides it
-                self.provenance.insert(record.id, None);
-                self.root_space = Some(RootSpaceBinding { space, tab });
-            }
-            Event::RootSpaceCleared {} => {
-                self.provenance.insert(record.id, None);
-                self.root_space = None;
             }
             Event::WorkspaceCleaned { workspace } => {
                 // the fact references an existing workspace birth of
@@ -1682,83 +1667,6 @@ mod test {
             }
         }
         assert_eq!(log.records().len(), before + 1);
-    }
-
-    /// The root destination is the human's latest explicit choice:
-    /// agents and machinery refuse both acts, a rebind replaces, a
-    /// clear removes, and the log keeps every recorded choice.
-    #[test]
-    fn the_root_destination_is_the_humans_latest_explicit_choice() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-
-        // agents and machinery refuse both acts
-        for ctx in [agent(), Context::system()] {
-            let refused = log.execute(
-                ctx.clone(),
-                Command::BindRootSpace {
-                    space: "spaAgent".into(),
-                    tab: "tbAgent".into(),
-                },
-                100,
-            );
-            assert!(matches!(refused, Err(Reject::HumanOnly)));
-            let refused = log.execute(ctx, Command::ClearRootSpace {}, 100);
-            assert!(matches!(refused, Err(Reject::HumanOnly)));
-        }
-        assert!(log.world().root_space.is_none());
-
-        // the human binds; the pair stands on the world
-        log.execute(
-            human(),
-            Command::BindRootSpace {
-                space: "spaManual".into(),
-                tab: "tbManual".into(),
-            },
-            100,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world()
-                .root_space
-                .as_ref()
-                .map(|b| (b.space.as_str(), b.tab.as_str())),
-            Some(("spaManual", "tbManual"))
-        );
-
-        // a rebind replaces the standing choice
-        log.execute(
-            human(),
-            Command::BindRootSpace {
-                space: "spaOther".into(),
-                tab: "tbOther".into(),
-            },
-            101,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world()
-                .root_space
-                .as_ref()
-                .map(|b| (b.space.as_str(), b.tab.as_str())),
-            Some(("spaOther", "tbOther"))
-        );
-
-        // clear removes it; the record history keeps all three choices
-        log.execute(human(), Command::ClearRootSpace {}, 102)
-            .unwrap();
-        assert!(log.world().root_space.is_none());
-        let choices = log
-            .records()
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r.event,
-                    Event::RootSpaceBound { .. } | Event::RootSpaceCleared {}
-                )
-            })
-            .count();
-        assert_eq!(choices, 3);
     }
 
     /// The use's guards: self-reliance and source existence at birth;
