@@ -23,6 +23,8 @@
 //   content paths, from the model - domain content is not derived from
 //   HTML attributes. The rendered DOM mirrors these as data-port-part /
 //   data-port-kind attributes for element-addressed observation.
+//   Beside them, the expanded incorporations (t-58): view state, read
+//   from the controller like find.
 // - diagnostics: the in-memory ring (the minimal code+message
 //   catalogue).
 // - doors: the suite doors the shared shell evals into every window -
@@ -85,7 +87,7 @@ export type PortObservation = {
   }>;
   errors: readonly StructuredIssue[];
   render: readonly RenderOutcome[];
-  content: Readonly<{ parts: readonly ContentPart[] }> | null;
+  content: Readonly<{ parts: readonly ContentPart[]; expanded: readonly ExpandedView[] }> | null;
   diagnostics: readonly DiagnosticEntryView[];
   doors: Readonly<{
     jumpChip: string | null;
@@ -169,6 +171,15 @@ export type ContentPart = Readonly<{
   part: string;
   kind: string;
   line: number | null;
+}>;
+
+/** An expanded incorporation (t-58): its part, whether the cited
+ * revision answered, and the cited components it shows - each select
+ * path and the part it renders at (null when it names nothing). */
+export type ExpandedView = Readonly<{
+  part: string;
+  status: "loading" | "loaded" | "failed";
+  cited: readonly { select: string; part: string | null }[];
 }>;
 
 export type DiagnosticEntryView = Readonly<{
@@ -260,6 +271,25 @@ export function contentPartsOf(board: Board): readonly ContentPart[] {
   };
   walk(board.content, "");
   return parts;
+}
+
+function expandedOf(state: BufferState<RenderPair>): readonly ExpandedView[] {
+  const content = state.kind === "alive" ? state.content : null;
+  const pair = content?.kind === "available" ? content.value
+    : content?.kind === "pending" ? content.previous : null;
+  const controller = pair?.props["controller"] as Pick<BoardUI, "expansions"> | undefined;
+  if (typeof controller?.expansions !== "function") return [];
+  return controller
+    .expansions()
+    .map((expansion) => ({
+      part: expansion.part,
+      status: expansion.status,
+      cited: expansion.components.map((component) => ({
+        select: component.select,
+        part: component.block === null ? null : component.part,
+      })),
+    }))
+    .sort((a, b) => (a.part < b.part ? -1 : a.part > b.part ? 1 : 0));
 }
 
 function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
@@ -358,7 +388,7 @@ export function buildReadout(
     render: frame && input.surface === "board" ? frame.renderOutcomes : [],
     content:
       board && frame !== null && frame.status === "loaded" && input.surface === "board"
-        ? { parts: contentPartsOf(board) }
+        ? { parts: contentPartsOf(board), expanded: expandedOf(input.state) }
         : null,
     diagnostics: input.diagnostics,
     doors: input.doors,

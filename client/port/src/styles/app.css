@@ -742,3 +742,14 @@ body {
 .block-group[data-port-folded] > :not(.group-title) {
   display: none;
 }
+
+/* an expanded incorporation's cited components (t-58): set off by a
+ * rule at the edge, no design pass yet; the source line reads as its
+ * expand act */
+.incorporation-cited {
+  border-left: 1px solid var(--port-color-line);
+  padding-left: 0.75rem;
+}
+.block-incorporation > .provenance {
+  cursor: pointer;
+}

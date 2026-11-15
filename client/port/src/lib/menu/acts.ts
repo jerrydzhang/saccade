@@ -48,6 +48,11 @@ export interface BoardMenuDeps {
   isFolded(part: string): boolean;
   /** Fold or unfold a group part path. */
   toggleFold(part: string): void;
+  /** Whether an incorporation part is expanded now (t-58). */
+  isExpanded?(part: string): boolean;
+  /** Expand or collapse an incorporation part: expanded, it shows
+   * only the components its select paths cite. */
+  toggleExpansion?(part: string): void;
   /** The citation source of an incorporation part (model-derived), or
    * null when the part names no citation. */
   referenceOf(part: string): ReferenceSource | null;
@@ -85,7 +90,8 @@ export function createBoardMenu(deps: BoardMenuDeps): BoardMenu {
   );
 }
 
-/** The per-kind act declarations. Groups fold/unfold (chunk C); a
+/** The per-kind act declarations. Groups fold/unfold (chunk C);
+ * incorporations expand/collapse (t-58); a
  * citation's reference target follows here first (so a plain click
  * follows) and copies its payload (t-36@r90). Every other kind
  * carries no acts yet. */
@@ -93,7 +99,15 @@ export function actsFor(
   target: MenuTarget,
   deps: Pick<
     BoardMenuDeps,
-    "isFolded" | "toggleFold" | "referenceOf" | "referencePorts" | "referenceMachine" | "partCitation" | "refOf"
+    | "isFolded"
+    | "toggleFold"
+    | "isExpanded"
+    | "toggleExpansion"
+    | "referenceOf"
+    | "referencePorts"
+    | "referenceMachine"
+    | "partCitation"
+    | "refOf"
   >,
 ): readonly MenuAct[] {
   if (target.kind === "group" && target.part !== null) {
@@ -120,6 +134,35 @@ export function actsFor(
           label: "copy citation",
           run: () => ports.copy(citation),
         },
+      });
+    }
+    return acts;
+  }
+  if (target.kind === "incorporation" && target.part !== null) {
+    // t-58: an incorporation shows collapsed (its source line and its
+    // receiving text); z expands it to the cited components alone and
+    // collapses it again - the group's fold key, the same family of
+    // act. It is the first act, so a plain click on the source line
+    // runs it. y copies the incorporation's own citation, as a group's.
+    const part = target.part;
+    const acts: MenuAct[] = [];
+    if (deps.isExpanded !== undefined && deps.toggleExpansion !== undefined) {
+      const toggle = deps.toggleExpansion;
+      acts.push({
+        key: "z",
+        action: {
+          id: "incorporation.expand",
+          label: deps.isExpanded(part) ? "collapse" : "expand",
+          run: () => toggle(part),
+        },
+      });
+    }
+    const citation = deps.partCitation(part);
+    const ports = deps.referencePorts();
+    if (citation !== null && ports !== null) {
+      acts.push({
+        key: "y",
+        action: { id: "incorporation.copy-citation", label: "copy citation", run: () => ports.copy(citation) },
       });
     }
     return acts;
