@@ -10,7 +10,8 @@ import { expect, test } from "#scenario";
 import { longBoard, openLocation, spec } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 
-// a trail return shows the pinned revision it recorded (t-N@rK)
+// a trail return shows the board loaded at a revision (t-N@rK): the
+// bare board it recorded resolves to its current one (t-43)
 async function backOn(app: AppDriver, path: string): Promise<void> {
   await expect
     .poll(async () => {

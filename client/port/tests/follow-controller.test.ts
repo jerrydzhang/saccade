@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, onTestFinished, vi } from "vitest";
-import { SliceBufferHost } from "../src/components/Buffer.ts";
+import { createViewport, SliceBufferHost } from "../src/components/Buffer.ts";
 import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import { connectBoard } from "../src/instruments/boardController.ts";
 import type { BoardData, BoardUI } from "../src/instruments/boardController.ts";
@@ -123,4 +123,54 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   built.host.destroy();
   assert.equal(attachment.presentation.findView().open, false);
   assert.equal(job, null, "release cancels follow");
+});
+
+// t-43: a capture names the location as it was ASKED. A bare board
+// captures bare (never the revision it resolved to), so a trail return
+// requests it bare and the follow re-arms; a pinned board captures
+// pinned and stays unfollowed.
+test("a bare board captures bare and its restore follows again; a pinned one stays pinned", async () => {
+  const machine = "tracker:capture-asked-test";
+  const source = sourceFor(machine) as TrackerSource;
+  const reads: string[] = [];
+  vi.spyOn(source, "loadText").mockImplementation(async (location: { path: string }) => {
+    reads.push(location.path);
+    const revision = /@r(\d+)$/.exec(location.path)?.[1] ?? "3";
+    return {
+      text: `grammar: 1\ntask: t-5\ncontent:\n  - text: revision ${revision}\n`,
+      location: { machine, path: `t-5@r${revision}` },
+    };
+  });
+  vi.spyOn(source, "currentBoardPage").mockImplementation(async () => ({ location: "t-5@r3" }) as never);
+  let attachment!: InstrumentAttachment<BoardUI, BoardAnchor>;
+  const controller = new SliceBufferHost<BoardData, BoardUI, BoardAnchor>({
+    context: { windowId: "w", bufferId: "b" },
+    viewport: createViewport(),
+    diagnostics: { report: () => "", unexpected: () => "" },
+    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+  });
+  const built = controller.wire();
+  onTestFinished(() => built.host.destroy());
+  const followState = () => attachment.presentation.followState();
+
+  await attachment.places.request({ machine, path: "t-5" });
+  const bare = built.host.places.capture();
+  assert.deepEqual(bare.address, { machine, path: "t-5" }, "the capture is the asked bare location, not t-5@r3");
+
+  await attachment.places.request({ machine, path: "t-5@r1" });
+  const pinned = built.host.places.capture();
+  assert.deepEqual(pinned.address, { machine, path: "t-5@r1" }, "a pinned open captures pinned");
+  assert.equal(followState().armed, false);
+
+  const back = built.host.places.restore(bare);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(back.snapshot(), "restored");
+  assert.equal(reads.at(-1), "t-5", "the restore requests the bare location");
+  assert.equal(followState().armed, true, "the restored bare board follows again");
+  assert.equal(followState().task, 5);
+
+  const forward = built.host.places.restore(pinned);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(forward.snapshot(), "restored");
+  assert.equal(followState().armed, false, "the restored pinned board does not follow");
 });
