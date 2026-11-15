@@ -197,7 +197,12 @@ export interface SliceBufferViewport extends Viewport {
   attachedElement(): HTMLElement | null;
 }
 
-export function createViewport(): SliceBufferViewport {
+/** `moved` hears every scroll this viewport makes itself, at once:
+ * WebKitGTK dispatches a scroll event only on a rendering update, and
+ * a window that is not active may render none for seconds, so a
+ * listener on the scroller alone hears a keyboard page late or never
+ * (t-52: a window's place stored the part one page back). */
+export function createViewport(moved: () => void = () => {}): SliceBufferViewport {
   let element: HTMLElement | null = null;
   const viewport: SliceBufferViewport = {
     attachElement(next) {
@@ -223,22 +228,29 @@ export function createViewport(): SliceBufferViewport {
       // gg/G's start/end proved the pattern in the same window).
       if (element !== null) {
         element.scrollTop += amount * SCROLL_LINE_PX;
+        moved();
       }
     },
     scrollPage(direction, extent) {
       if (element === null) return;
       const share = extent === "half" ? 0.5 : 1;
       element.scrollTop += direction * element.clientHeight * share;
+      moved();
     },
     scrollFraction(direction, fraction) {
       if (element === null) return;
       element.scrollTop += direction * element.clientHeight * fraction;
+      moved();
     },
     start() {
-      if (element !== null) element.scrollTop = 0;
+      if (element === null) return;
+      element.scrollTop = 0;
+      moved();
     },
     end() {
-      if (element !== null) element.scrollTop = element.scrollHeight;
+      if (element === null) return;
+      element.scrollTop = element.scrollHeight;
+      moved();
     },
     reveal(bounds) {
       if (element === null) return;
@@ -248,11 +260,13 @@ export function createViewport(): SliceBufferViewport {
       } else if (bounds.bottom > position.top + element.clientHeight) {
         element.scrollTop = bounds.bottom - element.clientHeight;
       }
+      moved();
     },
     moveTo(position) {
       if (element !== null) {
         element.scrollLeft = position.left;
         element.scrollTop = position.top;
+        moved();
       }
     },
   };

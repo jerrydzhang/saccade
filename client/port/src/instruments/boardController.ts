@@ -212,6 +212,10 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   const scope = createLoadScope<BoardData>(EMPTY_FRAME);
   const requestLog: string[] = [];
   let resolved: Location | null = null;
+  // The address the shown frame was ASKED as (a bare t-N stays bare):
+  // what a capture names, so a trail return or a relaunch follows
+  // again rather than pinning the revision it resolved to (t-43).
+  let shownAsked: Address | null = null;
   // Folded group part paths: view state, survives refreshes of this
   // buffer (folds are never rewound by anything but their own act).
   const foldedSet = new Set<string>();
@@ -497,6 +501,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return { kind: "failed", issue: issueOf(error) };
     }
     resolved = resolvedLocation;
+    shownAsked = { machine: address.machine, path: address.path };
     // The native gate: admission through the shared board-grammar
     // crate. Null without a bridge, where the mirror decoder alone
     // decides; a bridge that fails to answer refuses loudly.
@@ -768,8 +773,15 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
 
   const places: ContentPlaces<BoardAnchor> = {
     captureDisplayed(viewport: ViewportMetrics): ContentCapture<BoardAnchor> {
-      const address: Address = resolved
-        ? { machine: resolved.machine, path: resolved.path }
+      // The place names the location as it was asked: a bare board
+      // returns bare and keeps following, a pinned one stays pinned
+      // (t-43). History mode is the exception: a revision reached by
+      // stepping time is the pinned one shown, as leaving history
+      // would open it (the newest revision opens as asked).
+      const inPast = history !== null && history.revision !== history.latest;
+      const shown = inPast ? resolved : (shownAsked ?? resolved);
+      const address: Address = shown
+        ? { machine: shown.machine, path: shown.path }
         : { machine: "", path: "" };
       // The reading anchor (hybrid default, r49): the target identity
       // when the reading position sits inside one, else the default
