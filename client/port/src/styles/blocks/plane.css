@@ -22,6 +22,9 @@
   gap: 1rem;
   min-width: 0;
   padding: 0.75rem 0;
+  /* nothing in the rail ever reaches the task list: every line clips or
+   * wraps inside its own box, and the rail itself clips as the floor */
+  overflow: hidden;
 }
 .port-plane-project {
   display: flex;
@@ -102,18 +105,19 @@
 
 /* a word heading: its shape, then the word */
 .port-plane-word {
-  display: flex;
-  align-items: center;
   padding: 0.5rem 0.5rem 0.125rem;
   color: var(--port-color-ink);
   font-size: var(--port-size-small);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* an agent: incarnation (muted), name, every claimed task at the
  * right; Herdr's status line beneath, one line */
 .port-plane-agent {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) fit-content(45%);
   column-gap: 0.75rem;
   padding-left: 1.25rem;
 }
@@ -125,7 +129,16 @@
   white-space: nowrap;
 }
 .port-plane-incarnation {
+  flex: none;
   color: var(--port-color-muted);
+}
+/* an unregistered agent's label stands where the id does: it may be
+ * long, so it is the part that gives way */
+.port-plane-agent[data-port-unregistered] .port-plane-incarnation {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .port-plane-agent-name {
   color: var(--port-color-ink-strong);
@@ -139,6 +152,13 @@
   color: var(--port-color-muted);
   white-space: nowrap;
   align-self: baseline;
+  /* a long list never pushes the agent out or bleeds past the rail:
+   * it keeps under half the row and ends in an ellipsis (the full
+   * list rides the row's title) */
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* an agent no tracker registered (t-55): marked, never hidden */
 .port-plane-unregistered {
@@ -167,6 +187,7 @@
   padding: 0 0.5rem;
   color: var(--port-color-muted);
   font-size: var(--port-size-small);
+  overflow-wrap: anywhere;
 }
 .port-plane-add {
   display: flex;

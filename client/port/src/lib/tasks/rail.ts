@@ -155,7 +155,13 @@ export function agentFactsOf(page: ViewPage): AgentFacts[] {
     };
     const incarnation = fact("incarnation") ?? part.location ?? null;
     if (incarnation === null) continue;
-    const tasks = fact("tasks");
+    // the tasks a session is still answerable for: the page's "open
+    // tasks" (owned and open or offered; sac 0.20.8), else - from a
+    // tracker that predates it - every owned task. Ownership outlives a
+    // conclusion, so the bare "tasks" fact keeps concluded ones.
+    const owned = fact("tasks");
+    const open = fact("open tasks");
+    const tasks = open ?? owned;
     out.push({
       incarnation,
       name: fact("name"),

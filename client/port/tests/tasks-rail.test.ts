@@ -56,6 +56,28 @@ test("an agents page restates its incarnations with their terminals and tasks", 
   assert.equal(facts[3]?.address, null);
 });
 
+test("an agent's tasks are the ones still open: the page's open tasks, else every owned task from an older tracker", () => {
+  const page = (facts: { label: string; value: string }[]): ViewPage => ({
+    view: { major: 1 },
+    kind: "document",
+    location: "agents",
+    seq: null,
+    content: [
+      {
+        kind: "group",
+        location: "i-1",
+        content: [{ kind: "fact", label: "incarnation", value: "i-1" }, ...facts.map((fact) => ({ kind: "fact" as const, ...fact }))],
+      },
+    ],
+  });
+  // ownership outlives a conclusion: only the open ones are shown
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-9 t-4 t-2" }, { label: "open tasks", value: "t-9" }]))[0]?.tasks, ["t-9"]);
+  // every owned task has ended: an empty open list, never the owned one
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-4 t-2" }, { label: "open tasks", value: "" }]))[0]?.tasks, []);
+  // a tracker before sac 0.20.8 sends no open tasks: the owned list stands
+  assert.deepEqual(agentFactsOf(page([{ label: "tasks", value: "t-4 t-2" }]))[0]?.tasks, ["t-4", "t-2"]);
+});
+
 test("the rail shows running agents only, by Herdr's word in t-14's order, within a word by task", () => {
   const rail = railOf(
     [

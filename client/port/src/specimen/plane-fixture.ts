@@ -22,6 +22,8 @@ const agents: AgentFacts[] = [
   { incarnation: "i-11", name: "atlas", address: "t11", tasks: ["t-9"] },
   { incarnation: "i-12", name: null, address: "t12", tasks: ["t-10"] },
   { incarnation: "i-13", name: null, address: "t13", tasks: ["t-11"] },
+  // an orchestrator answerable for many tasks at once: the list clips
+  { incarnation: "i-14", name: "orchestrator of the overnight batches", address: "t14", tasks: Array.from({ length: 18 }, (_, n) => `t-${33 - n}`) },
 ];
 
 const word = (fields: Omit<HerdrWord, "at">): HerdrWord => ({ at: 1, app: "claude-code", ...fields });
@@ -35,6 +37,7 @@ const words: WordsSnapshot = {
     t6: word({ state: "blocked", msg: "Waiting for permission to run uv" }),
     t10: word({ state: "done", msg: "Offered t-6 for review" }),
     t4: word({ state: "idle" }),
+    t14: word({ state: "working", msg: "Dispatching the next batch of checks to the three empirical agents, then waiting on all of their offers before the morning summary" }),
     t11: word({ state: "error", msg: "The search process exited with status 137" }),
     t12: word({ msg: "Started; no word yet" }),
     t13: word({ state: "compacting", msg: "Compacting the conversation" }),

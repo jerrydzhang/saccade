@@ -58,7 +58,7 @@ field's typing is the controller's. -->
       <span class="port-plane-incarnation">{agent.incarnation}</span>
       {#if agent.name !== null}<span class="port-plane-agent-name">{agent.name}</span>{/if}
     </span>
-    <span class="port-plane-tasks">{agent.tasks.join(", ")}</span>
+    <span class="port-plane-tasks" title={agent.tasks.join(", ")}>{agent.tasks.join(", ")}</span>
   {/if}
   {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
 {/snippet}
