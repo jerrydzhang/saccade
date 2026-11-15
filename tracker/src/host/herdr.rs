@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::host_contract::{
     AttachRefusal, CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness,
-    NameRefusal, SubmitRefusal, WaitWake,
+    NameRefusal, SubmitRefusal,
 };
 
 /// The explicit override: set and nonempty, it is the host binary,
@@ -56,10 +56,6 @@ pub struct HostTerminal {
     pub cwd: String,
     pub state: String,
 }
-
-/// The slack beyond a wait's own timeout: the host self-bounds the
-/// block, the adapter enforces its own answer window on top.
-const WAIT_SLACK: Duration = Duration::from_secs(2);
 
 /// The test-context marker: the test harness sets it unconditionally,
 /// and the resolution refuses the ambient arm under it - a test can
@@ -429,28 +425,6 @@ impl HostContract for HerdrCore {
         }
     }
 
-    fn wait(&self, address: &HostAddress, bound: Duration) -> WaitWake {
-        let secs = bound.as_secs().max(1).to_string();
-        let args: Vec<OsString> = ["wait", &address.0, "--timeout", &secs, "--json"]
-            .iter()
-            .map(OsString::from)
-            .collect();
-        let out = match self.ask_bounded(&args, bound + WAIT_SLACK) {
-            Ok(out) => out,
-            Err(_) => return WaitWake::Quiet,
-        };
-        if !out.ok {
-            return WaitWake::Quiet;
-        }
-        let reason = serde_json::from_str::<serde_json::Value>(out.stdout.trim())
-            .ok()
-            .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_string));
-        match reason.as_deref() {
-            Some("message") => WaitWake::Message,
-            _ => WaitWake::Quiet,
-        }
-    }
-
     /// The name label: `name=<name>`, or `name=` which removes it, on
     /// the one address in one bounded ask.
     fn name(&self, address: &HostAddress, name: Option<&str>) -> Result<(), NameRefusal> {
@@ -580,14 +554,6 @@ case "$kind" in
     printf 'the attached view\n'; exit 0 ;;
   attach-refused)
     printf 'no such terminal\n' >&2; exit 4 ;;
-  wait-message)
-    printf '{"reason":"message","status":"working","ended":false}\n'; exit 0 ;;
-  wait-timeout)
-    printf '{"reason":"timeout","status":"done"}\n'; exit 0 ;;
-  wait-status)
-    printf '{"reason":"status","status":"done"}\n'; exit 0 ;;
-  wait-garbage)
-    printf 'garbage\n'; exit 0 ;;
   kill-ok)
     printf '{"address":"t7","state":"finished","reason":"killed","signal":1}\n'; exit 0 ;;
   label-ok)
@@ -959,37 +925,6 @@ esac
             "the bound is enforced, not awaited"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    // -- wait -----------------------------------------------------------
-
-    #[test]
-    fn wait_dispatches_only_the_message_reason() {
-        let table: [(&str, WaitWake); 5] = [
-            ("wait.x=wait-message", WaitWake::Message),
-            ("wait.x=wait-timeout", WaitWake::Quiet),
-            ("wait.x=wait-status", WaitWake::Quiet),
-            ("wait.x=wait-garbage", WaitWake::Quiet),
-            ("wait.x=get-notfound", WaitWake::Quiet),
-        ];
-        for (line, expected) in &table {
-            let (host, dir) = fake("wait-map", &[line]);
-            let bound = Duration::from_secs(2);
-            assert_eq!(
-                host.wait(&HostAddress("t7".into()), bound),
-                *expected,
-                "{line}"
-            );
-            // the iteration bound rides --timeout in whole seconds
-            assert_eq!(argv_log(&dir, "wait")[2], "2", "{line}");
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
-        assert_eq!(
-            host.wait(&HostAddress("t7".into()), Duration::from_secs(1)),
-            WaitWake::Quiet,
-            "an unaskable host is quiet, never a message"
-        );
     }
 
     // -- close ----------------------------------------------------------

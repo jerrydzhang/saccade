@@ -62,27 +62,10 @@ pub fn mailbox(world: &World, id: IncarnationId) -> Vec<MessageId> {
         .collect()
 }
 
-/// What the task wait waits for. The offer arm returns with the task
-/// events; until then a wait is activity only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitUntil {
-    Activity,
-    Offer,
-}
-
 /// Whether the record the event lands in wakes a wait on `target`.
 /// Task facts wake their task; the machinery's own facts and the
 /// message traffic ride no task and wake nothing.
-pub fn wait_matches(
-    world: &World,
-    at: RecordId,
-    event: &Event,
-    target: &Target,
-    until: WaitUntil,
-) -> bool {
-    if matches!(until, WaitUntil::Offer) {
-        return matches!(event, Event::TaskOffered { task, .. } if *target == Target::Task(*task));
-    }
+pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target) -> bool {
     match event {
         Event::TaskCreated { .. } => {
             matches!(*target, Target::Task(t) if world.task_born_at(at) == Some(t))
@@ -823,9 +806,7 @@ mod test {
         let matching = |target: &Target| {
             events
                 .iter()
-                .filter(|(seq, event)| {
-                    wait_matches(&world, RecordId(*seq), event, target, WaitUntil::Activity)
-                })
+                .filter(|(seq, event)| wait_matches(&world, RecordId(*seq), event, target))
                 .map(|(seq, _)| *seq)
                 .collect::<Vec<_>>()
         };
@@ -967,8 +948,7 @@ mod test {
                 &world,
                 RecordId(3),
                 &event,
-                &Target::Task(TaskId(0)),
-                WaitUntil::Activity
+                &Target::Task(TaskId(0))
             ));
         }
 

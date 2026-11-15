@@ -1,4 +1,3 @@
-use super::wait::{WAIT_POLL, resolve_incarnation};
 use super::workspace::render_birth;
 use super::*;
 use saccade::IncarnationId;
@@ -457,6 +456,8 @@ fn ask_bind_bound() -> std::time::Duration {
     }
     ASK_BIND_BOUND
 }
+
+pub(super) const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(super) fn wait_for_ask_binding(
     destination: &Destination,

@@ -103,7 +103,6 @@ function __saccade_verbs
     printf 'identity\tReport this session declared identity and routing\n'
     printf 'clone\tClone the log prefix through a storage seq into a fresh tracker\n'
     printf 'skill\tDeploy this binary embedded skill, or verify the copy\n'
-    printf 'wait\tBlock until a matching record lands on the target\n'
     printf 'completions\tEmit a shell completion script\n'
 end
 
@@ -140,7 +139,6 @@ complete -c sac -n '__saccade_verb completions; and test (__saccade_npos) = 1; a
 complete -c sac -n '__saccade_verb cancel; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb wait; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-clean)'
 
@@ -183,5 +181,3 @@ complete -c sac -n '__saccade_verb workspace new' -l base -r -f -d 'the Git base
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'
-complete -c sac -n '__saccade_verb wait' -l after -r -f -d 'the global position matched strictly after'
-complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity offer'

@@ -102,7 +102,6 @@ fish -i -c '
   report offer_tasks "sac offer "
   report create_static "sac create "
   report skill_static "sac skill "
-  report until_static "sac wait t-0 --until "
   report shell_static "sac completions "
   report global_flag "sac --ac"
   report cancel_flag_name "sac cancel t-0 --expl"
@@ -152,8 +151,6 @@ section offer_tasks | grep -Fq "t-0${TAB}smoke the completions door" || { sectio
 section create_static | grep -qx "task" || { section create_static; fail "create offers no task kind"; }
 section skill_static | grep -qx "install" || { section skill_static; fail "skill lost install"; }
 section skill_static | grep -qx "check" || { section skill_static; fail "skill lost check"; }
-section until_static | grep -qx "activity" || { section until_static; fail "wait --until lost activity"; }
-section until_static | grep -qx "offer" || { section until_static; fail "wait --until lost offer"; }
 section shell_static | grep -Fqe "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }
 section shell_static | grep -qx "primary" && fail "the fish description split on spaces"
 section shell_static | grep -qx "shell" && fail "the fish description split on spaces"

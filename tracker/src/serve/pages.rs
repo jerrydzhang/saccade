@@ -20,7 +20,7 @@ use crate::boards::BoardsFail;
 use crate::db::StoredRecord;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{Owner, TaskId, TaskState};
-use crate::record::views::{self, Target, WaitUntil};
+use crate::record::views::{self, Target};
 use crate::serve::board_wire::{HistoryEntry, board_history};
 use crate::store::{RecordId, World};
 use crate::wire;
@@ -496,7 +496,6 @@ fn relevant(world: &World, watch: &Watch, row: &StoredRecord) -> bool {
                 RecordId(row.seq),
                 &event,
                 &Target::Task(TaskId(*task)),
-                WaitUntil::Activity,
             )
         }
     }

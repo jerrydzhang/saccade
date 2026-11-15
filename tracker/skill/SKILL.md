@@ -202,10 +202,6 @@ The reviewed object is the board revision, so review is a real judgment:
 Reject for a claim that is wrong or unsupported, or for a narrowing the
 board does not state; not for procedure the history already holds.
 
-Wake on the offer instead of polling: `sac wait t-N --after <seq>
---until offer` returns once a TaskOffered record lands past the cursor
-seq (`sac log` or `sac show t-N` names it).
-
 ## Names
 
 An incarnation may carry a name, so the human tells sessions apart by

@@ -1,5 +1,4 @@
 use super::task::parse_task_id;
-use super::wait::resolve_incarnation;
 use super::*;
 use saccade::client;
 

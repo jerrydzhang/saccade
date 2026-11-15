@@ -504,8 +504,7 @@ proptest! {
                         &live,
                         saccade::RecordId(row.seq),
                         &event,
-                        &saccade::Target::Task(*home),
-                        saccade::views::WaitUntil::Activity
+                        &saccade::Target::Task(*home)
                     ),
                     "seq {} folds into t-{} but the task wait does not match it",
                     row.seq,

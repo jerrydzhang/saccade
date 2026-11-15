@@ -8,7 +8,6 @@ pub mod name;
 pub mod serve;
 pub mod skill;
 pub mod task;
-pub mod wait;
 pub mod workspace;
 
 use std::io::IsTerminal;
@@ -28,15 +27,13 @@ use self::name::name_door;
 use self::serve::serve_door;
 use self::skill::skill_door;
 use self::task::{born_of, parse_task_id, read_only, render_records};
-use self::wait::wait_door;
 use self::workspace::workspace_door;
 
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::{
-    ActorName, Command, Context, IncarnationId, MessageId, Prose, RecordId, Reject, Scope, Target,
-    Tier, WorktreePath, wire,
+    ActorName, Command, Context, IncarnationId, Prose, RecordId, Reject, Scope, Tier, WorktreePath,
 };
 
 #[derive(Parser)]
@@ -303,30 +300,6 @@ enum Cmd {
         #[command(subcommand)]
         verb: BoardVerb,
     },
-    /// Block until a match lands: a task (t-<n>) target matches
-    /// record activity, the cursor named by --after and the mode by
-    /// --until (activity or offer); an incarnation (i-<n>) target waits for messages
-    /// addressed to it - waking on arrivals at its host terminal,
-    /// reading its mailbox for truth, bounded overall by --timeout
-    /// seconds. Nothing is recorded
-    Wait {
-        /// The target: t-<n> for record activity, i-<n> for arrival
-        /// waiting
-        target: String,
-        /// The global record position matched strictly after - the
-        /// cursor a read disclosed, never defaulted; required for
-        /// t-<n>, refused for i-<n>
-        #[arg(long)]
-        after: Option<u64>,
-        /// What wakes a t-<n> wait - required there, refused for i-<n>
-        #[arg(long)]
-        until: Option<UntilMode>,
-        /// The overall bound in seconds for an i-<n> arrival wait;
-        /// without it the wait runs until a message lands or the call
-        /// is interrupted
-        #[arg(long)]
-        timeout: Option<u64>,
-    },
 }
 
 /// The task-free controller's verbs.
@@ -394,21 +367,6 @@ impl From<CompleteKind> for Kind {
             CompleteKind::Incarnations => Kind::Incarnations,
             CompleteKind::Workspaces => Kind::Workspaces,
             CompleteKind::WorkspacesClean => Kind::WorkspacesClean,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum UntilMode {
-    Activity,
-    Offer,
-}
-
-impl UntilMode {
-    fn until(self) -> saccade::views::WaitUntil {
-        match self {
-            UntilMode::Activity => saccade::views::WaitUntil::Activity,
-            UntilMode::Offer => saccade::views::WaitUntil::Offer,
         }
     }
 }
@@ -528,7 +486,6 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Complete { .. } => "complete".into(),
         Cmd::Clone { .. } => "clone".into(),
         Cmd::Skill { .. } => "skill".into(),
-        Cmd::Wait { .. } => "wait".into(),
         Cmd::Board { verb } => format!("board.{}", board_verb_name(verb)),
     }
 }
@@ -673,22 +630,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
             }
             WorkspaceVerb::Clean { .. } => {}
         },
-        Cmd::Wait {
-            after,
-            until,
-            timeout,
-            ..
-        } => {
-            if after.is_some() {
-                push(&mut flags, "--after");
-            }
-            if until.is_some() {
-                push(&mut flags, "--until");
-            }
-            if timeout.is_some() {
-                push(&mut flags, "--timeout");
-            }
-        }
         Cmd::Board { verb } => match verb {
             BoardVerb::Edit { dir, .. } | BoardVerb::Update { dir, .. } => {
                 if dir.is_some() {
@@ -906,21 +847,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             within,
         } => {
             return task::search_door(cli, &destination, terms, *history, within);
-        }
-        Cmd::Wait {
-            target,
-            after,
-            until,
-            timeout,
-        } => {
-            return wait_door(
-                cli,
-                &destination,
-                target,
-                *after,
-                until.map(UntilMode::until),
-                *timeout,
-            );
         }
         Cmd::Send {
             to,
@@ -1511,6 +1437,24 @@ fn dense_token(token: &str, prefix: &str) -> Result<usize, Fail> {
         .map_err(|_| Fail::Usage(format!("'{token}' is not an {prefix}<n> reference")))
 }
 
+/// The incarnation a public i-N names: dense birth order against the fold.
+fn resolve_incarnation(world: &World, token: &str) -> Result<IncarnationId, Fail> {
+    let n = token.strip_prefix("i-").ok_or_else(|| {
+        Fail::Usage(format!(
+            "'{token}' is not an incarnation reference (expected i-<n>)"
+        ))
+    })?;
+    let n: usize = n
+        .parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not an incarnation reference")))?;
+    world.incarnation_at_num(n).ok_or_else(|| {
+        Fail::Usage(format!(
+            "i-{n} names no incarnation; this fold holds {} incarnations",
+            world.incarnations.len()
+        ))
+    })
+}
+
 impl From<saccade::launch::LaunchFail> for Fail {
     fn from(f: saccade::launch::LaunchFail) -> Self {
         match f {
@@ -1559,7 +1503,6 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
 #[cfg(test)]
 mod test {
     use self::task::{ShowId, parse_show_id};
-    use self::wait::wait_target;
     use super::*;
 
     /// Possession, --actor, and the declared scope, one test owning every env mutation.
@@ -1711,17 +1654,6 @@ mod test {
              drop the '#': the task is addressed as t-3"
         );
 
-        let refused = wait_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
-        assert_eq!(
-            refused,
-            "'#t-3' is not a wait target; drop the '#': tasks are t-<n>"
-        );
-
-        assert!(matches!(
-            wait_target("t-3").unwrap_or_else(|f| panic!("{f}")),
-            TaskId(3)
-        ));
-
         assert!(matches!(
             parse_show_id("7").unwrap_or_else(|f| panic!("{f}")),
             ShowId::Position(RecordId(7))
@@ -1737,7 +1669,6 @@ mod test {
              drop the '#': the raw record at a position is the bare <seq>"
         );
         assert!(parse_show_id("184467440737095516160").is_err());
-        assert!(wait_target("#184467440737095516160").is_err());
         assert!(parse_show_id("#184467440737095516160").is_err());
     }
 }

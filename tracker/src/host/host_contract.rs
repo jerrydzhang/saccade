@@ -5,7 +5,6 @@
 //! swap is a dialect module plus its own claim.
 
 use std::path::Path;
-use std::time::Duration;
 
 /// A host address returned at launch: opaque bytes, asserting nothing
 /// beyond host-reported liveness at probe time.
@@ -19,14 +18,6 @@ pub enum Liveness {
     Live,
     Gone,
     Unknown(String),
-}
-
-/// One bounded host wait's answer. The wake is advisory only: truth
-/// about arrivals is the session's own mailbox read.
-#[derive(Clone, Debug, PartialEq)]
-pub enum WaitWake {
-    Message,
-    Quiet,
 }
 
 /// A launch refusal, naming the evidence.
@@ -139,9 +130,6 @@ pub trait HostContract: Sync {
     /// One ordered submission into a live session: queue-style, the
     /// write never waits for a pause and never observes a turn.
     fn submit(&self, address: &HostAddress, text: &str) -> Result<(), SubmitRefusal>;
-    /// One bounded host wait at an explicit address; the arrival-wait
-    /// door loops over this verb with the mailbox as truth.
-    fn wait(&self, address: &HostAddress, bound: Duration) -> WaitWake;
     /// Ends the session program and carries back the finished-state
     /// fact the reply named. Consumed only by the workspace clean
     /// effect's ordered contract, never as a standalone door.
