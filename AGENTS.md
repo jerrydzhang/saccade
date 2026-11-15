@@ -2,10 +2,9 @@
 
 Saccade is a tracker for agent work. The packages: `tracker` (the `sac`
 binary: event log, server, CLI, boards), `grammar` (the board format),
-`client` (the Saccade app), `companion` (the tmux companion). Each
-package owns its version and its docs. `AXIOMS.md`
-carries world belief - read it before proposing anything
-architectural. Using the tracker is not required to develop this
+`client` (the Saccade app). Each package owns its version and its
+docs. `AXIOMS.md` carries world belief - read it before proposing
+anything architectural. Using the tracker is not required to develop this
 project; `tracker/skill/SKILL.md` teaches the `sac` CLI for when you
 do, and `tracker/README.md` carries the tracker's law.
 

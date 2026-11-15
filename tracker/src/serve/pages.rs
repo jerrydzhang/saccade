@@ -695,8 +695,8 @@ const AGENTS_WATCH: &[&str] = &[
 
 /// The tasks the incarnation currently owns, latest claim first: the
 /// record's claims are whole-task responsibility, so the latest claim
-/// names the task and the count of the rest rides the companion's
-/// title, not the page's facts.
+/// names the task and the count of the rest is not among the page's
+/// facts.
 fn owned_tasks(world: &World, id: IncarnationId) -> Vec<usize> {
     let mut owned: Vec<(RecordId, usize)> = world
         .tasks

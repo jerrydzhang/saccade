@@ -1313,17 +1313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "saccade-companion"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libc",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
