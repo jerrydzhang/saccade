@@ -87,14 +87,6 @@ pub enum Event {
         branch: GitBranch,
         worktree: WorktreePath,
     },
-    /// The confirmed change of where a native incarnation lives,
-    /// published only after the host's liveness answer permitted it.
-    /// It asserts the confirmed change - never a pending intent, never
-    /// a running process.
-    WorkspaceChanged {
-        incarnation: IncarnationId,
-        worktree: WorktreePath,
-    },
     /// A completed workspace cleanup: host closure verified and the Git
     /// checkout confirmed absent before this lands. It references the
     /// existing workspace birth identity only - the birth carries the
@@ -239,15 +231,11 @@ pub enum Command {
         task_id: TaskId,
         checkpoint: GitCommit,
     },
-    // Creation and change are machinery verbs: System authorship comes
+    // Creation is a machinery verb: System authorship comes
     // from the role, never input
     CreateWorkspace {
         base: GitCommit,
         branch: GitBranch,
-        worktree: WorktreePath,
-    },
-    ChangeWorkspace {
-        incarnation: IncarnationId,
         worktree: WorktreePath,
     },
     // Cleanup is a machinery verb: System authorship

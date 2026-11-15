@@ -725,9 +725,8 @@ mod test {
             24,
         )
         .unwrap();
-        // the task-free workspace families ride the same round-trip:
-        // a created workspace birth, then the native session's
-        // confirmed change into it
+        // the task-free workspace family rides the same round-trip:
+        // a created workspace birth
         record(
             &mut conn,
             &system,
@@ -737,16 +736,6 @@ mod test {
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
             25,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::ChangeWorkspace {
-                incarnation: IncarnationId(RecordId(12)),
-                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-            },
-            26,
         )
         .unwrap();
         // the workspace lifecycle rides the same round-trip: the
@@ -951,11 +940,11 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 36);
+        assert_eq!(loadout.rows.len(), 35);
         // the namings: the latest one stands, the log keeps the rest
-        assert_eq!(loadout.rows[32].kind, "incarnation_named");
-        assert!(loadout.rows[32].payload.contains("th\u{e9}orie"));
-        assert_eq!(loadout.rows[34].kind, "incarnation_named");
+        assert_eq!(loadout.rows[31].kind, "incarnation_named");
+        assert!(loadout.rows[31].payload.contains("th\u{e9}orie"));
+        assert_eq!(loadout.rows[33].kind, "incarnation_named");
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(12))]
                 .name
@@ -1033,7 +1022,6 @@ mod test {
         assert_eq!(loadout.rows[16].kind, "workspace_created");
         assert_eq!(loadout.rows[16].actor.as_str(), "saccade");
         assert_eq!(loadout.rows[16].tier, "system");
-        assert_eq!(loadout.rows[17].kind, "workspace_changed");
         assert_eq!(
             world.workspaces[&crate::WorkspaceId(RecordId(16))].workspace,
             crate::CreatedWorkspace {
@@ -1044,22 +1032,13 @@ mod test {
             }
         );
         assert_eq!(world.provenance[&RecordId(16)], None);
-        assert_eq!(
-            world.workspace_changes[&IncarnationId(RecordId(12))],
-            crate::WorkspaceChange {
-                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                record: RecordId(17),
-                at: 26,
-            }
-        );
-        assert_eq!(world.provenance[&RecordId(17)], None);
         assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
         // the lifecycle fact: a reference-only payload, machinery
         // authorship, and the stage the fold carries after it
-        assert_eq!(loadout.rows[18].kind, "workspace_cleaned");
-        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[18].tier, "system");
-        assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
+        assert_eq!(loadout.rows[17].kind, "workspace_cleaned");
+        assert_eq!(loadout.rows[17].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[17].tier, "system");
+        assert!(loadout.rows[17].payload.contains("\"workspace\":16"));
         // the board family rode its own kinds with the declared pairs:
         // the eight rows before the three namings and the closing checkpoint
         let board = |back: usize| &loadout.rows[loadout.rows.len() - 12 + back];
@@ -1094,7 +1073,7 @@ mod test {
                 .contains("\"incorporations\":[[0,\"bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]")
         );
 
-        assert_eq!(world.provenance[&RecordId(18)], None);
+        assert_eq!(world.provenance[&RecordId(17)], None);
         assert_eq!(
             world.workspace_stage(RecordId(16)),
             Some(crate::WorkspaceStage::Cleaned)
@@ -1129,9 +1108,9 @@ mod test {
         // the human's root destination: both kinds ride the round-trip,
         // the final bind is the standing choice; the closing checkpoint
         // follows them
-        assert_eq!(loadout.rows[21].kind, "root_space_bound");
-        assert_eq!(loadout.rows[22].kind, "root_space_cleared");
-        assert_eq!(loadout.rows[23].kind, "root_space_bound");
+        assert_eq!(loadout.rows[20].kind, "root_space_bound");
+        assert_eq!(loadout.rows[21].kind, "root_space_cleared");
+        assert_eq!(loadout.rows[22].kind, "root_space_bound");
         assert_eq!(
             world
                 .root_space

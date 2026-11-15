@@ -658,35 +658,6 @@ pub fn create_workspace(
     )
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ChangeReply {
-    pub changed: bool,
-    pub incarnation: usize,
-    pub num: usize,
-    pub from: String,
-    pub to: String,
-    pub records: Vec<StoredRecord>,
-}
-
-/// Move a stopped native session's saved working directory to an
-/// explicit existing one; the server refuses a live or unprovable
-/// session before any mutation.
-pub fn change_workspace(
-    url: &str,
-    incarnation: usize,
-    to: &std::path::Path,
-) -> Result<ChangeReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/change",
-        serde_json::json!({
-            "incarnation": incarnation,
-            "to": to.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
 /// The lifecycle controller's client half: clean names the
 /// exact recorded workspace path; the server runs the ordered effects
 /// and lands the completed facts itself.

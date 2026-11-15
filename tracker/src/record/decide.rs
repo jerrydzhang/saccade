@@ -31,13 +31,11 @@ fn required_tier(event: &Event) -> Authority {
         }
         // provisioning by role: the machinery's establishment and
         // creation, the native registration, and the recipient's
-        // delivery record. The confirmed change is machinery's act too:
-        // it lands at the probe's pass, never from a caller.
+        // delivery record.
         // Cleanup lands only after its effects verified:
         // the same effect-only authority, never a caller-authored fact.
         Event::WorkspaceEstablished { .. }
         | Event::WorkspaceCreated { .. }
-        | Event::WorkspaceChanged { .. }
         | Event::WorkspaceCleaned { .. }
         | Event::IncarnationRegistered { .. }
         | Event::SavedSessionBound { .. }
@@ -104,13 +102,6 @@ pub fn decide(command: Command) -> Vec<Event> {
         } => vec![Event::WorkspaceCreated {
             base,
             branch,
-            worktree,
-        }],
-        Command::ChangeWorkspace {
-            incarnation,
-            worktree,
-        } => vec![Event::WorkspaceChanged {
-            incarnation,
             worktree,
         }],
         Command::CleanWorkspace { workspace } => {
@@ -205,7 +196,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 21] = [
+        let events: [(Event, Authority); 20] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -277,19 +268,12 @@ mod test {
                 },
                 AnyTier,
             ),
-            // Creation and the confirmed change are the machinery's own
-            // acts, like the establishment and the registration.
+            // Creation is the machinery's own act, like the
+            // establishment and the registration.
             (
                 Event::WorkspaceCreated {
                     base: GitCommit::new("abc123".into()).unwrap(),
                     branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
-                    worktree: WorktreePath::new("/wt".into()).unwrap(),
-                },
-                Require(Tier::System),
-            ),
-            (
-                Event::WorkspaceChanged {
-                    incarnation: IncarnationId(RecordId(0)),
                     worktree: WorktreePath::new("/wt".into()).unwrap(),
                 },
                 Require(Tier::System),
@@ -422,10 +406,6 @@ mod test {
             Command::CreateWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("workspace-deadbeef".into()).unwrap(),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Command::ChangeWorkspace {
-                incarnation: IncarnationId(RecordId(0)),
                 worktree: WorktreePath::new("/wt".into()).unwrap(),
             },
             Command::RegisterIncarnation {

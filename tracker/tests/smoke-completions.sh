@@ -72,8 +72,6 @@ fish -i -c '
   report launch_resume "sac launch --resume "
   report send_to "sac send --to "
   report send_task "sac send --task "
-  report switch_target "sac workspace switch "
-  report switch_to "sac workspace switch i-0 --to "
   report clean "sac workspace clean "
   report board_static "sac board "
   report offer_tasks "sac offer "
@@ -112,11 +110,6 @@ section launch_resume | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" 
 }
 section send_to | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" || { section send_to; fail "send --to misses incarnations"; }
 section send_task | grep -Fq "t-0${TAB}smoke the completions door" || { section send_task; fail "send --task misses tasks"; }
-section switch_target | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" || { section switch_target; fail "switch misses incarnations"; }
-
-# switch --to: recorded beside the fallback
-section switch_to | grep -Fq "$WS" || { section switch_to; fail "switch --to misses the recorded workspace"; }
-section switch_to | grep -q "realdir" || { section switch_to; fail "switch --to misses the fallback"; }
 
 # clean: recorded paths only, no filesystem fallback
 section clean | grep -Fq "$WS" || { section clean; fail "clean misses the recorded path"; }

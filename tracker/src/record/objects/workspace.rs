@@ -75,17 +75,6 @@ pub struct WorkspaceStageFact {
     pub at: u64,
 }
 
-/// The latest confirmed saved-directory change of a native incarnation:
-/// the selected directory, the record that confirmed it, and its event
-/// time. A machinery fact riding the incarnation, never a lifecycle
-/// stage; earlier changes stay in the log.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WorkspaceChange {
-    pub worktree: WorktreePath,
-    pub record: RecordId,
-    pub at: u64,
-}
-
 /// The primary checkout's bound Herdr destination: the exact space and
 /// tab pair the human chose by running the bind inside the manual root
 /// space's terminal. A chosen destination, never a host-space-existence

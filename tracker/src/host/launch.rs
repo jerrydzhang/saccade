@@ -242,13 +242,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                     native_id.as_str()
                 )));
             }
-            // the recorded change is the workspace authority; the
-            // header cwd answers only for sessions whose fold holds
-            // no change
-            let dir = match world.workspace_changes.get(&id) {
-                Some(change) => std::path::PathBuf::from(change.worktree.as_path()),
-                None => std::path::PathBuf::from(&header.cwd),
-            };
+            let dir = std::path::PathBuf::from(&header.cwd);
             if !dir.is_dir() {
                 return Err(LaunchFail::Usage(format!(
                     "the workspace {} is missing; resume starts from the recorded workspace, never a substitute",

@@ -17,7 +17,7 @@ use saccade::store::{RecordId, World};
 /// The hidden candidate doors: one kind per calling position in the
 /// completion scripts. The workspace kinds differ only in the stage
 /// that leads - clean completes recorded paths only,
-/// launch and switch take the plain birth order.
+/// launch takes the plain birth order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Tasks,

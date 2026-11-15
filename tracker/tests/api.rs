@@ -3319,21 +3319,6 @@ fn guard_held(guard: &Path) -> Option<bool> {
     }
 }
 
-/// The launched harness holds the guard within a bounded wait: the
-/// door no longer waits on a handoff, so the fixture does.
-fn wait_guard(guard: &Path) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    loop {
-        if guard_held(guard) == Some(true) {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
-
 /// A stub harness: one dump of argv, cwd, and the saccade environment.
 fn stub_pi(dir: &std::path::Path) -> std::path::PathBuf {
     let pi = dir.join("pi dump");
@@ -4926,264 +4911,6 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
 }
 
 #[test]
-fn switch_resume_runs_through_the_real_door() {
-    let bin = env!("CARGO_BIN_EXE_sac");
-    let db = scratch_db("switch-resume-door");
-    let home = db.parent().unwrap();
-    let (root, _first, _head) = scratch_repo(home);
-    let fx = door_fixture(home);
-    // the server probes liveness through its own pinned fake host,
-    // with every recorded address reading finished (stopped) by default
-    let (url, server_pid) = spawn_serving_subprocess(
-        &db,
-        &root,
-        bin,
-        fx.host.parent().unwrap(),
-        Some(&fx.cold_state),
-        &[
-            ("SACCADE_HERDR", fx.hcs.to_str().unwrap()),
-            ("SACCADE_FAKE_HC_STATE", "finished"),
-        ],
-    );
-
-    // two explicit existing directories; the stopped rover parked at B
-    let selected_a = home.join("selected-a");
-    let selected_b = home.join("selected-b");
-    std::fs::create_dir_all(&selected_a).unwrap();
-    std::fs::create_dir_all(&selected_b).unwrap();
-    let saved = home.join("rover-session.jsonl");
-    let tail = "{\"type\":\"message\",\"id\":\"aa\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"user\",\"content\":\"parked at the old workspace\"}}\n";
-    std::fs::write(
-        &saved,
-        format!(
-            "{{\"type\":\"session\",\"version\":3,\"id\":\"rover0001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n{tail}",
-            selected_b.display()
-        ),
-    )
-    .unwrap();
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "rover0001", "session_file": saved.to_str().unwrap()}),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["num"], 0);
-    let guard = PathBuf::from(format!("{}.guard", saved.display()));
-
-    // an addressless (pre-B) session takes no switch: the migration
-    // is exit + resume, and the refusal names it before anything moves.
-    // Both sides read the fake host's state as finished (stopped)
-    let mut envs = door_envs(&fx, Some(&guard));
-    envs.push(("SACCADE_FAKE_HC_STATE", "finished".to_string()));
-    let (ok, _out, err, timed_out) = bounded_sac(
-        bin,
-        &[
-            "--server",
-            &url,
-            "--repo",
-            root.to_str().unwrap(),
-            "workspace",
-            "switch",
-            "i-0",
-            "--to",
-            selected_a.to_str().unwrap(),
-        ],
-        &envs,
-    );
-    assert!(!timed_out, "{err}");
-    assert!(!ok, "{err}");
-    assert!(err.contains("carries no host address"), "{err}");
-    assert!(err.contains("exit + resume"), "{err}");
-
-    // the migration itself: a plain resume submits without moving the
-    // address, the presented pair lands it at attach evidence, and the
-    // harness holds the guard
-    let (ok, _out, err, timed_out) = bounded_sac(
-        bin,
-        &[
-            "--server",
-            &url,
-            "--repo",
-            root.to_str().unwrap(),
-            "launch",
-            "--resume",
-            "i-0",
-            "--json",
-        ],
-        &envs,
-    );
-    assert!(!timed_out, "{err}");
-    assert!(ok, "{err}");
-    assert!(
-        wait_guard(&guard),
-        "the resumed harness never took the guard"
-    );
-    stop_holder(&fx.pidfile, &guard);
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "rover0001", "session_file": saved.to_str().unwrap(),
-                "terminal": {"address": "t9", "adopted": false}}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
-    assert_eq!(records.len(), 1, "{body}");
-    assert_eq!(records[0]["kind"], "host_address_assigned", "{body}");
-
-    // the composed door: the change lands, then the same native id
-    // resumes through the real submission
-    let (ok, out, err, timed_out) = bounded_sac(
-        bin,
-        &[
-            "--server",
-            &url,
-            "--repo",
-            root.to_str().unwrap(),
-            "workspace",
-            "switch",
-            "i-0",
-            "--to",
-            selected_a.to_str().unwrap(),
-            "--resume",
-            "--",
-            "carry the thread forward",
-        ],
-        &envs,
-    );
-    assert!(!timed_out, "{err}");
-    assert!(ok, "{out}{err}");
-    assert!(out.contains("workspace changed"), "{out}");
-    assert!(out.contains("integrated pi launching"), "{out}");
-    assert!(out.contains(selected_a.to_str().unwrap()), "{out}");
-    assert!(
-        out.contains("unplaced: no Herdr space was declared"),
-        "the switch-resume names the honest unplaced line: {out}"
-    );
-    // the switched-to directory is unrecorded: no placement ask rides
-    // the composed resume
-    assert!(
-        !home.join("hcs-bin").join("argv-label.log").exists(),
-        "no label ask rides an unrecorded switch-resume"
-    );
-
-    // the header never moved: same native id, same history, same launch
-    // cwd - the record is the authority, and the file is not rewritten
-    // to follow it
-    let moved = std::fs::read(&saved).unwrap();
-    let header: Value =
-        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
-    assert_eq!(header["cwd"], json!(selected_b.display().to_string()));
-    assert_eq!(header["id"], "rover0001");
-    assert!(moved.ends_with(tail.as_bytes()), "the body rode whole");
-
-    // the change record landed
-    let changes_of = |rows: &[Value]| -> Vec<Value> {
-        rows.iter()
-            .filter(|r| r["kind"] == "workspace_changed")
-            .cloned()
-            .collect()
-    };
-    let (_, body) = get_json(&url, "/api/v1/records");
-    let changes = changes_of(json_of(&body)["records"].as_array().unwrap());
-    assert_eq!(changes.len(), 1);
-    assert_eq!(
-        changes[0]["payload"]["worktree"],
-        json!(selected_a.display().to_string())
-    );
-
-    // the resume is the same session, running in the new directory:
-    // the harness holds the guard, and the witness reads after it does
-    assert!(
-        wait_guard(&guard),
-        "the resumed harness never took the guard"
-    );
-    let witness = std::fs::read_to_string(&fx.child_log).unwrap();
-    assert!(witness.contains("guard-taken"), "{witness}");
-    let dump = std::fs::read_to_string(&fx.dump).unwrap();
-    assert!(dump.contains("--session rover0001"), "{dump}");
-    assert!(dump.contains("carry the thread forward"), "{dump}");
-    assert!(
-        dump.contains(&format!("pwd: {}", selected_a.display())),
-        "{dump}"
-    );
-    stop_holder(&fx.pidfile, &guard);
-
-    // a failed launch: the host refuses the run and the standing change fact is disclosed
-    let mut fail_envs = envs.clone();
-    fail_envs.push(("FAKE_HC_RUN_FAILS", "1".to_string()));
-    let switch_args = |to: &Path, json: bool| {
-        let mut args = vec![
-            "--server".to_string(),
-            url.clone(),
-            "--repo".to_string(),
-            root.to_str().unwrap().to_string(),
-            "workspace".to_string(),
-            "switch".to_string(),
-            "i-0".to_string(),
-            "--to".to_string(),
-            to.to_str().unwrap().to_string(),
-            "--resume".to_string(),
-        ];
-        if json {
-            args.push("--json".to_string());
-        }
-        args.push("--".to_string());
-        args.push("carry it back".to_string());
-        args
-    };
-    let (ok, _out, err, timed_out) = bounded_sac(bin, &switch_args(&selected_b, false), &fail_envs);
-    assert!(!timed_out, "{err}");
-    assert!(!ok, "a failed launch must not exit success");
-    // the switch landed and the launch refused at the host: the
-    // standing change fact is disclosed beside the failure
-    assert!(err.contains("the host refused the launch"), "{err}");
-    assert!(err.contains("workspace changed"), "{err}");
-    assert!(err.contains(selected_b.to_str().unwrap()), "{err}");
-    // the change is true: the record landed and the file still sits
-    // at its birth cwd
-    let moved = std::fs::read(&saved).unwrap();
-    let header: Value =
-        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
-    assert_eq!(header["cwd"], json!(selected_b.display().to_string()));
-    assert_eq!(header["id"], "rover0001");
-    let (_, body) = get_json(&url, "/api/v1/records");
-    let changes = changes_of(json_of(&body)["records"].as_array().unwrap());
-    assert_eq!(changes.len(), 2);
-    assert_eq!(
-        changes[1]["payload"]["worktree"],
-        json!(selected_b.display().to_string())
-    );
-    // the failed launch ran nothing new: the guard stayed free and
-    // the witness holds exactly the two earlier resumes' takings
-    assert_eq!(guard_held(&guard), Some(false));
-    let witness = std::fs::read_to_string(&fx.child_log).unwrap();
-    assert_eq!(witness.matches("guard-taken").count(), 2, "{witness}");
-
-    // the json face: a valid envelope carrying the standing fact
-    let (ok, _out, err, timed_out) = bounded_sac(bin, &switch_args(&selected_a, true), &fail_envs);
-    assert!(!timed_out, "{err}");
-    assert!(!ok, "{err}");
-    let envelope: Value = serde_json::from_str(err.trim()).expect("a valid json error envelope");
-    assert_eq!(envelope["error"], "usage");
-    assert!(
-        envelope["detail"]
-            .as_str()
-            .unwrap()
-            .contains("workspace changed"),
-        "{envelope}"
-    );
-    let moved = std::fs::read(&saved).unwrap();
-    let header: Value =
-        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
-    assert_eq!(header["cwd"], json!(selected_b.display().to_string()));
-
-    let _ = std::process::Command::new("kill")
-        .arg(server_pid.id().to_string())
-        .status();
-    std::fs::remove_dir_all(home).unwrap();
-}
-
-#[test]
 fn a_send_to_a_finished_address_discloses_through_the_real_door() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("send-real-door");
@@ -6277,14 +6004,14 @@ async fn the_declared_repo_carries_the_serving_effects() {
 /// explicit rebind, and the guards that hold throughout - every id
 /// read from a printed face resolving to the same account it names.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
+async fn the_task_free_controller_creates_workspaces() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("ws-controller");
     let home = db.parent().unwrap();
     let (root, _first, head) = scratch_repo(home);
-    // the serving subprocess carries the fake host: the switch door's
-    // quiescence probe asks it, with the liveness state under the
-    // test's pen through the state file (finished by default)
+    // the serving subprocess carries the fake host, with the liveness
+    // state under the test's pen through the state file (finished by
+    // default)
     let hc = fake_hc(home);
     std::fs::write(hc.parent().unwrap().join("state"), b"finished").unwrap();
     let (base_url, _server_pid) = spawn_serving_subprocess(
@@ -6296,10 +6023,8 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         &[("SACCADE_HERDR", hc.to_str().unwrap())],
     );
 
-    // two explicit existing directories, neither created by saccade
-    let selected_a = home.join("selected-a");
+    // an explicit existing directory, not created by saccade
     let selected_b = home.join("selected-b");
-    std::fs::create_dir_all(&selected_a).unwrap();
     std::fs::create_dir_all(&selected_b).unwrap();
 
     // creation through the wire: actual Git facts, the birth record
@@ -6390,158 +6115,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     let rover = json_of(&body);
     assert_eq!(rover["num"], 0);
     let rover_birth = rover["incarnation"].as_u64().unwrap();
-    // the recorded address: the switch door's probe target
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/incarnations/address",
-        &json!({"incarnation": rover_birth, "address": "t7", "adopted": false}),
-    );
-    assert_eq!(status, 200, "{body}");
-
-    // the stopped change: the address probes gone, the change fact
-    // is the whole effect
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 0, "to": selected_a.to_str().unwrap()}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let changed = json_of(&body);
-    assert_eq!(changed["changed"], true);
-    assert_eq!(
-        changed["from"],
-        json!(selected_b.display().to_string()),
-        "{changed}"
-    );
-    assert_eq!(changed["to"], json!(selected_a.display().to_string()));
-    assert_eq!(changed["num"], 0);
-    let change_records = changed["records"].as_array().unwrap();
-    assert_eq!(change_records.len(), 1);
-    assert_eq!(change_records[0]["kind"], "workspace_changed");
-    assert_eq!(change_records[0]["actor"], "saccade");
-    assert_eq!(change_records[0]["tier"], "system");
-    // the saved session never moved: header cwd stays the birth
-    // launch cwd, the body byte-identical, id and history unchanged
-    let moved = std::fs::read(&saved).unwrap();
-    let moved_header: Value =
-        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
-    assert_eq!(moved_header["cwd"], selected_b.display().to_string());
-    assert_eq!(moved_header["id"], "rover0001");
-    assert!(moved.ends_with(tail.as_bytes()), "the body rode whole");
-    // the change record landed after the header success: two creations,
-    // the registration, the address assignment, the change
-    let (_, body) = get_json(&base_url, "/api/v1/records");
-    let rows = json_of(&body)["records"].as_array().unwrap().clone();
-    assert_eq!(rows.len(), 5);
-    assert_eq!(rows[4]["kind"], "workspace_changed");
-
-    // a live address is a live session: busy refuses before any mutation
-    std::fs::write(hc.parent().unwrap().join("state"), b"live").unwrap();
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "session_live");
-    let untouched = std::fs::read(&saved).unwrap();
-    let untouched_header: Value =
-        serde_json::from_slice(untouched.split(|&b| b == b'\n').next().unwrap()).unwrap();
-    assert_eq!(untouched_header["cwd"], selected_b.display().to_string());
-
-    // an unprobeable answer is unknown: refuse, move nothing - never
-    // read as gone
-    std::fs::write(hc.parent().unwrap().join("state"), b"unreadable").unwrap();
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        json_of(&body)["error"]["code"],
-        "session_quiescence_unknown"
-    );
-
-    // with the address gone again the same change lands
-    std::fs::write(hc.parent().unwrap().join("state"), b"finished").unwrap();
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(
-        json_of(&body)["from"],
-        json!(selected_a.display().to_string())
-    );
-
-    // a missing target refuses before anything moves; the recorded
-    // association stands
-    let (_, body) = get_json(&base_url, "/api/v1/records");
-    let before = json_of(&body)["records"].as_array().unwrap().len();
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 0, "to": home.join("nowhere").to_str().unwrap()}),
-    );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "workspace_path_missing");
-    // an unknown incarnation refuses
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 99, "to": selected_a.to_str().unwrap()}),
-    );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
-    // a session whose saved locator names no file refuses
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "ghost0001", "session_file": "/sessions/ghost0001.jsonl"}),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["num"], 1);
-    let ghost_birth = json_of(&body)["incarnation"].as_u64().unwrap();
-    // the ghost carries an address, so its change reaches the probe
-    // and the missing file refuses there
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/incarnations/address",
-        &json!({"incarnation": ghost_birth, "address": "t8", "adopted": false}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": 1, "to": selected_a.to_str().unwrap()}),
-    );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "saved_session_missing");
-    // an addressless session takes no switch at all: the pre-B
-    // migration is exit + resume
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "preb00001", "session_file": "/sessions/preb00001.jsonl"}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let preb_num = json_of(&body)["num"].as_u64().unwrap();
-    let (status, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": preb_num, "to": selected_a.to_str().unwrap()}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "recipient_unaddressed");
-    let (_, body) = get_json(&base_url, "/api/v1/records");
-    assert_eq!(
-        json_of(&body)["records"].as_array().unwrap().len(),
-        before + 3,
-        "only the registrations and the assignment wrote past the changes"
-    );
-
     // the retired task-bound effect routes are absent: a 404 that
     // writes nothing - the task-bound establishment is birthable by no
     // public face, its fold contracts pinned in the store and
@@ -6565,7 +6138,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         "the absent routes wrote nothing"
     );
 
-    // the CLI face: creation and switch through a real subprocess
+    // the CLI face: creation through a real subprocess
     let sac = |args: &[&str], envs: &[(&str, &str)]| {
         let out = scrubbed(std::process::Command::new(bin))
             .args(["--server", &base_url, "--repo", root.to_str().unwrap()])
@@ -6596,41 +6169,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
             .starts_with("cli-built-"),
         "{out}"
     );
-
-    let (ok, out, err) = sac(
-        &[
-            "workspace",
-            "switch",
-            "i-0",
-            "--to",
-            selected_a.to_str().unwrap(),
-            "--json",
-        ],
-        &[],
-    );
-    assert!(ok, "{out}{err}");
-    let switched = json_of(&out);
-    assert_eq!(switched["changed"], true);
-    assert_eq!(switched["from"], json!(selected_b.display().to_string()));
-    assert_eq!(switched["to"], json!(selected_a.display().to_string()));
-    assert_eq!(switched["records"][0]["kind"], "workspace_changed");
-    // the text face names the move and the ordinary resume door
-    let (ok, out, err) = sac(
-        &[
-            "workspace",
-            "switch",
-            "i-0",
-            "--to",
-            selected_b.to_str().unwrap(),
-        ],
-        &[],
-    );
-    assert!(ok, "{out}{err}");
-    assert!(
-        out.contains("workspace changed - /"),
-        "the face names from -> to without saved-cwd wording: {out}"
-    );
-    assert!(out.contains("sac launch --resume i-0"), "{out}");
 
     // the explicit-new choice rides the ordinary fresh-launch door:
     // provision, then launch, one composition
@@ -6776,13 +6314,12 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         "{asked}"
     );
     let newborn = asked["launch"]["incarnation"]["num"].as_u64().unwrap();
-    // the i-N counted births only: rover i-0, ghost i-1, the pre-B
-    // attach i-2, the trailblaze door birth i-3, the newborn i-4 -
-    // creation never counted. The ask resolves its own exact birth,
-    // the (harness, native id) pair it composed: a first-address
-    // match would name the older trailblaze session, which carries
-    // the same fake host address t1
-    assert_eq!(newborn, 4, "{asked}");
+    // the i-N counted births only: rover i-0, the trailblaze door
+    // birth i-1, the newborn i-2 - creation never counted. The ask
+    // resolves its own exact birth, the (harness, native id) pair it
+    // composed: a first-address match would name the older trailblaze
+    // session, which carries the same fake host address t1
+    assert_eq!(newborn, 2, "{asked}");
     assert!(asked["launch"]["question"]["seq"].is_u64(), "{asked}");
     // the question is durable addressed mail from the creator's scope
     let (_, body) = get_json(
@@ -6793,37 +6330,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     let sent: Vec<&Value> = mail.iter().filter(|m| m["from"]["num"] == 0).collect();
     assert_eq!(sent.len(), 1, "{body}");
     assert_eq!(sent[0]["to"]["num"], newborn);
-
-    // a resume request cannot outrun liveness: the recorded address
-    // answers live, so --resume composes onto a live refusal - busy is
-    // decided before any launch
-    std::fs::write(hc.parent().unwrap().join("state"), b"live").unwrap();
-    let (ok, out, err) = sac(
-        &[
-            "workspace",
-            "switch",
-            "i-0",
-            "--to",
-            selected_a.to_str().unwrap(),
-            "--resume",
-            "--",
-            "continue at the new workspace",
-        ],
-        &[],
-    );
-    assert!(!ok, "{out}{err}");
-    assert!(err.contains("session_live"), "{err}");
-    // the refused change moved nothing: the recorded target stands
-    let (_, body) = get_json(&base_url, "/api/v1/records");
-    let rows = json_of(&body)["records"].as_array().unwrap().clone();
-    let changed: Vec<&Value> = rows
-        .iter()
-        .filter(|r| r["kind"] == "workspace_changed")
-        .collect();
-    let last = changed.last().unwrap()["payload"]["worktree"]
-        .as_str()
-        .unwrap();
-    assert_eq!(last, selected_b.display().to_string());
 
     std::fs::remove_dir_all(home).unwrap();
 }
@@ -7174,7 +6680,7 @@ async fn clean_refuses_an_unreadable_terminal_table() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_cleaned_stage_guards_launch_and_switch() {
+async fn the_cleaned_stage_guards_launch() {
     let rig = lifecycle_rig("guards");
     let (_, _branch, ws) = rig_provision(&rig, "guarded-lifecycle");
     let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
@@ -7201,33 +6707,6 @@ async fn the_cleaned_stage_guards_launch_and_switch() {
     let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", &ws, "--here"]);
     assert!(!ok, "a cleaned workspace took a here launch: {err}");
     assert!(err.contains("recorded Cleaned"), "{err}");
-
-    // the switch target refuses the same way: a saved session whose
-    // header cwd is the cleaned workspace
-    let saved = rig.dir.join("native-deadbeef01.jsonl");
-    std::fs::write(
-        &saved,
-        format!("{{\"id\":\"deadbeef01\",\"cwd\":\"{ws}\"}}\n{{\"kind\":\"filler\"}}\n"),
-    )
-    .unwrap();
-    let (status, body) = post_json(
-        &rig.url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "deadbeef01", "session_file": saved.display().to_string()}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let num = json_of(&body)["num"].as_u64().unwrap();
-    let (status, body) = post_json(
-        &rig.url,
-        "/api/v1/workspace/change",
-        &json!({"incarnation": num, "to": ws, "client": "lifecycle-test"}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        json_of(&body)["error"]["code"],
-        "workspace_cleaned",
-        "{body}"
-    );
 
     // the resume path pins the same guard: a saved session whose
     // header cwd sits in the cleaned workspace refuses - the guard

@@ -349,23 +349,6 @@ enum WorkspaceVerb {
         #[arg(long)]
         base: Option<String>,
     },
-    /// Change where a stopped native session lives: an explicit
-    /// existing directory; a live session refuses (exit it first), and
-    /// the record is the whole effect
-    Switch {
-        /// The incarnation (i-<n>)
-        incarnation: String,
-        /// The selected directory: it must already exist
-        #[arg(long)]
-        to: PathBuf,
-        /// Resume the session in the new directory after the change
-        #[arg(long)]
-        resume: bool,
-        /// The prompt for the resumed session; native human input when
-        /// omitted (with --resume)
-        #[arg(last = true)]
-        prompt: Vec<String>,
-    },
     /// Clean an exact recorded workspace: terminal close, terminal
     /// closure verified, git worktree removal with the branch
     /// retained, checkout and host visible absence verified, then the
@@ -581,7 +564,6 @@ fn verb_path(command: &Cmd) -> String {
 fn verb_name(verb: &WorkspaceVerb) -> &'static str {
     match verb {
         WorkspaceVerb::New { .. } => "new",
-        WorkspaceVerb::Switch { .. } => "switch",
         WorkspaceVerb::Clean { .. } => "clean",
         WorkspaceVerb::Root { verb } => match verb {
             RootVerb::Bind => "root-bind",
@@ -720,20 +702,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                 }
                 if base.is_some() {
                     push(&mut flags, "--base");
-                }
-            }
-            WorkspaceVerb::Switch {
-                to: _,
-                resume,
-                prompt,
-                ..
-            } => {
-                push(&mut flags, "--to");
-                if *resume {
-                    push(&mut flags, "--resume");
-                }
-                if !prompt.is_empty() {
-                    push(&mut flags, "prompt");
                 }
             }
             WorkspaceVerb::Clean { .. } => {}

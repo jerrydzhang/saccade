@@ -119,7 +119,6 @@ end
 
 function __saccade_workspace_verbs
     printf 'new\tProvision a NEW workspace through Git effects\n'
-    printf 'switch\tMove a stopped native session saved directory\n'
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
     printf 'root\tBind, show, or clear the primary checkout destination\n'
 end
@@ -189,10 +188,6 @@ complete -c sac -n '__saccade_verb launch' -l harness -r -f -d 'the harness a fr
 complete -c sac -n '__saccade_verb launch' -l name -r -f -d 'name the fresh incarnation'
 complete -c sac -n '__saccade_verb launch' -l here -d 'launch through the host, then attach it in this terminal'
 complete -c sac -n '__saccade_verb workspace new' -l base -r -f -d 'the Git base: a ref, defaulting to the primary HEAD'
-complete -c sac -n '__saccade_verb workspace switch' -l resume -d 'resume the session in the new directory'
-complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -d 'the selected directory: it must already exist' -a '(__saccade_candidates workspaces)' -k
-complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -a '(__fish_complete_directories)'
-complete -c sac -n '__saccade_verb workspace switch; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates incarnations)'
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'

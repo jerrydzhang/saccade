@@ -1,7 +1,4 @@
-use super::launch::{
-    launch_failed, launch_harness_name, placement_lines, provision_new, submitted_launch,
-};
-use super::wait::resolve_incarnation;
+use super::launch::provision_new;
 use super::*;
 use std::path::Path;
 
@@ -32,91 +29,6 @@ pub(super) fn workspace_new_door(
     Ok(render_birth(&birth))
 }
 
-/// `sac workspace switch`: the stopped-session change through the
-/// server, then an optional resume through the ordinary door. The
-/// change record is the whole effect; the resume is a separate launch
-/// whose failure leaves that fact standing.
-pub(super) fn workspace_switch_door(
-    cli: &Cli,
-    destination: &Destination,
-    token: &str,
-    to: &Path,
-    resume: bool,
-    prompt: &[String],
-) -> Result<String, Fail> {
-    let url = server_url(destination, "workspace switch")?;
-    client::handshake(&url);
-    // resolve the incarnation token against the fold first, so the
-    // refusal names the fold's extent; the wire's law is unchanged
-    let loadout = loadout_of(destination)?;
-    let LoadState::Full(world) = loadout.state else {
-        return Err(Fail::Degraded(
-            "switch needs the world; the log will not fold".into(),
-        ));
-    };
-    let id = resolve_incarnation(&world, token)?;
-    let num = world
-        .incarnation_num(id)
-        .ok_or(Fail::Reject(Reject::InvalidIncarnationId))?;
-    let reply = client::change_workspace(&url, num, to).map_err(Fail::Client)?;
-    let record = reply.records.first().map(|r| r.seq);
-    let changed = format!(
-        "i-{num} workspace changed - {from} -> {to}{record}",
-        num = reply.num,
-        from = reply.from,
-        to = reply.to,
-        record = record.map(|r| format!(" (record {r})")).unwrap_or_default(),
-    );
-    if resume {
-        // the change fact already stands; a failed launch says so
-        let launch = match submitted_launch(cli, destination, None, Some(token), None, prompt) {
-            Ok(launch) => launch,
-            Err(e) => return Err(launch_failed(&changed, e)),
-        };
-        let resumed = serde_json::json!({
-            "workspace": launch.workspace,
-            "terminal": launch.terminal,
-            "space": launch.space,
-            "tab": launch.tab,
-            "place_refusal": launch.place_refusal,
-        });
-        if cli.json {
-            return Ok(serde_json::to_string_pretty(&serde_json::json!({
-                "changed": true,
-                "incarnation": reply.incarnation,
-                "num": reply.num,
-                "from": reply.from,
-                "to": reply.to,
-                "records": reply.records,
-                "resumed": resumed,
-            }))
-            .expect("plain data"));
-        }
-        return Ok(format!(
-            "{changed}\nintegrated {h} launching at {ws} - terminal {t}\n{place}\n  the resumed session carries the same native id and history",
-            h = launch_harness_name(&launch),
-            ws = launch.workspace,
-            t = launch.terminal,
-            place = placement_lines(&launch.terminal, &launch.space, &launch.place_refusal),
-        ));
-    }
-    if cli.json {
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "changed": true,
-            "incarnation": reply.incarnation,
-            "num": reply.num,
-            "from": reply.from,
-            "to": reply.to,
-            "records": reply.records,
-        }))
-        .expect("plain data"));
-    }
-    Ok(format!(
-        "{changed}\n  the session was stopped; resume it there with `sac launch --resume i-{}`",
-        reply.num
-    ))
-}
-
 pub(super) fn workspace_door(
     cli: &Cli,
     destination: &Destination,
@@ -126,12 +38,6 @@ pub(super) fn workspace_door(
         WorkspaceVerb::New { label, base } => {
             workspace_new_door(cli, destination, label.as_deref(), base.as_deref())
         }
-        WorkspaceVerb::Switch {
-            incarnation,
-            to,
-            resume,
-            prompt,
-        } => workspace_switch_door(cli, destination, incarnation, to, *resume, prompt),
         WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
         WorkspaceVerb::Root { verb } => match verb {
             RootVerb::Bind => root_bind_door(cli, destination),
