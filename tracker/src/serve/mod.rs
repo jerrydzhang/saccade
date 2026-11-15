@@ -8,6 +8,16 @@ pub mod window_store;
 pub mod windows;
 pub mod wire;
 
+mod board;
+mod command;
+mod door;
+mod fail;
+mod hosts;
+mod incarnation;
+mod message;
+mod state;
+mod workspace;
+
 use tracing::info;
 
 use crate::api::AppState;
