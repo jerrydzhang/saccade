@@ -105,7 +105,9 @@ export interface AppDriver {
   controlText(control: string): Promise<string | null>;
   /** Whether a port control is rendered now. */
   shows(control: string): Promise<boolean>;
-  /** The window strip's fields as rendered (location, status, link). */
+  /** The window strip's fields as rendered (location, status, link);
+   * status is "" while the view is simply loaded (the strip shows it
+   * only when loading or failed). */
   strip(): Promise<{ location: string; status: string; link: string }>;
   /** The select labels painted now (after s): each chip's text and
    * the part it marks. */

@@ -4,7 +4,9 @@
   // only - the placement math lives in lib/select/overlay.ts, the
   // measurement is injected, and the layer COVERS the host (the
   // parent must be position:relative; the overlay is inset 0), so a
-  // chip's host-relative coordinates land beside its part. F3 - the
+  // chip's host-relative coordinates land beside its part, never over
+  // it (overlay.ts places it; labels.css turns its side into the
+  // translation). F3 - the
   // sibling-after-the-host layer that drew every chip a content-
   // height low - is structurally impossible from this component.
   import { chipPlacements, type PartMeasure } from "../lib/select/overlay.ts";
@@ -31,6 +33,7 @@
         class="port-label-chip"
         data-port-label={entry.label}
         data-port-part={entry.part}
+        data-port-label-side={entry.side}
         style="left: {entry.left}px; top: {entry.top}px"
         >{#if typed.length > 0}<span class="port-label-typed">{entry.label.slice(0, typed.length)}</span>{entry.label.slice(typed.length)}{:else}{entry.label}{/if}</span>
     {/if}

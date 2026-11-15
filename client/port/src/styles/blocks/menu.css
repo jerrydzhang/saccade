@@ -1,37 +1,41 @@
-/* The act menu: a target's acts beside it. A floating surface.
+/* The act menu: a target's acts beside it, on the float surface
+ * (float.css). A faint head names the target; each act is its key and
+ * its label; the first act is Enter's, and its highlight says so.
  * A block's stylesheet reads tokens only (tests/theme.test.ts). */
 
-/* Placement only: the act menu. */
 .port-menu {
   position: absolute;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
-  padding: 0.25rem;
-  border: 1px solid var(--port-color-line);
-  border-radius: var(--port-radius);
-  background: var(--port-color-paper);
-  color: var(--port-color-paper-ink);
-  max-width: 24rem;
-}
-.port-menu-label {
-  color: var(--port-color-muted);
-  font-size: 0.875rem;
+  min-width: 15rem;
+  max-width: 26rem;
 }
 .port-menu-act {
-  font: inherit;
-  text-align: left;
-  background: none;
+  display: grid;
+  grid-template-columns: 1.6em 1fr;
+  align-items: baseline;
+  padding: 0.3125rem 0.625rem;
   border: none;
   border-radius: var(--port-radius);
-  padding: 0.125rem 0.25rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 .port-menu-act:hover,
 .port-menu-act:focus-visible {
   background: var(--port-color-hover);
+  outline: none;
 }
 .port-menu-act[aria-current="true"] {
+  background: var(--port-color-selection);
+}
+
+/* Selection highlights its target (t-59): while an act menu is open
+ * its target carries data-port-selected (ActMenu.svelte), lit as the
+ * pointer lights a row. An instrument's block may refine it. */
+[data-port-selected] {
   background: var(--port-color-selection);
 }

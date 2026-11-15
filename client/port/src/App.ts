@@ -47,6 +47,7 @@ import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { SEQUENCE_TIMEOUT_MS } from "./lib/input/key-matcher.ts";
 import { whichKeyTunables } from "./lib/input/which-key.ts";
+import { helpGroups, type HelpView } from "./lib/input/help.ts";
 import { isPinnedChord, MODIFIER_KEYS, windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import {
@@ -86,6 +87,12 @@ import {
  * neighborhood - the human tunes). */
 export const WHICH_KEY_DELAY_MS = 400;
 
+/** Help's column title for each surface's own keys (t-59). */
+const SURFACE_KEYS_TITLE: Readonly<Record<"board" | "tasks", string>> = {
+  board: "this board",
+  tasks: "the plane",
+};
+
 export interface StripView {
   location: string | null;
   status: string;
@@ -115,7 +122,9 @@ export interface PortWindow {
   /** The which-key surface (r110): the live popup view (null when
    * hidden) and the help variant; the observation carries both. */
   whichKeyView(): { pending: boolean; view: unknown } | null;
-  helpView(): unknown;
+  /** Help (`?`): every key, grouped by the context it comes from;
+   * null while help is closed. */
+  helpView(): HelpView | null;
   subscribeWhichKey(observer: (pending: unknown, help: boolean) => void): () => void;
   closePicker(): void;
   submitPicker(spec: string, elsewhere?: boolean): void;
@@ -1508,10 +1517,15 @@ export function createPortWindow(windowId = "main"): PortWindow {
     whichKeyView: () => (whichKey !== null ? { pending: whichKeyPending, view: whichKey } : null),
     helpView: () => {
       if (!helpOpen) return null;
+      // help's columns by the context the keys come from (t-59): the
+      // active instrument's table, then the window's
       const instrument = instruments[activeSurface];
-      const view = instrument !== undefined ? instrument.inputAll() : null;
-      if (view !== null && view.entries.length > 0) return view;
-      return windowHost.allView();
+      return helpGroups([
+        ...(instrument !== undefined
+          ? [{ title: SURFACE_KEYS_TITLE[activeSurface], view: instrument.inputAll() }]
+          : []),
+        { title: "the window", view: windowHost.allView() },
+      ]);
     },
     subscribeWhichKey(observer) {
       whichKeyObservers.add(observer);
