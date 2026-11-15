@@ -3618,11 +3618,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1794705856,
-        "narHash": "sha256-vBaVj1SPZxGezlHl79H6TXcwi0BIUh07ffqvqgbsFvM=",
+        "lastModified": 1794756712,
+        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "447cd4cb453a2b8d55be10bd01c34c14e5531739",
+        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
         "type": "github"
       },
       "original": {
