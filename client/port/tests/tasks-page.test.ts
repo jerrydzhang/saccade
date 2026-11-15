@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 
-import { ageOf } from "../src/lib/tasks/page.ts";
+import { ageOf, rowAgentsOf, shortHash, stageStateOf } from "../src/lib/tasks/page.ts";
 import { test } from "vitest";
 import type { ViewPage } from "../src/lib/pages.ts";
 import {
@@ -148,4 +148,17 @@ test("a wire row's moment ages from the wall clock (t-42)", () => {
   // five minutes after the seed row's own moment
   const now = (row.at! + 5 * 60) * 1000;
   assert.equal(ageOf(row.at, now), "5m");
+});
+
+test("a stage's title names the state whose hue it takes; the list names a commit by seven characters", () => {
+  assert.equal(stageStateOf("waiting"), "idle");
+  assert.equal(stageStateOf("in flight"), "working");
+  assert.equal(stageStateOf("awaiting judgment"), "blocked");
+  assert.equal(stageStateOf("concluded last 24h"), "done");
+  assert.equal(stageStateOf("elsewhere"), null);
+  assert.equal(shortHash("a".repeat(40)), "aaaaaaa");
+  assert.equal(shortHash(""), "");
+  const row = { part: "/r", task: "t-1", location: "t-1", title: "", commit: "", revision: "", at: null };
+  assert.deepEqual(rowAgentsOf({ ...row, agents: "i-3 i-9" }), ["i-3", "i-9"]);
+  assert.deepEqual(rowAgentsOf({ ...row, agents: "" }), []);
 });

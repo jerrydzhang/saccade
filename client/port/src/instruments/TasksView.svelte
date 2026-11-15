@@ -12,10 +12,10 @@ return anchor's identity), data-port-open names the row's link. -->
 import LabelOverlay from "../components/LabelOverlay.svelte";
 import ActMenu from "../components/ActMenu.svelte";
 import { partMeasureIn } from "../lib/select/measure.ts";
-import { ageOf } from "../lib/tasks/page.ts";
+  import PlaneRail from "./PlaneRail.svelte";
+  import TasksPipeline from "./TasksPipeline.svelte";
   import type { TasksData, TasksUI } from "./tasks.ts";
-  import { projectPart, railAgentPart, railAgentText, type Rail } from "../lib/tasks/rail.ts";
-  import { ADD_CLOSED, type AddView } from "../lib/tasks/add.ts";
+  import { wordsByIncarnationOf, type Rail } from "../lib/tasks/rail.ts";
 
   let { content, controller }: { content: TasksData; controller: TasksUI } = $props();
 
@@ -27,20 +27,6 @@ import { ageOf } from "../lib/tasks/page.ts";
   $effect(() => controller.subscribeRail((next) => {
     rail = next;
   }));
-
-  // the add field (t-54): open while the controller's add session is;
-  // typing stays native (a text-entry capture), Enter and Escape are
-  // the session's own commands
-  let add: AddView = $state(ADD_CLOSED);
-  let addInput: HTMLInputElement | null = $state(null);
-  let addValue = $state("");
-  $effect(() => controller.subscribeAdd((view) => {
-    add = view;
-    if (document.activeElement !== addInput) addValue = view.value;
-  }));
-  $effect(() => {
-    if (add.open) addInput?.focus({ preventScroll: true });
-  });
 
   $effect(() => {
     const offSelect = controller.subscribeSelect((view) => {
@@ -102,18 +88,20 @@ import { ageOf } from "../lib/tasks/page.ts";
   const now = $derived((void content.page, Date.now()));
 
   const page = $derived(content.page);
+  // each row's agents marked by their live words: the rail's join
+  const words = $derived(wordsByIncarnationOf(rail));
 
   // The row highlight follows the POINTER'S OWN MOVEMENT, never a row
   // that scrolls under a resting pointer (m-547 (4); CSS :hover did
   // exactly that as j/k scrolled). A move that changes the pointer's
   // coordinates marks the row under it; any scroll clears the mark.
-  // The look is the prototype's ledger row: ink only, no shading.
+  // A rail entry is pointed the same way.
   let hovered: string | null = $state(null);
   let lastPointer: { x: number; y: number } | null = null;
   function pointerMoved(event: MouseEvent): void {
     if (lastPointer !== null && lastPointer.x === event.clientX && lastPointer.y === event.clientY) return;
     lastPointer = { x: event.clientX, y: event.clientY };
-    const row = (event.target as HTMLElement | null)?.closest?.(".port-tasks-row");
+    const row = rowFromEvent(event);
     hovered = row instanceof HTMLElement ? row.getAttribute("data-port-part") : null;
   }
   $effect(() => {
@@ -140,96 +128,7 @@ a11y click advisories do not apply. -->
   }}
 >
 <div class="port-plane" bind:this={host} role="document" onclick={onClick} oncontextmenu={onContextMenu}>
-<!-- the control plane's rail (t-48): projects, then each project's
-running agents by Herdr's word; a project switches this window, an
-agent opens its task here -->
-<nav class="port-plane-rail" data-port-control="rail" aria-label="projects">
-  {#each rail.projects as project (project.name)}
-    <section class="port-plane-project" data-port-project={project.name}>
-      <button
-        class="port-plane-name"
-        data-port-control={`project-${project.name}`}
-        data-port-part={projectPart(project.name)}
-        data-port-kind="project"
-        data-port-title={project.name}
-        aria-current={project.current ? "page" : undefined}
-      >{project.name}</button>
-      {#if project.problem !== null}
-        <div class="port-plane-note" title={project.problem}>unreachable</div>
-      {/if}
-      {#each project.groups as group (group.state)}
-        <div class="port-plane-word" data-port-word={group.state}>{group.state === "" ? "no word" : group.state}</div>
-        {#each group.agents as agent (agent.address)}
-          <!-- every agent carries y (copy its attach command, t-55), so
-          none is disabled; an unregistered one is marked so -->
-          <button
-            class="port-plane-agent"
-            data-port-control={`agent-${project.name}-${agent.incarnation ?? agent.address}`}
-            data-port-part={railAgentPart(project.name, agent)}
-            data-port-kind="agent"
-            data-port-title={railAgentText(agent)}
-            data-port-unregistered={agent.incarnation === null ? "" : undefined}
-            title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
-          >
-            {#if agent.incarnation === null}
-              <span class="port-plane-incarnation">{agent.label ?? agent.address}</span>
-              <span class="port-plane-task">unregistered</span>
-            {:else}
-              {#if agent.name !== null}<span class="port-plane-agent-name">{agent.name}</span>{/if}
-              <span class="port-plane-incarnation" class:port-plane-incarnation-aside={agent.name !== null}>{agent.incarnation}</span>
-              <span class="port-plane-task">{agent.tasks[0] ?? ""}</span>
-            {/if}
-            {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
-          </button>
-        {/each}
-      {/each}
-    </section>
-  {/each}
-  {#if add.open}
-    <div class="port-plane-add">
-      <input
-        bind:this={addInput}
-        bind:value={addValue}
-        data-port-control="project-input"
-        data-port-captured-input=""
-        type="text"
-        placeholder="host:port/name"
-        aria-label="add a project"
-        oninput={(event) => controller.typeAdd(event.currentTarget.value)}
-      />
-      {#if add.problem !== null}
-        <div class="port-plane-note" data-port-control="project-input-problem">{add.problem}</div>
-      {/if}
-    </div>
-  {/if}
-  {#if rail.unregistered.length > 0}
-    <!-- agents no tracker registered and no project's repo holds
-    (t-55): named by Herdr's where label (else the terminal's title)
-    and the address, each with its word as the core reports it -->
-    <section class="port-plane-project" data-port-control="unregistered">
-      <div class="port-plane-name port-plane-group">unregistered</div>
-      {#each rail.unregistered as agent (agent.address)}
-        <button
-          class="port-plane-agent"
-          data-port-control={`unregistered-${agent.address}`}
-          data-port-part={railAgentPart(null, agent)}
-          data-port-kind="agent"
-          data-port-title={railAgentText(agent)}
-          data-port-unregistered=""
-          data-port-word={agent.state}
-          title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
-        >
-          <span class="port-plane-incarnation">{agent.label ?? ""}</span>
-          <span class="port-plane-task">{agent.address}</span>
-          <span class="port-plane-msg">{[agent.state === "" ? "no word" : agent.state, agent.msg].filter((part) => part !== null).join(" ")}</span>
-        </button>
-      {/each}
-    </section>
-  {/if}
-  {#if rail.herdr !== null}
-    <div class="port-plane-note" data-port-control="herdr-note">{rail.herdr}</div>
-  {/if}
-</nav>
+<PlaneRail {rail} {controller} {hovered} />
 <div class="port-tasks-view">
   {#if content.status !== "loading" && content.project === null && rail.projects.length === 0}
     <div class="port-tasks-none" data-port-control="plane-empty">no project yet: press a and type its host:port/name</div>
@@ -239,39 +138,7 @@ agent opens its task here -->
     <div class="port-tasks-none" data-port-control="plane-problem">{content.project}: {content.problem}</div>
   {/if}
   {#if page !== null && content.status === "loaded"}
-    {#each page.groups as group (group.part)}
-      <section class="port-tasks-group" data-port-part={group.part} data-port-kind="group">
-        {#if group.title !== ""}
-          <h2 class="port-tasks-title">{group.title}</h2>
-        {/if}
-        {#if group.rows.length === 0}
-          {#if group.title !== ""}
-            <div class="port-tasks-none">none</div>
-          {/if}
-        {:else}
-          <div class="port-tasks-columns" aria-hidden="true">
-            <span>task</span><span>title</span><span class="port-tasks-agents">agents</span><span class="port-tasks-commit">latest commit</span><span>age</span>
-          </div>
-          {#each group.rows as row (row.part)}
-            <div
-              class="port-tasks-row"
-              data-port-part={row.part}
-              data-port-kind="task"
-              data-port-task={row.task}
-              data-port-open={row.location}
-              data-port-title={row.title}
-              data-port-hover={hovered === row.part ? "" : undefined}
-            >
-              <span class="port-tasks-id">{row.task}</span>
-              <span class="port-tasks-title">{row.title}</span>
-              <span class="port-tasks-agents">{row.agents}</span>
-              <span class="port-tasks-commit">{row.commit}</span>
-              <span class="port-tasks-age">{ageOf(row.at, now)}</span>
-            </div>
-          {/each}
-        {/if}
-      </section>
-    {/each}
+    <TasksPipeline {page} {words} {now} {hovered} />
   {/if}
 </div>
 </div>

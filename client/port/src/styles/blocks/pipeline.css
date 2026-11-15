@@ -7,35 +7,63 @@
   position: relative;
   min-width: 0;
 }
-/* F4 as information: the five-column grid (tid, title, agents,
- * latest commit, age). The sparklane's future column rides UNDER a
- * row, never a sixth column - the grid leaves it alone. Every cell is
- * one line, cut with an ellipsis (t-41: the human keeps the list
- * narrow); the fr tracks may shrink below their text. */
+/* F4 as information: the five-column grid (id, title, agents, latest
+ * commit, age), no header - the columns explain themselves. The
+ * sparklane's future column rides UNDER a row, never a sixth column -
+ * the grid leaves it alone. Every cell is one line, cut with an
+ * ellipsis (t-41: the human keeps the list narrow); the fr tracks may
+ * shrink below their text. */
 .port-tasks-view {
   container-type: inline-size;
+  padding: 0.75rem 0;
 }
-.port-tasks-columns,
+.port-tasks-group {
+  margin-bottom: 1.5rem;
+}
+/* a stage's title takes its state's hue (t-59); its rows stay neutral */
+.port-tasks-heading {
+  margin: 0 0 0.25rem;
+  padding: 0 0.625rem;
+  font-size: var(--port-size-small);
+  font-weight: 400;
+  color: var(--port-color-muted);
+}
+.port-tasks-heading[data-port-state="idle"] {
+  color: var(--port-state-idle);
+}
+.port-tasks-heading[data-port-state="working"] {
+  color: var(--port-state-working);
+}
+.port-tasks-heading[data-port-state="blocked"] {
+  color: var(--port-state-blocked);
+}
+.port-tasks-heading[data-port-state="done"] {
+  color: var(--port-state-done);
+}
 .port-tasks-row {
   display: grid;
-  grid-template-columns: 3em minmax(0, 1.4fr) 7em minmax(0, 1fr) 3em;
-  gap: 0.5rem;
-  padding: 0.125rem 0.5rem;
+  grid-template-columns: 3.5em minmax(0, 1fr) 6em 4.5rem 3em;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--port-radius);
 }
-.port-tasks-columns > *,
 .port-tasks-row > * {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.port-tasks-agents {
+  display: flex;
+  gap: 0.75em;
+}
 /* as the list narrows the lesser columns drop out before the title is
- * squeezed - agents first, then the latest commit - from the header
- * and the rows alike, so the two stay aligned; id, title and age stay */
+ * squeezed - agents first, then the latest commit; id, title and age
+ * stay */
 @container (max-width: 44rem) {
-  .port-tasks-columns,
   .port-tasks-row {
-    grid-template-columns: 3em minmax(0, 1.4fr) minmax(0, 1fr) 3em;
+    grid-template-columns: 3.5em minmax(0, 1fr) 4.5rem 3em;
   }
 
   .port-tasks-agents {
@@ -43,29 +71,44 @@
   }
 }
 @container (max-width: 30rem) {
-  .port-tasks-columns,
   .port-tasks-row {
-    grid-template-columns: 3em minmax(0, 1fr) 3em;
+    grid-template-columns: 3.5em minmax(0, 1fr) 3em;
   }
 
   .port-tasks-commit {
     display: none;
   }
 }
-.port-tasks-columns {
+.port-tasks-id {
+  font-family: var(--port-font-mono);
+  font-size: var(--port-size-small);
   color: var(--port-color-muted);
 }
-/* the pointer's row (TasksView: real pointer movement only, never
- * :hover under a resting pointer); the prototype's ledger row: brighter
- * ink, no shading */
-.port-tasks-row[data-port-hover] {
-  color: var(--port-color-ink-strong);
+.port-tasks-agent {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--port-font-mono);
+  font-size: var(--port-size-small);
+  color: var(--port-color-ink);
 }
-.port-tasks-none {
-  padding: 0.125rem 0.5rem;
-  color: var(--port-color-muted);
+.port-tasks-commit {
+  font-family: var(--port-font-mono);
+  font-size: var(--port-size-small);
+  color: var(--port-color-faint);
 }
 .port-tasks-age {
   text-align: right;
+  color: var(--port-color-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* the pointer's row (TasksView: real pointer movement only, never
+ * :hover under a resting pointer) and the menu's target share one
+ * highlight, spanning the row */
+.port-tasks-row[data-port-hover],
+.port-tasks-row[data-port-selected] {
+  background: var(--port-color-selection);
+}
+.port-tasks-none {
+  padding: 0.125rem 0.625rem;
   color: var(--port-color-muted);
 }

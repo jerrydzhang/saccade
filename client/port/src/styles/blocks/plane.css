@@ -5,8 +5,8 @@
  * agents beside the list; on a narrow window the rail sits above it */
 .port-plane {
   display: grid;
-  grid-template-columns: 13rem minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 1.5rem;
   align-items: start;
 }
 @media (max-width: 40rem) {
@@ -19,24 +19,73 @@
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 1rem;
   min-width: 0;
+  padding: 0.75rem 0;
 }
 .port-plane-project {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+
+/* a state's shape (t-59): circle working, triangle blocked, square
+ * done, ring idle, diamond error, each in its state's hue; any other
+ * word carries none. Shared by the rail's word headings and the
+ * pipeline's agents. */
+.port-state-mark {
+  display: none;
+  flex: none;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.4em;
+  vertical-align: 0.1em;
+  box-sizing: border-box;
+}
+.port-state-mark[data-port-word="working"] {
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--port-state-working);
+}
+.port-state-mark[data-port-word="blocked"] {
+  display: inline-block;
+  width: 0.6em;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  background: var(--port-state-blocked);
+}
+.port-state-mark[data-port-word="done"] {
+  display: inline-block;
+  background: var(--port-state-done);
+}
+.port-state-mark[data-port-word="idle"] {
+  display: inline-block;
+  border-radius: 50%;
+  border: 0.12em solid var(--port-state-idle);
+}
+.port-state-mark[data-port-word="error"] {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  vertical-align: 0.05em;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: var(--port-state-error);
+}
+
+/* a project: muted; the shown one in ink, heavier and a little larger */
 .port-plane-name,
 .port-plane-agent {
   font: inherit;
   color: inherit;
   background: none;
   border: 0;
-  padding: 0.125rem 0.5rem;
+  border-radius: var(--port-radius);
+  padding: 0.25rem 0.5rem;
   text-align: left;
   cursor: pointer;
   min-width: 0;
+}
+.port-plane-name {
+  color: var(--port-color-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -44,37 +93,80 @@
 .port-plane-name[aria-current] {
   color: var(--port-color-ink-strong);
   font-weight: 600;
-}
-.port-plane-agent {
-  display: flex;
-  gap: 0.5rem;
-  padding-left: 1rem;
+  font-size: 1.125em;
 }
 /* the foot group's heading names the group; it is no target */
 .port-plane-group {
   cursor: default;
+}
+
+/* a word heading: its shape, then the word */
+.port-plane-word {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.5rem 0.125rem;
+  color: var(--port-color-ink);
+  font-size: var(--port-size-small);
+}
+
+/* an agent: incarnation (muted), name, every claimed task at the
+ * right; Herdr's status line beneath, one line */
+.port-plane-agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  padding-left: 1.25rem;
+}
+.port-plane-who {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.port-plane-incarnation {
   color: var(--port-color-muted);
 }
-/* an agent no tracker registered (t-55): marked, never hidden */
-.port-plane-agent[data-port-unregistered] .port-plane-task {
-  color: var(--port-color-muted);
-  font-style: italic;
-}
-/* a named agent shows its name; the incarnation stays small beside it */
-.port-plane-incarnation-aside {
-  color: var(--port-color-muted);
-  font-size: 0.85em;
-}
-.port-plane-msg {
-  color: var(--port-color-muted);
+.port-plane-agent-name {
+  color: var(--port-color-ink-strong);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.port-plane-word,
-.port-plane-note {
-  padding: 0 0.5rem 0 1rem;
+.port-plane-tasks {
+  font-family: var(--port-font-mono);
+  font-size: var(--port-size-small);
   color: var(--port-color-muted);
-  font-size: 0.85em;
+  white-space: nowrap;
+  align-self: baseline;
+}
+/* an agent no tracker registered (t-55): marked, never hidden */
+.port-plane-unregistered {
+  font-family: inherit;
+  font-style: italic;
+}
+.port-plane-msg {
+  grid-column: 1 / -1;
+  color: var(--port-color-muted);
+  font-style: italic;
+  font-size: var(--port-size-small);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* the pointer's entry and the menu's target share one highlight */
+.port-plane-name[data-port-hover],
+.port-plane-name[data-port-selected],
+.port-plane-agent[data-port-hover],
+.port-plane-agent[data-port-selected] {
+  background: var(--port-color-selection);
+}
+
+.port-plane-note {
+  padding: 0 0.5rem;
+  color: var(--port-color-muted);
+  font-size: var(--port-size-small);
 }
 .port-plane-add {
   display: flex;
