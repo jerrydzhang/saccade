@@ -32,7 +32,8 @@
   # out of client/ would stay an unnormalized ".." path inside flake
   # evaluation
   repoRoot,
-}: let
+}:
+let
   clientRoot = repoRoot + "/client";
   # the frontend and its npm graph: the client's package-lock, the port
   # tree, and the fixture corpus its bundled globs reach
@@ -50,7 +51,8 @@
     inherit src;
     npmDepsHash = "sha256-l95BuovgsxpF6TNvbD+HwLHemIlE/A43kXsKpknPL9k=";
   };
-  webDist = buildNpmPackage (npm
+  webDist = buildNpmPackage (
+    npm
     // {
       # not `npm run build`: the port builds through its own vite
       # config from the client root, reusing the client's node_modules
@@ -64,53 +66,56 @@
         mkdir -p $out
         cp -r port/dist/. $out/
       '';
-    });
-in {
+    }
+  );
+in
+{
   web = webDist;
 
   # the native binary: the shared Tauri shell compiled through the port
   # crate, wrapped with its runtime libraries - a foreground binary the
   # harness boots by store path. No deployment, install or remote
   # transfer.
-  app = let
-    webkitLibs = lib.makeLibraryPath [
-      webkitgtk_4_1
-      gtk3
-      cairo
-      gdk-pixbuf
-      glib
-      pango
-      dbus
-      alsa-lib
-    ];
-    # the cargo tree: client/port-shell plus everything the shared shell
-    # compile reads (the lib source under client/src-tauri/src,
-    # core-client, the grammar crate). The root workspace manifests are
-    # not part of this tree: the port crate is its own workspace root.
-    cargoSrc = lib.sourceByRegex repoRoot [
-      "^client$"
-      "^client/port-shell$"
-      "^client/port-shell/Cargo\\.toml$"
-      "^client/port-shell/Cargo\\.lock$"
-      "^client/port-shell/build\\.rs$"
-      "^client/port-shell/tauri\\.conf\\.json$"
-      "^client/port-shell/src$"
-      "^client/port-shell/src/.*$"
-      "^client/src-tauri$"
-      "^client/src-tauri/src$"
-      "^client/src-tauri/src/.*$"
-      "^client/src-tauri/icons$"
-      "^client/src-tauri/icons/.*$"
-      "^client/src-tauri/core-client$"
-      "^client/src-tauri/core-client/Cargo\\.toml$"
-      "^client/src-tauri/core-client/src$"
-      "^client/src-tauri/core-client/src/.*$"
-      "^grammar$"
-      "^grammar/Cargo\\.toml$"
-      "^grammar/src$"
-      "^grammar/src/.*$"
-    ];
-  in
+  app =
+    let
+      webkitLibs = lib.makeLibraryPath [
+        webkitgtk_4_1
+        gtk3
+        cairo
+        gdk-pixbuf
+        glib
+        pango
+        dbus
+        alsa-lib
+      ];
+      # the cargo tree: client/port-shell plus everything the shared shell
+      # compile reads (the lib source under client/src-tauri/src,
+      # core-client, the grammar crate). The root workspace manifests are
+      # not part of this tree: the port crate is its own workspace root.
+      cargoSrc = lib.sourceByRegex repoRoot [
+        "^client$"
+        "^client/port-shell$"
+        "^client/port-shell/Cargo\\.toml$"
+        "^client/port-shell/Cargo\\.lock$"
+        "^client/port-shell/build\\.rs$"
+        "^client/port-shell/tauri\\.conf\\.json$"
+        "^client/port-shell/src$"
+        "^client/port-shell/src/.*$"
+        "^client/src-tauri$"
+        "^client/src-tauri/src$"
+        "^client/src-tauri/src/.*$"
+        "^client/src-tauri/icons$"
+        "^client/src-tauri/icons/.*$"
+        "^client/src-tauri/core-client$"
+        "^client/src-tauri/core-client/Cargo\\.toml$"
+        "^client/src-tauri/core-client/src$"
+        "^client/src-tauri/core-client/src/.*$"
+        "^grammar$"
+        "^grammar/Cargo\\.toml$"
+        "^grammar/src$"
+        "^grammar/src/.*$"
+      ];
+    in
     rustPlatform.buildRustPackage {
       pname = "saccade-app";
       version = "0.2.7";
@@ -129,7 +134,10 @@ in {
       # without tauri's custom-protocol feature the release binary
       # dials the dev server instead of serving the embedded dist
       buildFeatures = "custom-protocol";
-      nativeBuildInputs = [pkg-config makeWrapper];
+      nativeBuildInputs = [
+        pkg-config
+        makeWrapper
+      ];
       buildInputs = [
         webkitgtk_4_1
         gtk3

@@ -51,15 +51,8 @@ enum Action {
         task: u8,
         human: bool,
     },
-    Establish {
-        task: u8,
-    },
     CreateWorkspace {
         draw: u8,
-    },
-    ChangeWorkspace {
-        incarnation: u8,
-        dir: u8,
     },
     Register {
         draw: u8,
@@ -73,9 +66,6 @@ enum Action {
         variant: u8,
     },
     CleanWorkspace {
-        draw: u8,
-    },
-    RestoreWorkspace {
         draw: u8,
     },
     Send {
@@ -104,14 +94,11 @@ impl Action {
             | Action::Reject { human, .. }
             | Action::Accept { human, .. } => *human,
             Action::Commit { .. } | Action::Offer { .. } => false,
-            Action::Establish { .. }
-            | Action::CreateWorkspace { .. }
-            | Action::ChangeWorkspace { .. }
+            Action::CreateWorkspace { .. }
             | Action::Register { .. }
             | Action::BindSaved { .. }
             | Action::AssignAddress { .. }
             | Action::CleanWorkspace { .. }
-            | Action::RestoreWorkspace { .. }
             | Action::Send { .. }
             | Action::Submit { .. }
             | Action::Name { .. } => false,
@@ -127,7 +114,6 @@ impl Action {
             | Action::Offer { task, .. }
             | Action::Reject { task, .. }
             | Action::Accept { task, .. }
-            | Action::Establish { task, .. }
                 if role == "task" =>
             {
                 *task
@@ -188,20 +174,10 @@ fn record_ref_at(records: usize, n: u8) -> RecordId {
     }
 }
 
-/// The historical incarnation born with a task's establishment; the
-/// sentinel slot draws a guaranteed-absent reference.
-fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::IncarnationId> {
-    let born: Vec<saccade::IncarnationId> = world
-        .incarnations
-        .iter()
-        .filter(|(_, ctx)| {
-            matches!(
-                ctx.incarnation,
-                saccade::Incarnation::Established { task: born, .. } if born == task
-            )
-        })
-        .map(|(id, _)| *id)
-        .collect();
+/// A registered native incarnation a claim names; the sentinel slot
+/// draws a guaranteed-absent reference.
+fn incarnation_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
+    let born: Vec<saccade::IncarnationId> = world.incarnations.keys().copied().collect();
     let slot = n as usize % (born.len() + 1);
     if slot == born.len() {
         Some(saccade::IncarnationId(RecordId(usize::MAX)))
@@ -238,7 +214,7 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         Action::Claim { incarnation, .. } => Command::ClaimTask {
             id: task,
             incarnation: (*incarnation % 3 == 0)
-                .then(|| incarnation_at(world, task, *incarnation))
+                .then(|| incarnation_at(world, *incarnation))
                 .flatten(),
         },
         Action::Cancel { .. } => Command::CancelTask {
@@ -300,23 +276,10 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             grounds: Prose::new("generated grounds".into()).unwrap(),
         },
         Action::Accept { .. } => Command::AcceptBoard { task },
-        Action::Establish { .. } => Command::EstablishWorkspace {
-            task_id: task,
-            base: saccade::GitCommit::new(format!("abc{:03}", task.0)).unwrap(),
-            branch: saccade::GitBranch::new(format!("saccade/t-{}", task.0)).unwrap(),
-            worktree: saccade::WorktreePath::new(format!("/generated/wt/t-{}", task.0).into())
-                .unwrap(),
-        },
         Action::CreateWorkspace { draw } => Command::CreateWorkspace {
             base: saccade::GitCommit::new("abc000".into()).unwrap(),
             branch: saccade::GitBranch::new(format!("feature-{draw:02}")).unwrap(),
             worktree: saccade::WorktreePath::new(format!("/generated/wt/feature-{draw:02}").into())
-                .unwrap(),
-        },
-        Action::ChangeWorkspace { incarnation, dir } => Command::ChangeWorkspace {
-            incarnation: native_at(world, *incarnation)
-                .unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
-            worktree: saccade::WorktreePath::new(format!("/generated/wt/moved-{dir:02}").into())
                 .unwrap(),
         },
         Action::Register { draw } => Command::RegisterIncarnation {
@@ -350,13 +313,9 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         },
         // the lifecycle facts name whichever birth the draw resolves
         // to; unknown draws refuse and the sequence carries on
-        Action::CleanWorkspace { draw } | Action::RestoreWorkspace { draw } => {
+        Action::CleanWorkspace { draw } => {
             let birth = record_ref_at(records, *draw);
-            if matches!(action, Action::CleanWorkspace { .. }) {
-                Command::CleanWorkspace { workspace: birth }
-            } else {
-                Command::RestoreWorkspace { workspace: birth }
-            }
+            Command::CleanWorkspace { workspace: birth }
         }
         Action::Send { from, to, reply } => Command::SendMessage {
             from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
@@ -386,14 +345,11 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
 
 fn context(action: &Action, world: &World) -> Context {
     // provisioning and delivery bookkeeping are the machinery's own acts
-    if let Action::Establish { .. }
-    | Action::CreateWorkspace { .. }
-    | Action::ChangeWorkspace { .. }
+    if let Action::CreateWorkspace { .. }
     | Action::Register { .. }
     | Action::BindSaved { .. }
     | Action::AssignAddress { .. }
     | Action::CleanWorkspace { .. }
-    | Action::RestoreWorkspace { .. }
     | Action::Submit { .. } = action
     {
         return Context::system();
@@ -475,17 +431,11 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => (any::<u8>(), any::<u8>()).prop_map(|(task, commit)| Action::Offer { task, commit }),
         2 => id(|task, human| Action::Reject { task, human }),
         2 => id(|task, human| Action::Accept { task, human }),
-        2 => any::<u8>().prop_map(|task| Action::Establish { task }),
         2 => any::<u8>().prop_map(|draw| Action::CreateWorkspace { draw }),
-        2 => (any::<u8>(), any::<u8>()).prop_map(|(incarnation, dir)| Action::ChangeWorkspace {
-            incarnation,
-            dir,
-        }),
         2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
         1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, file)| Action::BindSaved { draw, locator: file }),
         1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, variant)| Action::AssignAddress { draw, variant }),
         2 => any::<u8>().prop_map(|draw| Action::CleanWorkspace { draw }),
-        2 => any::<u8>().prop_map(|draw| Action::RestoreWorkspace { draw }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
             from,
             to,
@@ -554,8 +504,7 @@ proptest! {
                         &live,
                         saccade::RecordId(row.seq),
                         &event,
-                        &saccade::Target::Task(*home),
-                        saccade::views::WaitUntil::Activity
+                        &saccade::Target::Task(*home)
                     ),
                     "seq {} folds into t-{} but the task wait does not match it",
                     row.seq,
@@ -574,7 +523,7 @@ fn generator_reaches_deep_states() {
     use proptest::strategy::ValueTree;
     use std::collections::BTreeMap;
 
-    let cases = 256;
+    let cases = 1024;
     let mut runner = proptest::test_runner::TestRunner::deterministic();
     let mut milestones = BTreeMap::<&str, usize>::new();
     let mut reject_kinds = BTreeMap::<&str, usize>::new();
@@ -630,29 +579,14 @@ fn generator_reaches_deep_states() {
                                 *milestones.entry("board accept").or_default() += 1;
                             }
                         }
-                        Action::Establish { .. } => {
-                            if last.kind == "workspace_established" {
-                                *milestones.entry("workspace established").or_default() += 1;
-                            }
-                        }
                         Action::CreateWorkspace { .. } => {
                             if last.kind == "workspace_created" {
                                 *milestones.entry("workspace created").or_default() += 1;
                             }
                         }
-                        Action::ChangeWorkspace { .. } => {
-                            if last.kind == "workspace_changed" {
-                                *milestones.entry("workspace changed").or_default() += 1;
-                            }
-                        }
                         Action::CleanWorkspace { .. } => {
                             if last.kind == "workspace_cleaned" {
                                 *milestones.entry("workspace cleaned").or_default() += 1;
-                            }
-                        }
-                        Action::RestoreWorkspace { .. } => {
-                            if last.kind == "workspace_restored" {
-                                *milestones.entry("workspace restored").or_default() += 1;
                             }
                         }
                         Action::Register { .. } => {
@@ -694,9 +628,6 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
-                        saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
-                        saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
-                        saccade::Reject::CheckpointRewind => "CheckpointRewind",
                         saccade::Reject::InvalidWorkspaceId => "InvalidWorkspaceId",
                         saccade::Reject::WorkspaceStageMismatch => "WorkspaceStageMismatch",
                     };
@@ -728,9 +659,7 @@ fn generator_reaches_deep_states() {
         ("message sent", 0.01),
         ("message submitted", 0.005),
         ("incarnation named", 0.01),
-        ("workspace established", 0.10),
         ("workspace created", 0.10),
-        ("workspace changed", 0.01),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(

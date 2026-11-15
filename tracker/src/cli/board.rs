@@ -1,4 +1,4 @@
-//! The board controller's doors: author, checkpoint, commit, and
+//! The board controller's doors: author, commit, and
 //! read board revisions. Working directories are local to this
 //! machine; every Git effect runs through the server's wire routes.
 //! Door replies teach the next step, for both readers.
@@ -11,10 +11,10 @@ use std::path::Path;
 /// or push anywhere.
 #[derive(Clone, Subcommand)]
 pub(crate) enum BoardVerb {
-    /// Download the current revision, or your checkpoint, into a
+    /// Download the current revision into a
     /// local working directory and print its absolute path. With a
     /// terminal attached and no directory, opens board.yaml in
-    /// $EDITOR, then offers checkpoint or commit
+    /// $EDITOR, then offers commit
     Edit {
         /// The task whose board to author (t-<n>)
         task: String,
@@ -29,10 +29,6 @@ pub(crate) enum BoardVerb {
         /// directory
         dir: Option<PathBuf>,
     },
-    /// Upload a snapshot onto your checkpoint ref; nothing
-    /// validates - a checkpoint is mid-edit, never a published
-    /// revision
-    Checkpoint { task: String, dir: Option<PathBuf> },
     /// Validate, write, and record a published revision; the parent
     /// is the commit the working directory started from
     Commit {
@@ -46,12 +42,6 @@ pub(crate) enum BoardVerb {
     /// Three-way merge your working directory onto the current
     /// commit; conflicts are marked in place
     Update { task: String, dir: Option<PathBuf> },
-    /// Drop your checkpoint chain: the explicit set-aside; the
-    /// objects stay in the repository
-    Discard {
-        /// The task whose checkpoint to drop (t-<n>)
-        task: String,
-    },
     /// Print one component of a revision (t-N@rK:/content/0), print
     /// one file (--file path), or write the whole revision out
     Get {
@@ -85,7 +75,7 @@ pub(crate) enum BoardVerb {
 }
 
 /// The default working directory for a task's board: deterministic,
-/// so checkpoint and commit find the directory edit created.
+/// so commit finds the directory edit created.
 fn default_board_dir(task: usize) -> PathBuf {
     std::env::temp_dir().join(format!("saccade-board-t-{task}"))
 }
@@ -152,7 +142,7 @@ fn recorded_base_or_teach(dir: &Path, task: usize) -> Result<String, Fail> {
         Fail::Taught {
             code: "boards_base_unrecorded",
             text: format!(
-                "{} records no base commit; run `sac board edit t-{task} {}` first - checkpoint and update need the commit the directory started from",
+                "{} records no base commit; run `sac board edit t-{task} {}` first - update needs the commit the directory started from",
                 dir.display(),
                 dir.display()
             ),
@@ -179,14 +169,10 @@ pub(super) fn board_door(
     match verb {
         BoardVerb::Check { dir } => check_door(cli, dir.as_deref()),
         BoardVerb::Edit { task, dir } => edit_door(cli, destination, task, dir.as_deref()),
-        BoardVerb::Checkpoint { task, dir } => {
-            checkpoint_door(cli, destination, task, dir.as_deref())
-        }
         BoardVerb::Commit { task, dir, message } => {
             commit_door(cli, destination, task, dir.as_deref(), message.as_deref())
         }
         BoardVerb::Update { task, dir } => update_door(cli, destination, task, dir.as_deref()),
-        BoardVerb::Discard { task } => discard_door(cli, destination, task),
         BoardVerb::Get { spec, file, out } => {
             get_door(cli, destination, spec, file.as_deref(), out.as_deref())
         }
@@ -236,11 +222,7 @@ fn edit_door(
 ) -> Result<String, Fail> {
     let url = server_url(destination, "board edit")?;
     let task_n = parse_task_id(task)?.0;
-    let actor = cli
-        .actor
-        .clone()
-        .or_else(|| std::env::var("SACCADE_ACTOR").ok());
-    let reply = client::board_edit(&url, task_n, actor.as_deref()).map_err(Fail::Client)?;
+    let reply = client::board_edit(&url, task_n).map_err(Fail::Client)?;
     let named_dir = dir.map(Path::to_path_buf);
     let dir = named_dir
         .clone()
@@ -309,7 +291,7 @@ fn open_in_editor(path: &Path) -> Result<(), Fail> {
     Ok(())
 }
 
-/// After the editor closes: the checkpoint-or-commit offer, read from
+/// After the editor closes: the commit offer, read from
 /// the terminal. Anything else leaves the working directory standing.
 fn offer_after_edit(
     cli: &Cli,
@@ -318,7 +300,7 @@ fn offer_after_edit(
     dir: &Path,
 ) -> Result<String, Fail> {
     println!("board staged at {}", dir.display());
-    print!("checkpoint or commit? [c/m/q] ");
+    print!("commit? [m/q] ");
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
@@ -326,42 +308,12 @@ fn offer_after_edit(
         .read_line(&mut answer)
         .map_err(|error| Fail::Usage(format!("could not read the answer: {error}")))?;
     match answer.trim() {
-        "c" => checkpoint_door(cli, destination, &format!("t-{task}"), Some(dir)),
         "m" => commit_door(cli, destination, &format!("t-{task}"), Some(dir), None),
         _ => Ok(format!(
             "left as-is; commit with `sac board commit t-{task} {} -m <msg>`",
             dir.display()
         )),
     }
-}
-
-fn checkpoint_door(
-    cli: &Cli,
-    destination: &Destination,
-    task: &str,
-    dir: Option<&Path>,
-) -> Result<String, Fail> {
-    let url = server_url(destination, "board checkpoint")?;
-    let task_n = parse_task_id(task)?.0;
-    let dir = working_dir(&dir.map(Path::to_path_buf), task_n);
-    let base = recorded_base_or_teach(&dir, task_n)?;
-    let files = collect_files(&dir)?;
-    let context = context_of(cli)?;
-    let reply = client::board_checkpoint(&url, &context, task_n, &files, &base, "checkpoint")
-        .map_err(Fail::Client)?;
-    if cli.json {
-        return Ok(serde_json::json!({
-            "task": format!("t-{task_n}"),
-            "checkpoint": reply.commit,
-            "dir": dir.display().to_string(),
-        })
-        .to_string());
-    }
-    Ok(format!(
-        "checkpoint {} saved; publish with `sac board commit t-{task_n} {} -m <msg>`",
-        &reply.commit[..8.min(reply.commit.len())],
-        dir.display()
-    ))
 }
 
 fn commit_door(
@@ -450,20 +402,6 @@ fn update_door(
         "merged onto {} cleanly; commit with `sac board commit t-{task_n} {} -m <msg>`",
         &reply.base[..8.min(reply.base.len())],
         dir.display()
-    ))
-}
-
-fn discard_door(cli: &Cli, destination: &Destination, task: &str) -> Result<String, Fail> {
-    let url = server_url(destination, "board discard")?;
-    let task_n = parse_task_id(task)?.0;
-    let context = context_of(cli)?;
-    let reply = client::board_discard(&url, &context, task_n).map_err(Fail::Client)?;
-    if cli.json {
-        return Ok(serde_json::to_string(&reply).expect("the reply is plain data"));
-    }
-    Ok(format!(
-        "checkpoint chain dropped for {} by {}; the objects stay in the repository",
-        reply.task, reply.actor
     ))
 }
 

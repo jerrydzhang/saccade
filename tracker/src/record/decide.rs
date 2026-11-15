@@ -17,29 +17,19 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskOffered { .. }
         | Event::TaskRejected { .. }
         | Event::TaskAccepted { .. }
-        | Event::TaskWorkspaceCheckpointed { .. }
         | Event::MessageSent { .. }
         // naming: any tier; the store arm holds an agent to its own
         // declared incarnation
         | Event::IncarnationNamed { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
-        // the human's chosen root destination: an explicit act about
-        // host state semantics, never an agent's inference
-        Event::RootSpaceBound { .. } | Event::RootSpaceCleared {} => {
-            Authority::Require(Tier::Human)
-        }
-        // provisioning by role: the machinery's establishment and
+        // provisioning by role: the machinery's
         // creation, the native registration, and the recipient's
-        // delivery record. The confirmed change is machinery's act too:
-        // it lands at the probe's pass, never from a caller.
-        // Cleanup and restoration land only after their effects verified:
-        // the same effect-only authority, never caller-authored facts.
-        Event::WorkspaceEstablished { .. }
-        | Event::WorkspaceCreated { .. }
-        | Event::WorkspaceChanged { .. }
+        // delivery record.
+        // Cleanup lands only after its effects verified:
+        // the same effect-only authority, never a caller-authored fact.
+        Event::WorkspaceCreated { .. }
         | Event::WorkspaceCleaned { .. }
-        | Event::WorkspaceRestored { .. }
         | Event::IncarnationRegistered { .. }
         | Event::SavedSessionBound { .. }
         | Event::HostAddressAssigned { .. }
@@ -80,24 +70,6 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::OfferBoard { task, commit } => vec![Event::TaskOffered { task, commit }],
         Command::RejectBoard { task, grounds } => vec![Event::TaskRejected { task, grounds }],
         Command::AcceptBoard { task } => vec![Event::TaskAccepted { task }],
-        Command::EstablishWorkspace {
-            task_id,
-            base,
-            branch,
-            worktree,
-        } => vec![Event::WorkspaceEstablished {
-            task_id,
-            base,
-            branch,
-            worktree,
-        }],
-        Command::CheckpointWorkspace {
-            task_id,
-            checkpoint,
-        } => vec![Event::TaskWorkspaceCheckpointed {
-            task_id,
-            checkpoint,
-        }],
         Command::CreateWorkspace {
             base,
             branch,
@@ -107,18 +79,8 @@ pub fn decide(command: Command) -> Vec<Event> {
             branch,
             worktree,
         }],
-        Command::ChangeWorkspace {
-            incarnation,
-            worktree,
-        } => vec![Event::WorkspaceChanged {
-            incarnation,
-            worktree,
-        }],
         Command::CleanWorkspace { workspace } => {
             vec![Event::WorkspaceCleaned { workspace }]
-        }
-        Command::RestoreWorkspace { workspace } => {
-            vec![Event::WorkspaceRestored { workspace }]
         }
         Command::RegisterIncarnation {
             native_id,
@@ -166,8 +128,6 @@ pub fn decide(command: Command) -> Vec<Event> {
             body,
         }],
         Command::SubmitMessage { id, by } => vec![Event::MessageSubmitted { id, by }],
-        Command::BindRootSpace { space, tab } => vec![Event::RootSpaceBound { space, tab }],
-        Command::ClearRootSpace {} => vec![Event::RootSpaceCleared {}],
     }
 }
 
@@ -209,7 +169,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 22] = [
+        let events: [(Event, Authority); 16] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -232,14 +192,6 @@ mod test {
                 },
                 Require(Tier::Human),
             ),
-            (
-                Event::RootSpaceBound {
-                    space: "spaRoot".into(),
-                    tab: "tbRoot".into(),
-                },
-                Require(Tier::Human),
-            ),
-            (Event::RootSpaceCleared {}, Require(Tier::Human)),
             (
                 Event::TaskCommitted {
                     task: TaskId(0),
@@ -264,25 +216,8 @@ mod test {
                 AnyTier,
             ),
             (Event::TaskAccepted { task: TaskId(0) }, AnyTier),
-            // Provisioning stays machine-authored; checkpoint is the exception.
-            (
-                Event::WorkspaceEstablished {
-                    task_id: TaskId(0),
-                    base: GitCommit::new("abc123".into()).unwrap(),
-                    branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                    worktree: WorktreePath::new("/wt".into()).unwrap(),
-                },
-                Require(Tier::System),
-            ),
-            (
-                Event::TaskWorkspaceCheckpointed {
-                    task_id: TaskId(0),
-                    checkpoint: GitCommit::new("abc123".into()).unwrap(),
-                },
-                AnyTier,
-            ),
-            // Creation and the confirmed change are the machinery's own
-            // acts, like the establishment and the registration.
+            // Creation is the machinery's own act, like the
+            // registration.
             (
                 Event::WorkspaceCreated {
                     base: GitCommit::new("abc123".into()).unwrap(),
@@ -291,23 +226,10 @@ mod test {
                 },
                 Require(Tier::System),
             ),
-            (
-                Event::WorkspaceChanged {
-                    incarnation: IncarnationId(RecordId(0)),
-                    worktree: WorktreePath::new("/wt".into()).unwrap(),
-                },
-                Require(Tier::System),
-            ),
-            // Cleanup and restoration land only after their effects
-            // verified: the machinery's own completed facts.
+            // Cleanup lands only after its effects verified: the
+            // machinery's own completed fact.
             (
                 Event::WorkspaceCleaned {
-                    workspace: RecordId(0),
-                },
-                Require(Tier::System),
-            ),
-            (
-                Event::WorkspaceRestored {
                     workspace: RecordId(0),
                 },
                 Require(Tier::System),
@@ -419,23 +341,9 @@ mod test {
                 grounds: prose(),
             },
             Command::AcceptBoard { task: TaskId(0) },
-            Command::EstablishWorkspace {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("abc123".into()).unwrap(),
-            },
             Command::CreateWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("workspace-deadbeef".into()).unwrap(),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Command::ChangeWorkspace {
-                incarnation: IncarnationId(RecordId(0)),
                 worktree: WorktreePath::new("/wt".into()).unwrap(),
             },
             Command::RegisterIncarnation {
@@ -462,11 +370,6 @@ mod test {
                 id: MessageId(RecordId(2)),
                 by: IncarnationId(RecordId(1)),
             },
-            Command::BindRootSpace {
-                space: "spaRoot".into(),
-                tab: "tbRoot".into(),
-            },
-            Command::ClearRootSpace {},
         ];
         for command in commands {
             assert_eq!(decide(command.clone()).len(), 1);

@@ -1,4 +1,3 @@
-use super::wait::resolve_incarnation;
 use super::*;
 
 /// The naming door: set, change, or clear what an incarnation is

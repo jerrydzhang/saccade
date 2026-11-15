@@ -62,22 +62,7 @@ pub enum Event {
     TaskAccepted {
         task: TaskId,
     },
-    // Workspace events: the establishment is the machinery verb,
-    // System-authored by role; the checkpoint is the exception any
-    // tier may record
-    /// The workspace-establishment birth: task reference, canonical
-    /// base, branch, and the workspace's absolute path. The record's
-    /// position is the shared workspace/incarnation identity.
-    WorkspaceEstablished {
-        task_id: TaskId,
-        base: GitCommit,
-        branch: GitBranch,
-        worktree: WorktreePath,
-    },
-    TaskWorkspaceCheckpointed {
-        task_id: TaskId,
-        checkpoint: GitCommit,
-    },
+    // Workspace events: machinery verbs, System-authored by role
     /// The created workspace's birth: the canonical base commit,
     /// branch, and absolute path provisioning established. The
     /// record's position is the workspace's own identity; no task, no
@@ -87,14 +72,6 @@ pub enum Event {
         branch: GitBranch,
         worktree: WorktreePath,
     },
-    /// The confirmed change of where a native incarnation lives,
-    /// published only after the host's liveness answer permitted it.
-    /// It asserts the confirmed change - never a pending intent, never
-    /// a running process.
-    WorkspaceChanged {
-        incarnation: IncarnationId,
-        worktree: WorktreePath,
-    },
     /// A completed workspace cleanup: host closure verified and the Git
     /// checkout confirmed absent before this lands. It references the
     /// existing workspace birth identity only - the birth carries the
@@ -102,25 +79,6 @@ pub enum Event {
     WorkspaceCleaned {
         workspace: RecordRef,
     },
-    /// A completed workspace restoration: the matching Git checkout
-    /// established or validated before this lands. It references the
-    /// existing workspace birth identity only.
-    WorkspaceRestored {
-        workspace: RecordRef,
-    },
-    // Root destination events: the human's explicit association of
-    // the primary checkout with a Herdr space/tab pair
-    /// The chosen destination for launches at the primary checkout,
-    /// recorded from the terminal standing in the manual root space.
-    /// A chosen destination, never a host-space-existence claim; the
-    /// association does not depend on any shell staying alive.
-    RootSpaceBound {
-        space: String,
-        tab: String,
-    },
-    /// The removal of the root association: root launches go back to
-    /// unplaced until a later bind.
-    RootSpaceCleared {},
     // Incarnation and message events: registration and submission are
     // machinery verbs, System-authored by role; a message is authored
     // by its sending session's registered identity
@@ -229,51 +187,19 @@ pub enum Command {
     AcceptBoard {
         task: TaskId,
     },
-    // Machinery verbs: System authorship comes from the role, never input
-    EstablishWorkspace {
-        task_id: TaskId,
-        base: GitCommit,
-        branch: GitBranch,
-        worktree: WorktreePath,
-    },
-    /// Retired from the public wire: the name no longer decodes at
-    /// /api/v1/command, so no caller can land a checkpoint; the shape
-    /// stays constructible for the trusted fixtures and decides to its
-    /// historical event.
-    #[serde(skip_deserializing)]
-    CheckpointWorkspace {
-        task_id: TaskId,
-        checkpoint: GitCommit,
-    },
-    // Creation and change are machinery verbs: System authorship comes
+    // Creation is a machinery verb: System authorship comes
     // from the role, never input
     CreateWorkspace {
         base: GitCommit,
         branch: GitBranch,
         worktree: WorktreePath,
     },
-    ChangeWorkspace {
-        incarnation: IncarnationId,
-        worktree: WorktreePath,
-    },
-    // Cleanup and restoration are machinery verbs: System authorship
+    // Cleanup is a machinery verb: System authorship
     // comes from the role, never input - a door requests the effect,
     // the serving controller records the completed fact
     CleanWorkspace {
         workspace: RecordRef,
     },
-    RestoreWorkspace {
-        workspace: RecordRef,
-    },
-    // The primary checkout's Herdr destination: the human binds the
-    // chosen manual root space's exact pair from the terminal standing
-    // in it; a rebind replaces the latest choice, clear removes it,
-    // and the log keeps every earlier choice.
-    BindRootSpace {
-        space: String,
-        tab: String,
-    },
-    ClearRootSpace {},
     // Registration and submission are machinery verbs: System
     // authorship comes from the role, never input. A message is
     // authored by its sending session's registered identity. The

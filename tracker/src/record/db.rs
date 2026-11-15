@@ -57,7 +57,7 @@ impl std::fmt::Display for DbError {
             }
             DbError::OlderSchema(v) => write!(
                 f,
-                "this log's schema v{v} predates sac {} (the board cutover); read it with the pinned archive - nix run .#sac-archive -- clone --at <seq> --out <path> - and carry workspaces over with sac import-workspaces --from <this database> --into <fresh tracker>",
+                "this log's schema v{v} predates sac {} (the board cutover); read it with the pinned archive - nix run .#sac-archive -- clone --at <seq> --out <path>",
                 env!("CARGO_PKG_VERSION")
             ),
             DbError::Missing(path) => write!(
@@ -611,38 +611,6 @@ mod test {
         )
         .unwrap();
         let system = Context::system();
-        record(
-            &mut conn,
-            &system,
-            Command::EstablishWorkspace {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-            },
-            17,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("def456".into()).unwrap(),
-            },
-            18,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::ClaimTask {
-                id: TaskId(0),
-                incarnation: Some(IncarnationId(RecordId(7))),
-            },
-            19,
-        )
-        .unwrap();
         let batch = AtomicBatch {
             drafts: vec![
                 RecordDraft {
@@ -691,12 +659,23 @@ mod test {
             22,
         )
         .unwrap();
+        // a claim naming the registered native identity
+        record(
+            &mut conn,
+            &agent(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: Some(IncarnationId(RecordId(9))),
+            },
+            22,
+        )
+        .unwrap();
         let sender = Context {
             actor: ActorName::new("pi".into()).unwrap(),
             tier: Tier::Agent,
             scope: Some(Scope {
                 task: None,
-                incarnation: Some(IncarnationId(RecordId(12))),
+                incarnation: Some(IncarnationId(RecordId(9))),
                 workspace: None,
             }),
         };
@@ -704,8 +683,8 @@ mod test {
             &mut conn,
             &sender,
             Command::SendMessage {
-                from: IncarnationId(RecordId(12)),
-                to: IncarnationId(RecordId(13)),
+                from: IncarnationId(RecordId(9)),
+                to: IncarnationId(RecordId(10)),
                 reply_to: None,
                 task: Some(TaskId(0)),
                 body: prose(
@@ -719,15 +698,14 @@ mod test {
             &mut conn,
             &system,
             Command::SubmitMessage {
-                id: crate::MessageId(RecordId(14)),
-                by: IncarnationId(RecordId(13)),
+                id: crate::MessageId(RecordId(12)),
+                by: IncarnationId(RecordId(10)),
             },
             24,
         )
         .unwrap();
-        // the task-free workspace families ride the same round-trip:
-        // a created workspace birth, then the native session's
-        // confirmed change into it
+        // the task-free workspace family rides the same round-trip:
+        // a created workspace birth
         record(
             &mut conn,
             &system,
@@ -739,35 +717,16 @@ mod test {
             25,
         )
         .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::ChangeWorkspace {
-                incarnation: IncarnationId(RecordId(12)),
-                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-            },
-            26,
-        )
-        .unwrap();
         // the workspace lifecycle rides the same round-trip: the
-        // completed cleanup, then the completed restoration, both
-        // machinery facts referencing the birth identity alone
+        // completed cleanup, a machinery fact referencing the birth
+        // identity alone
         record(
             &mut conn,
             &system,
             Command::CleanWorkspace {
-                workspace: RecordId(16),
+                workspace: RecordId(14),
             },
             27,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::RestoreWorkspace {
-                workspace: RecordId(16),
-            },
-            28,
         )
         .unwrap();
         // the write path's world is the one a full reload produces,
@@ -777,7 +736,7 @@ mod test {
             &mut conn,
             &system,
             Command::BindSavedSession {
-                incarnation: IncarnationId(RecordId(13)),
+                incarnation: IncarnationId(RecordId(10)),
                 saved_session: crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into())
                     .unwrap(),
             },
@@ -788,34 +747,11 @@ mod test {
             &mut conn,
             &system,
             Command::AssignHostAddress {
-                incarnation: IncarnationId(RecordId(13)),
+                incarnation: IncarnationId(RecordId(10)),
                 address: Some("/tty9".into()),
                 adopted: false,
             },
             30,
-        )
-        .unwrap();
-        // the human's root destination rides the same round-trip:
-        // bind, clear, bind again - the final pair is the standing choice
-        record(
-            &mut conn,
-            &human(),
-            Command::BindRootSpace {
-                space: "spaRoot".into(),
-                tab: "tbRoot".into(),
-            },
-            31,
-        )
-        .unwrap();
-        record(&mut conn, &human(), Command::ClearRootSpace {}, 32).unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::BindRootSpace {
-                space: "spaSecond".into(),
-                tab: "tbSecond".into(),
-            },
-            33,
         )
         .unwrap();
 
@@ -916,7 +852,7 @@ mod test {
             &mut conn,
             &system,
             Command::NameIncarnation {
-                incarnation: IncarnationId(RecordId(13)),
+                incarnation: IncarnationId(RecordId(10)),
                 name: name("th\u{e9}orie"),
             },
             40,
@@ -926,32 +862,21 @@ mod test {
             &mut conn,
             &sender,
             Command::NameIncarnation {
-                incarnation: IncarnationId(RecordId(12)),
+                incarnation: IncarnationId(RecordId(9)),
                 name: name("empirical"),
             },
             40,
         )
         .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::NameIncarnation {
-                incarnation: IncarnationId(RecordId(13)),
-                name: None,
-            },
-            40,
-        )
-        .unwrap();
-
         // asserted after the last write of the story
         let (_, returned) = record(
             &mut conn,
-            &system,
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("def456".into()).unwrap(),
+            &human(),
+            Command::NameIncarnation {
+                incarnation: IncarnationId(RecordId(10)),
+                name: None,
             },
-            41,
+            40,
         )
         .unwrap();
 
@@ -960,42 +885,28 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 37);
+        assert_eq!(loadout.rows.len(), 29);
         // the namings: the latest one stands, the log keeps the rest
-        assert_eq!(loadout.rows[33].kind, "incarnation_named");
-        assert!(loadout.rows[33].payload.contains("th\u{e9}orie"));
-        assert_eq!(loadout.rows[35].kind, "incarnation_named");
+        assert_eq!(loadout.rows[26].kind, "incarnation_named");
+        assert!(loadout.rows[26].payload.contains("th\u{e9}orie"));
+        assert_eq!(loadout.rows[28].kind, "incarnation_named");
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(12))]
+            world.incarnations[&IncarnationId(RecordId(9))]
                 .name
                 .as_ref()
                 .map(|n| n.as_str()),
             Some("empirical")
         );
-        assert_eq!(world.incarnations[&IncarnationId(RecordId(13))].name, None);
+        assert_eq!(world.incarnations[&IncarnationId(RecordId(10))].name, None);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
         assert_eq!(loadout.rows[5].kind, "task_cancelled");
         assert_eq!(loadout.rows[6].kind, "task_reopened");
         assert_eq!(loadout.rows[4].kind, "task_created");
-        assert_eq!(loadout.rows[9].kind, "task_claimed");
-        // the workspace establishment is machinery-authored and births
-        // the shared identity the claim names
-        assert_eq!(loadout.rows[7].kind, "workspace_established");
-        assert_eq!(loadout.rows[8].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[7].actor.as_str(), "saccade");
-        assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(7))].incarnation,
-            crate::Incarnation::Established {
-                task: TaskId(0),
-                workspace: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-            }
-        );
-        assert_eq!(
-            world.tasks[0].workspace.as_ref().unwrap().birth,
-            RecordId(7)
-        );
+        // the claim names the registered native identity
+        assert_eq!(loadout.rows[11].kind, "task_claimed");
+        assert!(loadout.rows[11].payload.contains("\"incarnation\":9"));
         // the scoped record carries its declared scope; unscoped rows none
         assert!(
             loadout.rows[2]
@@ -1007,72 +918,61 @@ mod test {
         );
         assert_eq!(loadout.rows[0].scope, None);
         // the batch lands both drafts or neither
-        assert_eq!(loadout.rows[10].kind, "task_created");
-        assert_eq!(loadout.rows[11].kind, "task_claimed");
-        assert!(loadout.rows[10].payload.contains("batchwork"));
+        assert_eq!(loadout.rows[7].kind, "task_created");
+        assert_eq!(loadout.rows[8].kind, "task_claimed");
+        assert!(loadout.rows[7].payload.contains("batchwork"));
         // the native families: machinery registration, the addressed
         // message from its scoped sender, the recipient's submission
-        assert_eq!(loadout.rows[12].kind, "incarnation_registered");
-        assert_eq!(loadout.rows[13].kind, "incarnation_registered");
-        assert_eq!(loadout.rows[12].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[14].kind, "message_sent");
+        assert_eq!(loadout.rows[9].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[10].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[9].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[12].kind, "message_sent");
         // real Unicode user data rides storage and the fold byte-exact, by escape
         assert!(
-            loadout.rows[14]
+            loadout.rows[12]
                 .payload
                 .contains("please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix")
         );
         assert!(
-            loadout.rows[14]
+            loadout.rows[12]
                 .scope
                 .as_deref()
-                .is_some_and(|s| s.contains("12"))
+                .is_some_and(|s| s.contains("9"))
         );
         assert_eq!(
-            loadout.rows[14].scope.as_deref(),
+            loadout.rows[12].scope.as_deref(),
             sender
                 .scope
                 .as_ref()
                 .map(|s| serde_json::to_string(s).unwrap())
                 .as_deref()
         );
-        assert_eq!(loadout.rows[15].kind, "message_submitted");
+        assert_eq!(loadout.rows[13].kind, "message_submitted");
         // the created workspace births no task, no incarnation, no
         // numbering: its identity is its own record position
-        assert_eq!(loadout.rows[16].kind, "workspace_created");
-        assert_eq!(loadout.rows[16].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[16].tier, "system");
-        assert_eq!(loadout.rows[17].kind, "workspace_changed");
+        assert_eq!(loadout.rows[14].kind, "workspace_created");
+        assert_eq!(loadout.rows[14].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[14].tier, "system");
         assert_eq!(
-            world.workspaces[&crate::WorkspaceId(RecordId(16))].workspace,
+            world.workspaces[&crate::WorkspaceId(RecordId(14))].workspace,
             crate::CreatedWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                stage: crate::WorkspaceStage::Available,
+                stage: crate::WorkspaceStage::Cleaned,
             }
         );
-        assert_eq!(world.provenance[&RecordId(16)], None);
-        assert_eq!(
-            world.workspace_changes[&IncarnationId(RecordId(12))],
-            crate::WorkspaceChange {
-                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                record: RecordId(17),
-                at: 26,
-            }
-        );
-        assert_eq!(world.provenance[&RecordId(17)], None);
-        assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
-        // the lifecycle facts: reference-only payloads, machinery
-        // authorship, and the stage the fold carries after both
-        assert_eq!(loadout.rows[18].kind, "workspace_cleaned");
-        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[18].tier, "system");
-        assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
-        assert_eq!(loadout.rows[19].kind, "workspace_restored");
+        assert_eq!(world.provenance[&RecordId(14)], None);
+        assert_eq!(world.incarnations.len(), 2, "creation advanced no i-N");
+        // the lifecycle fact: a reference-only payload, machinery
+        // authorship, and the stage the fold carries after it
+        assert_eq!(loadout.rows[15].kind, "workspace_cleaned");
+        assert_eq!(loadout.rows[15].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[15].tier, "system");
+        assert!(loadout.rows[15].payload.contains("\"workspace\":14"));
         // the board family rode its own kinds with the declared pairs:
-        // the eight rows before the three namings and the closing checkpoint
-        let board = |back: usize| &loadout.rows[loadout.rows.len() - 12 + back];
+        // the eight rows before the three namings
+        let board = |back: usize| &loadout.rows[loadout.rows.len() - 11 + back];
         assert_eq!(board(0).kind, "task_committed");
         assert!(
             board(0)
@@ -1104,16 +1004,15 @@ mod test {
                 .contains("\"incorporations\":[[0,\"bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]")
         );
 
-        assert_eq!(world.provenance[&RecordId(18)], None);
-        assert_eq!(world.provenance[&RecordId(19)], None);
+        assert_eq!(world.provenance[&RecordId(15)], None);
         assert_eq!(
-            world.workspace_stage(RecordId(16)),
-            Some(crate::WorkspaceStage::Available)
+            world.workspace_stage(RecordId(14)),
+            Some(crate::WorkspaceStage::Cleaned)
         );
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(12))].incarnation,
+            world.incarnations[&IncarnationId(RecordId(9))].incarnation,
             crate::Incarnation::Native {
                 native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
                 saved_session: Some(
@@ -1126,7 +1025,7 @@ mod test {
         );
         // the door-birth's locator binds once and the address moves
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(13))].incarnation,
+            world.incarnations[&IncarnationId(RecordId(10))].incarnation,
             crate::Incarnation::Native {
                 native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
                 saved_session: Some(
@@ -1137,21 +1036,8 @@ mod test {
                 harness: crate::Harness::ClaudeCode,
             }
         );
-        // the human's root destination: both kinds ride the round-trip,
-        // the final bind is the standing choice; the closing checkpoint
-        // follows them
-        assert_eq!(loadout.rows[22].kind, "root_space_bound");
-        assert_eq!(loadout.rows[23].kind, "root_space_cleared");
-        assert_eq!(loadout.rows[24].kind, "root_space_bound");
-        assert_eq!(
-            world
-                .root_space
-                .as_ref()
-                .map(|b| (b.space.as_str(), b.tab.as_str())),
-            Some(("spaSecond", "tbSecond"))
-        );
         assert_eq!(world.messages.len(), 1);
-        let mctx = &world.messages[&crate::MessageId(RecordId(14))];
+        let mctx = &world.messages[&crate::MessageId(RecordId(12))];
         assert_eq!(mctx.state, crate::MessageState::Submitted);
         assert_eq!(mctx.message.task, Some(TaskId(0)));
         // the board family folded: dense revisions, the accepted
@@ -1187,13 +1073,6 @@ mod test {
         assert!(matches!(world.tasks[1].task.state, TaskState::Open));
         assert!(matches!(world.tasks[2].task.state, TaskState::Open));
         assert!(matches!(world.tasks[3].task.state, TaskState::Open));
-        assert!(matches!(
-            world.tasks[0]
-                .workspace
-                .as_ref()
-                .map(|w| &w.workspace.checkpoint),
-            Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
-        ));
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
@@ -1351,8 +1230,8 @@ mod test {
         ));
         let line = DbError::OlderSchema(SCHEMA_VERSION - 1).to_string();
         assert!(
-            line.contains(".#sac-archive") && line.contains("import-workspaces"),
-            "the old-format refusal teaches the archive and the import: {line}"
+            line.contains(".#sac-archive"),
+            "the old-format refusal teaches the archive: {line}"
         );
         assert!(matches!(
             verify(&stamped(SCHEMA_VERSION + 1)),

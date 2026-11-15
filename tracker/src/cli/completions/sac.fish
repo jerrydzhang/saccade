@@ -101,10 +101,8 @@ function __saccade_verbs
     printf 'launch\tLaunch the composed native Pi in a workspace\n'
     printf 'workspace\tThe task-free workspace controller\n'
     printf 'identity\tReport this session declared identity and routing\n'
-    printf 'import-workspaces\tCarry workspaces from the pre-board log into a fresh tracker\n'
     printf 'clone\tClone the log prefix through a storage seq into a fresh tracker\n'
     printf 'skill\tDeploy this binary embedded skill, or verify the copy\n'
-    printf 'wait\tBlock until a matching record lands on the target\n'
     printf 'completions\tEmit a shell completion script\n'
 end
 
@@ -120,22 +118,11 @@ end
 
 function __saccade_workspace_verbs
     printf 'new\tProvision a NEW workspace through Git effects\n'
-    printf 'switch\tMove a stopped native session saved directory\n'
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
-    printf 'restore\tBring an exact recorded cleaned workspace back\n'
-    printf 'reconcile\tVerify every recorded workspace; Cleaned facts ride --apply\n'
-    printf 'root\tBind, show, or clear the primary checkout destination\n'
-end
-
-function __saccade_root_verbs
-    printf 'bind\tBind the manual root space from this terminal\n'
-    printf 'show\tShow the bound root destination\n'
-    printf 'clear\tClear the bound root destination\n'
 end
 
 complete -c sac -n '__saccade_no_verb; and not __saccade_prev_value_flag' -a '(__saccade_verbs)'
 complete -c sac -n '__saccade_verb workspace; and test (__saccade_npos) = 0; and not __saccade_prev_value_flag' -a '(__saccade_workspace_verbs)'
-complete -c sac -n '__saccade_verb workspace root; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_root_verbs)'
 
 # static flags
 complete -c sac -l db -r -f -d 'select local operations on this database file'
@@ -143,7 +130,7 @@ complete -c sac -l repo -r -f -d 'the tracker repo when the working directory is
 complete -c sac -l actor -r -f -d 'actor name recorded on events'
 complete -c sac -l json -d 'machine-readable output'
 complete -c sac -l at -r -f -d 'event time override'
-complete -c sac -l server -r -f -d 'select this running server for reads, writes, and waits'
+complete -c sac -l server -r -f -d 'select this running server for reads and writes'
 complete -c sac -n '__saccade_verb create; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
 complete -c sac -n '__saccade_verb list; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
 complete -c sac -n '__saccade_verb skill; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'install'
@@ -152,10 +139,8 @@ complete -c sac -n '__saccade_verb completions; and test (__saccade_npos) = 1; a
 complete -c sac -n '__saccade_verb cancel; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb wait; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-clean)'
-complete -c sac -n '__saccade_verb workspace restore; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-restore)'
 
 # per-verb flag names, exactly as the CLI defines them: fish offers
 # option names only on dash-prefixed tokens, so these never leak into
@@ -177,7 +162,7 @@ complete -c sac -n '__saccade_verb search' -l within -r -f -d 'narrow to one tas
 complete -c sac -n '__saccade_verb offer' -r -f -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb accept' -r -f -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reject' -l grounds -r -f -d 'the grounds that reopen the task'
-complete -c sac -n '__saccade_verb board' -r -f -a 'edit check checkpoint commit update discard get diff log path'
+complete -c sac -n '__saccade_verb board' -r -f -a 'edit check commit update get diff log path'
 complete -c sac -n '__saccade_verb board; and __fish_seen_subcommand_from get diff' -r -f -a 't-(commandline -ot)'
 complete -c sac -n '__saccade_verb serve' -l bind -r -f -d 'the address to bind'
 complete -c sac -n '__saccade_verb serve' -l port -r -f -d 'the port to serve on'
@@ -193,13 +178,6 @@ complete -c sac -n '__saccade_verb launch' -l harness -r -f -d 'the harness a fr
 complete -c sac -n '__saccade_verb launch' -l name -r -f -d 'name the fresh incarnation'
 complete -c sac -n '__saccade_verb launch' -l here -d 'launch through the host, then attach it in this terminal'
 complete -c sac -n '__saccade_verb workspace new' -l base -r -f -d 'the Git base: a ref, defaulting to the primary HEAD'
-complete -c sac -n '__saccade_verb workspace switch' -l resume -d 'resume the session in the new directory'
-complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -d 'the selected directory: it must already exist' -a '(__saccade_candidates workspaces)' -k
-complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -a '(__fish_complete_directories)'
-complete -c sac -n '__saccade_verb workspace switch; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates incarnations)'
-complete -c sac -n '__saccade_verb workspace reconcile' -l apply -d 'record the verified Cleaned facts'
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'
-complete -c sac -n '__saccade_verb wait' -l after -r -f -d 'the global position matched strictly after'
-complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity offer'

@@ -114,10 +114,9 @@ board.yaml and its figures with your own tools, `sac board check
 Working directories are local to your machine; the server does every Git
 effect. One iteration:
 
-1. `sac board edit t-N [dir]` - download the current revision (or your
-   checkpoint) into a local directory and print its path. With a terminal
-   and no directory it opens board.yaml in $EDITOR and offers checkpoint
-   or commit.
+1. `sac board edit t-N [dir]` - download the current revision into a
+   local directory and print its path. With a terminal and no directory
+   it opens board.yaml in $EDITOR and offers commit.
 2. Edit board.yaml and its figures with your own tools.
 3. `sac board check [dir]` - local validation: the board parses, figures
    exist within the 8 MiB bound.
@@ -125,9 +124,6 @@ effect. One iteration:
    published revision. The parent comes from the directory's recorded
    base; if another author moved the task, `sac board update` merges
    three-way onto the current commit, conflicts marked in place.
-5. `sac board checkpoint t-N [dir]` snapshots mid-edit work without
-   validating; `sac board discard t-N` drops your checkpoint chain, which
-   must happen before anything accepts the task.
 
 ## What the current board holds
 
@@ -205,10 +201,6 @@ The reviewed object is the board revision, so review is a real judgment:
 
 Reject for a claim that is wrong or unsupported, or for a narrowing the
 board does not state; not for procedure the history already holds.
-
-Wake on the offer instead of polling: `sac wait t-N --after <seq>
---until offer` returns once a TaskOffered record lands past the cursor
-seq (`sac log` or `sac show t-N` names it).
 
 ## Names
 

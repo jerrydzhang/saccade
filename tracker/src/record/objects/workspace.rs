@@ -34,10 +34,8 @@ pub struct CreatedWorkspaceContext {
 }
 
 /// A workspace's lifecycle stage, owned by the workspace: Available
-/// stands at birth, Cleaned stands after a completed cleanup, and a
-/// completed restoration returns Available - idempotent by
-/// postcondition. The latest completed fact after the birth is the
-/// stage; earlier facts stay in the log.
+/// stands at birth, Cleaned stands after a completed cleanup. The
+/// latest completed fact after the birth is the stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceStage {
@@ -56,18 +54,11 @@ impl WorkspaceStage {
     /// The pure transition table: the stage a completed lifecycle fact
     /// moves this workspace to, or None when the fact does not apply -
     /// a cleanup of an already Cleaned workspace names a stage already
-    /// there, and a restoration is idempotent by postcondition, so it
-    /// re-states Available over Available.
+    /// there. Cleaned is terminal.
     pub fn transition(&self, event: &Event) -> Option<WorkspaceStage> {
         match (self, event) {
             (WorkspaceStage::Available, Event::WorkspaceCleaned { .. }) => {
                 Some(WorkspaceStage::Cleaned)
-            }
-            (WorkspaceStage::Available, Event::WorkspaceRestored { .. }) => {
-                Some(WorkspaceStage::Available)
-            }
-            (WorkspaceStage::Cleaned, Event::WorkspaceRestored { .. }) => {
-                Some(WorkspaceStage::Available)
             }
             // every other event moves no workspace stage
             _ => None,
@@ -84,60 +75,6 @@ pub struct WorkspaceStageFact {
     pub at: u64,
 }
 
-/// The latest confirmed saved-directory change of a native incarnation:
-/// the selected directory, the record that confirmed it, and its event
-/// time. A machinery fact riding the incarnation, never a lifecycle
-/// stage; earlier changes stay in the log.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WorkspaceChange {
-    pub worktree: WorktreePath,
-    pub record: RecordId,
-    pub at: u64,
-}
-
-/// The primary checkout's bound Herdr destination: the exact space and
-/// tab pair the human chose by running the bind inside the manual root
-/// space's terminal. A chosen destination, never a host-space-existence
-/// claim and never tied to any shell's lifetime; the latest choice
-/// stands and the log keeps every earlier bind and clear.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RootSpaceBinding {
-    pub space: String,
-    pub tab: String,
-}
-
-/// The task's working environment, born once by the establishment
-/// record: the facts that record established, never a promise that
-/// a directory or process still exists - existence checks live in
-/// effects, not the fold. The birth record's position is the shared
-/// workspace/incarnation identity. The stage is the object's own,
-/// born Available, the same stage the created family carries.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Workspace {
-    /// The immutable commit the workspace was cut from
-    pub base: GitCommit,
-    /// The branch preserving advancement between checkpoints
-    pub branch: GitBranch,
-    /// The latest recorded clean head; born at base
-    pub checkpoint: GitCommit,
-    /// The workspace's absolute address
-    pub worktree: WorktreePath,
-    pub stage: WorkspaceStage,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct WorkspaceContext {
-    pub workspace: Workspace,
-    /// The establishment record's position: the shared
-    /// workspace/incarnation identity
-    pub birth: RecordId,
-    /// Every head the record has named, base first; the explicit
-    /// checkpoint door returns to none of them
-    pub heads: Vec<GitCommit>,
-    /// The completed fact that set the current stage; None at a birth
-    pub stage_fact: Option<WorkspaceStageFact>,
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -148,29 +85,21 @@ mod test {
     #[test]
     fn the_stage_transition_table_admits_exactly_the_legal_cells() {
         let stages = [WorkspaceStage::Available, WorkspaceStage::Cleaned];
-        let facts = [
-            Event::WorkspaceCleaned {
-                workspace: RecordId(0),
-            },
-            Event::WorkspaceRestored {
-                workspace: RecordId(0),
-            },
-        ];
+        let facts = [Event::WorkspaceCleaned {
+            workspace: RecordId(0),
+        }];
         let expected = [
-            // available: cleanup cleans, restoration re-states available
+            // available: cleanup cleans
             Some(WorkspaceStage::Cleaned),
-            Some(WorkspaceStage::Available),
-            // cleaned: a second cleanup names a stage already there,
-            // and restoration returns available
+            // cleaned: a second cleanup names a stage already there
             None,
-            Some(WorkspaceStage::Available),
         ];
         for (cell, stage) in stages.iter().enumerate() {
             for (fact_cell, fact) in facts.iter().enumerate() {
                 let moved = stage.transition(fact);
                 assert_eq!(
                     moved,
-                    expected[cell * 2 + fact_cell],
+                    expected[cell + fact_cell],
                     "{stage:?} under {:?} moves wrong",
                     fact
                 );

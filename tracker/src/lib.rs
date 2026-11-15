@@ -8,10 +8,8 @@ pub mod telemetry;
 
 // the flat crate-root names stay: the wire, the CLI, and the tests
 // name these modules at the root, and the concerns are containers
-pub use host::{
-    attempts, harness, herdr, host_contract, launch, paths, pi_session, placement, workspace,
-};
-pub use record::{db, decide, events, import, objects, refusals, store, types, views};
+pub use host::{attempts, harness, herdr, host_contract, launch, paths, pi_session, workspace};
+pub use record::{db, decide, events, objects, refusals, store, types, views};
 pub use serve::{api, client, wire};
 pub use views::Target;
 
@@ -27,8 +25,7 @@ pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, I
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use objects::workspace::{
-    CreatedWorkspace, CreatedWorkspaceContext, RootSpaceBinding, WorkspaceChange, WorkspaceId,
-    WorkspaceStage, WorkspaceStageFact,
+    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceId, WorkspaceStage, WorkspaceStageFact,
 };
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
@@ -77,12 +74,6 @@ pub enum Reject {
     #[error("human-only act")]
     HumanOnly,
     // Workspace
-    #[error("the task already holds a workspace")]
-    WorkspaceAlreadyExists,
-    #[error("the task has no workspace")]
-    WorkspaceMissing,
-    #[error("the tip rewinds the recorded checkpoint")]
-    CheckpointRewind,
     #[error("no workspace was born at that record")]
     InvalidWorkspaceId,
     #[error("the workspace's stage does not admit this lifecycle fact")]
@@ -115,9 +106,6 @@ impl Reject {
             Reject::NotOwnIncarnation => "not_own_incarnation",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
-            Reject::WorkspaceAlreadyExists => "workspace_already_exists",
-            Reject::WorkspaceMissing => "workspace_missing",
-            Reject::CheckpointRewind => "checkpoint_rewind",
             Reject::InvalidWorkspaceId => "invalid_workspace_id",
             Reject::WorkspaceStageMismatch => "workspace_stage_mismatch",
             Reject::InvalidActor => "invalid_actor",
@@ -156,9 +144,6 @@ mod test {
             Reject::NotOwnIncarnation,
             Reject::InvalidMessageId,
             Reject::HumanOnly,
-            Reject::WorkspaceAlreadyExists,
-            Reject::WorkspaceMissing,
-            Reject::CheckpointRewind,
             Reject::InvalidWorkspaceId,
             Reject::WorkspaceStageMismatch,
             Reject::InvalidActor,

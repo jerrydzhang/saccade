@@ -15,7 +15,6 @@ use crate::herdr::HerdrCore;
 use crate::host;
 use crate::host_contract::{HostAddress, HostContract, Liveness};
 use crate::pi_session;
-use crate::placement;
 use crate::workspace::LifecycleAddress;
 use crate::{Incarnation, IncarnationId, WorkspaceStage, World};
 
@@ -55,32 +54,22 @@ pub struct ResumeTarget {
 }
 
 /// One composed launch: the routing environment, the exact workspace,
-/// the session argv under the arm's harness, the identity facts
-/// the submitting door records, and the placement the destination
-/// class declares - None for the --here arm, an unbound root, or any
-/// unrecorded destination. Mechanics only.
+/// the session argv under the arm's harness, and the identity facts
+/// the submitting door records. Mechanics only.
 pub struct Composition {
     pub routing: Vec<String>,
     pub dir: PathBuf,
     pub session_argv: Vec<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
-    /// The placement the submit may declare: the bound pair at a
-    /// bound primary checkout, the derivation at a recorded
-    /// workspace, None elsewhere.
-    pub placement: Option<placement::Placement>,
 }
 
 /// What a submitted launch produced: the workspace and terminal the
-/// host named, the placement the door declared at birth - none for the
-/// --here arm - the fresh birth facts for the door's registration, and
+/// host named, the fresh birth facts for the door's registration, and
 /// the resume target for the address move.
 pub struct Submitted {
     pub workspace: String,
     pub terminal: String,
-    pub space: Option<String>,
-    pub tab: Option<String>,
-    pub place_refusal: Option<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
     /// The name the door recorded with the fresh birth, and the name
@@ -134,18 +123,13 @@ pub struct LaunchRequest<'a> {
     pub url: String,
     pub exe: Option<PathBuf>,
     pub arm: LaunchArm<'a>,
-    /// Whether the submitted launch declares Herdr placement. True for
-    /// every door but --here: the invoking viewer's launch stays
-    /// unplaced, reachable by its own recorded host address.
-    pub declare_placement: bool,
 }
 
 /// Compose one launch: the routing line, the exact workspace and
 /// harness argv, and the arm's identity facts. The resume arm runs its
 /// strict preflight here - saved locator, header identity, recorded
 /// workspace, cleaned guard, and host liveness - so a refused resume
-/// contacts no session and changes nothing. The destination class,
-/// not the caller, decides the declared placement.
+/// contacts no session and changes nothing.
 pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
     let LaunchRequest {
         world,
@@ -153,7 +137,6 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
         url,
         exe,
         arm,
-        declare_placement,
     } = request;
     let (dir, session_argv, fresh, resume, label, launched_session) = match arm {
         LaunchArm::Fresh {
@@ -207,12 +190,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                 address,
                 adopted,
                 harness,
-            } = &ctx.incarnation
-            else {
-                return Err(LaunchFail::Usage(format!(
-                    "{token} carries no saved native session to resume; historical attribution identities have none",
-                )));
-            };
+            } = &ctx.incarnation;
             // the recorded kind is the authority: an explicit harness
             // is a claim about the session, and a wrong claim refuses
             if let Some(expected) = expected
@@ -242,13 +220,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                     native_id.as_str()
                 )));
             }
-            // the recorded change is the workspace authority; the
-            // header cwd answers only for sessions whose fold holds
-            // no change
-            let dir = match world.workspace_changes.get(&id) {
-                Some(change) => std::path::PathBuf::from(change.worktree.as_path()),
-                None => std::path::PathBuf::from(&header.cwd),
-            };
+            let dir = std::path::PathBuf::from(&header.cwd);
             if !dir.is_dir() {
                 return Err(LaunchFail::Usage(format!(
                     "the workspace {} is missing; resume starts from the recorded workspace, never a substitute",
@@ -310,24 +282,18 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
             )
         }
     };
-    let placement = if declare_placement {
-        placement::for_dir(world, repo, &dir)
-    } else {
-        None
-    };
     Ok(Composition {
         routing: routing(url, repo, exe, label, launched_session.as_str()),
         dir,
         session_argv,
         fresh,
         resume,
-        placement,
     })
 }
 
 /// Submit one composed launch through the host: the direnv equip
 /// first - an unequipped launch refuses before any host contact -
-/// then the host ask and the placement declaration. Mechanics only -
+/// then the host ask. Mechanics only -
 /// the calling door registers the birth or moves the address, and
 /// rendering or any follow-on act belongs to the door.
 pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
@@ -348,28 +314,9 @@ pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
             code: "launch_host_refused",
             detail: e.to_string(),
         })?;
-    // placement at birth: the destination class decides what the
-    // terminal declares - the bound pair at a bound primary checkout,
-    // the derivation at a recorded workspace, and no lookup, no label
-    // ask, no placement claim anywhere else. The --here arm composes
-    // None the same way: its terminal stays unplaced for explicit
-    // later attachment.
-    let (space, tab, place_refusal) = match composed.placement {
-        Some(placement) => {
-            let refusal = host
-                .place(&address, &placement.space, &placement.tab)
-                .err()
-                .map(|e| e.to_string());
-            (Some(placement.space), Some(placement.tab), refusal)
-        }
-        None => (None, None, None),
-    };
     Ok(Submitted {
         workspace: composed.dir.display().to_string(),
         terminal: address.0.clone(),
-        space,
-        tab,
-        place_refusal,
         fresh: composed.fresh,
         resume: composed.resume,
         name: None,
@@ -446,7 +393,7 @@ fn canonical_workspace(workspace: &Path) -> Result<PathBuf, LaunchFail> {
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
-/// stage is Cleaned refuses ordinary use until an explicit restore,
+/// stage is Cleaned refuses ordinary use,
 /// addressed by the one shared resolver - its own stored string or the
 /// canonical form it resolves to. Unrecognized directories and
 /// primary checkouts are not workspaces and pass untouched; aliased
@@ -462,10 +409,9 @@ fn cleaned_guard(world: &World, dir: &Path) -> Result<(), LaunchFail> {
                 return Err(LaunchFail::Refused {
                     code: "workspace_cleaned",
                     detail: format!(
-                        "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
+                        "{} is recorded Cleaned (record {}); a cleaned workspace is not reused: create one with sac workspace new",
                         canonical.display(),
-                        birth.0,
-                        canonical.display()
+                        birth.0
                     ),
                 });
             }

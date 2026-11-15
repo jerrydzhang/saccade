@@ -187,7 +187,7 @@ impl GitCommit {
         Self(Self::UNRECORDED.to_string())
     }
 
-    /// Views and tests state the hash a checkpoint recorded.
+    /// Views and tests state the hash a record carried.
     pub fn as_str(&self) -> &str {
         &self.0
     }

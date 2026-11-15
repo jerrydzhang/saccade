@@ -62,27 +62,10 @@ pub fn mailbox(world: &World, id: IncarnationId) -> Vec<MessageId> {
         .collect()
 }
 
-/// What the task wait waits for. The offer arm returns with the task
-/// events; until then a wait is activity only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitUntil {
-    Activity,
-    Offer,
-}
-
 /// Whether the record the event lands in wakes a wait on `target`.
 /// Task facts wake their task; the machinery's own facts and the
 /// message traffic ride no task and wake nothing.
-pub fn wait_matches(
-    world: &World,
-    at: RecordId,
-    event: &Event,
-    target: &Target,
-    until: WaitUntil,
-) -> bool {
-    if matches!(until, WaitUntil::Offer) {
-        return matches!(event, Event::TaskOffered { task, .. } if *target == Target::Task(*task));
-    }
+pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target) -> bool {
     match event {
         Event::TaskCreated { .. } => {
             matches!(*target, Target::Task(t) if world.task_born_at(at) == Some(t))
@@ -94,9 +77,7 @@ pub fn wait_matches(
         | Event::TaskOffered { task: id, .. }
         | Event::TaskRejected { task: id, .. }
         | Event::TaskAccepted { task: id } => *target == Target::Task(*id),
-        Event::WorkspaceEstablished { task_id, .. }
-        | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
-        // the root destination acts, the registrations, the relaunch
+        // the registrations, the relaunch
         // facts, the workspace lifecycle, and the messages name no
         // task the wait could wake on
         _ => false,
@@ -161,8 +142,6 @@ pub struct ShowView {
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
     pub owner: Option<String>,
-    /// The established workspace's branch and address, when one stands
-    pub workspace: Option<String>,
 }
 
 impl ShowView {
@@ -176,13 +155,6 @@ impl ShowView {
                 _ => None,
             },
             owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
-            workspace: ctx.workspace.as_ref().map(|w| {
-                format!(
-                    "{} | {}",
-                    w.workspace.branch.as_str(),
-                    w.workspace.worktree.as_path().display()
-                )
-            }),
         }
     }
 }
@@ -245,14 +217,13 @@ pub enum RefTarget {
     },
     Incarnation {
         num: usize,
-        /// The birth task a historical establishment carries; a
-        /// registered native identity has none
+        /// A registered native identity carries no birth task
         task: Option<usize>,
     },
     Message {
         num: usize,
     },
-    /// Any other record fact - a claim, a checkpoint: its position
+    /// Any other record fact - a claim: its position
     /// and its home task, None when the fold gives it none
     Record {
         seq: usize,
@@ -265,13 +236,10 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     if let Some(task) = world.task_born_at(rid) {
         return Some(RefTarget::Task { task: task.0 });
     }
-    if let Some(ictx) = world.incarnations.get(&crate::IncarnationId(rid)) {
+    if world.incarnations.contains_key(&crate::IncarnationId(rid)) {
         return Some(RefTarget::Incarnation {
             num: world.incarnation_num(crate::IncarnationId(rid))?,
-            task: match &ictx.incarnation {
-                crate::Incarnation::Established { task, .. } => Some(task.0),
-                crate::Incarnation::Native { .. } => None,
-            },
+            task: None,
         });
     }
     if world.messages.contains_key(&crate::MessageId(rid)) {
@@ -630,7 +598,6 @@ mod test {
             ownership: Vec::new(),
             commits: Vec::new(),
             birth_actor: ActorName::new("human person".into()).unwrap(),
-            workspace: None,
         }
     }
 
@@ -754,8 +721,8 @@ mod test {
         assert!(error.to_string().contains("holds no tasks yet"));
     }
 
-    // the task wait wakes on exactly its task's lifecycle and
-    // workspace records, and nothing else
+    // the task wait wakes on exactly its task's lifecycle records,
+    // and nothing else
     #[test]
     fn the_task_wait_matches_exactly_its_own_records() {
         let mut world = World::new();
@@ -802,11 +769,10 @@ mod test {
             &mut events,
             3,
             &ctx("pi"),
-            Event::WorkspaceEstablished {
-                task_id: TaskId(0),
+            Event::WorkspaceCreated {
                 base: crate::GitCommit::new("abc123".into()).unwrap(),
-                branch: crate::GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: crate::WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+                branch: crate::GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: crate::WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
         );
         push(
@@ -840,13 +806,11 @@ mod test {
         let matching = |target: &Target| {
             events
                 .iter()
-                .filter(|(seq, event)| {
-                    wait_matches(&world, RecordId(*seq), event, target, WaitUntil::Activity)
-                })
+                .filter(|(seq, event)| wait_matches(&world, RecordId(*seq), event, target))
                 .map(|(seq, _)| *seq)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(matching(&Target::Task(TaskId(0))), vec![0, 2, 3]);
+        assert_eq!(matching(&Target::Task(TaskId(0))), vec![0, 2]);
         assert_eq!(matching(&Target::Task(TaskId(1))), vec![1, 4]);
     }
 
@@ -984,8 +948,7 @@ mod test {
                 &world,
                 RecordId(3),
                 &event,
-                &Target::Task(TaskId(0)),
-                WaitUntil::Activity
+                &Target::Task(TaskId(0))
             ));
         }
 

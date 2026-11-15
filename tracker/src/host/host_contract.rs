@@ -5,7 +5,6 @@
 //! swap is a dialect module plus its own claim.
 
 use std::path::Path;
-use std::time::Duration;
 
 /// A host address returned at launch: opaque bytes, asserting nothing
 /// beyond host-reported liveness at probe time.
@@ -19,14 +18,6 @@ pub enum Liveness {
     Live,
     Gone,
     Unknown(String),
-}
-
-/// One bounded host wait's answer. The wake is advisory only: truth
-/// about arrivals is the session's own mailbox read.
-#[derive(Clone, Debug, PartialEq)]
-pub enum WaitWake {
-    Message,
-    Quiet,
 }
 
 /// A launch refusal, naming the evidence.
@@ -74,20 +65,6 @@ pub enum CloseFact {
 pub enum CloseRefusal {
     AddressNotLive(String),
     HostRefused(String),
-    Unknown(String),
-}
-
-/// A placement refusal, naming the evidence. The terminal exists
-/// either way - the launch cannot be undone - so the caller discloses
-/// and carries on rather than failing a launch that already landed.
-#[derive(Debug)]
-pub enum PlaceRefusal {
-    /// The host named the address absent or finished.
-    AddressNotLive(String),
-    /// The host was asked and refused for its own reasons.
-    HostRefused(String),
-    /// The host could not be asked, its answer could not be read, or
-    /// the bounded ask expired.
     Unknown(String),
 }
 
@@ -143,11 +120,6 @@ pub trait HostContract: Sync {
     /// supervises what it launched, and every launch passes the
     /// host's no-parent form (settled law).
     fn launch(&self, cwd: &Path, argv: &[String]) -> Result<HostAddress, LaunchRefusal>;
-    /// One placement declaration on a terminal the caller just
-    /// launched: the host's own grouping reads it and the terminal
-    /// shows where the author says it lives. One ask, right after the
-    /// launch's address returns; ids are local to that machine.
-    fn place(&self, address: &HostAddress, space: &str, tab: &str) -> Result<(), PlaceRefusal>;
     /// One name label on a terminal the record addresses, so the
     /// host's own listings show what the incarnation is called; None
     /// removes the label. One ask, right after the naming lands.
@@ -158,9 +130,6 @@ pub trait HostContract: Sync {
     /// One ordered submission into a live session: queue-style, the
     /// write never waits for a pause and never observes a turn.
     fn submit(&self, address: &HostAddress, text: &str) -> Result<(), SubmitRefusal>;
-    /// One bounded host wait at an explicit address; the arrival-wait
-    /// door loops over this verb with the mailbox as truth.
-    fn wait(&self, address: &HostAddress, bound: Duration) -> WaitWake;
     /// Ends the session program and carries back the finished-state
     /// fact the reply named. Consumed only by the workspace clean
     /// effect's ordered contract, never as a standalone door.
@@ -214,20 +183,6 @@ impl std::fmt::Display for CloseRefusal {
             CloseRefusal::AddressNotLive(detail) => write!(f, "the address is not live: {detail}"),
             CloseRefusal::HostRefused(detail) => write!(f, "the host refused the close: {detail}"),
             CloseRefusal::Unknown(detail) => write!(f, "the close could not be asked: {detail}"),
-        }
-    }
-}
-
-impl std::fmt::Display for PlaceRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlaceRefusal::AddressNotLive(detail) => write!(f, "the address is not live: {detail}"),
-            PlaceRefusal::HostRefused(detail) => {
-                write!(f, "the host refused the placement: {detail}")
-            }
-            PlaceRefusal::Unknown(detail) => {
-                write!(f, "the placement could not be asked: {detail}")
-            }
         }
     }
 }

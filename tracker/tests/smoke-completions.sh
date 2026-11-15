@@ -6,17 +6,32 @@
 set -u
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 
+# A session's routing (SACCADE_SERVER, SACCADE_REPO, SACCADE_ACTOR,
+# the scope words, the HC_* terminal words) must never steer this
+# smoke at the real tracker: every inherited SACCADE_* and HC_* word
+# goes before the first sac invocation, and the smoke builds its own
+# environment on the bare base.
+for name in $(compgen -v SACCADE_; compgen -v HC_); do
+  unset "$name"
+done
+# belt and braces: the scrub leaves nothing behind
+survivor=$(compgen -v SACCADE_; compgen -v HC_)
+[ -z "$survivor" ] || fail "inherited tracker environment survived the scrub: $survivor"
+
 BIN="$(pwd)/target/debug/sac"
 test -x "$BIN" || fail "build the binary first"
 # fish invokes sac by PATH name; the fresh build goes first so the
 # probes exercise exactly what this tree emits
-export PATH="$(dirname "$BIN"):${PATH}"
+PATH="$(dirname "$BIN"):${PATH}"
+export PATH
 
 TAB=$(printf "\t")
-SMOKE=$(mktemp -d /tmp/sac-fish-smoke-XXXXXX)
+# the scratch honors the caller's TMPDIR; the tracker inside it is
+# entirely its own
+SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/sac-fish-smoke.XXXXXX")
 export XDG_STATE_HOME="$SMOKE/state"
 export XDG_DATA_HOME="$SMOKE/data"
-PORT=18931
+export SACCADE_ACTOR=smoker
 
 # the scratch repo: one commit, a real checkout, one plain directory
 # so the filesystem fallback has something ordinary to offer
@@ -25,21 +40,31 @@ git -C "$SMOKE/repo" -c user.email=smoke@example -c user.name=smoke commit -q --
 mkdir -p "$SMOKE/repo/realdir"
 mkdir -p "$XDG_DATA_HOME/fish/vendor_completions.d"
 
-# the server serves the scratch tracker; the address hint lands where
-# discovery looks
-"$BIN" serve --repo "$SMOKE/repo" --bind 127.0.0.1 --port $PORT >"$SMOKE/serve.log" 2>&1 &
+# the server serves the scratch tracker; port 0 asks the kernel for a
+# free port, and the resolved address is published in the hint beside
+# the tracker's database, exactly where discovery looks
+"$BIN" serve --repo "$SMOKE/repo" --bind 127.0.0.1 --port 0 >"$SMOKE/serve.log" 2>&1 &
 SERVE_PID=$!
 # SMOKE_KEEP=1 preserves the scratch dir for inspection
 trap 'kill $SERVE_PID 2>/dev/null; if [ "${SMOKE_KEEP:-}" != 1 ]; then rm -rf "$SMOKE"; fi' EXIT
+URL=""
+for i in $(seq 1 100); do
+  hint=$(find "$XDG_STATE_HOME" -name '*.addr' -print -quit 2>/dev/null)
+  if [ -n "$hint" ] && [ -s "$hint" ]; then
+    URL=$(cat "$hint")
+    break
+  fi
+  [ "$i" = 100 ] && fail "the server never published its address: $(cat "$SMOKE/serve.log")"
+  sleep 0.1
+done
+[ -n "$URL" ] || fail "the server published no address: $(cat "$SMOKE/serve.log")"
 for i in $(seq 1 50); do
-  curl -sf "http://127.0.0.1:$PORT/api/v1/version" >/dev/null 2>&1 && break
+  curl -sf "$URL/api/v1/version" >/dev/null 2>&1 && break
   [ "$i" = 50 ] && fail "server never came up: $(cat "$SMOKE/serve.log")"
   sleep 0.2
 done
 
 cd "$SMOKE/repo" || fail "cd repo"
-unset SACCADE_ACTOR SACCADE_TASK SACCADE_INCARNATION_SEQ SACCADE_WORKSPACE SACCADE_REPO SACCADE_CLI
-export SACCADE_ACTOR=smoker
 
 # the story through real doors: a task, a claimed task, a workspace
 "$BIN" create task "smoke the completions door" >/dev/null || fail "create task"
@@ -50,13 +75,12 @@ test -n "$WS" || fail "no recorded workspace candidate"
 test -d "$WS" || fail "the recorded path is not a directory"
 
 # a real registration through the attach door
-curl -sf -X POST "http://127.0.0.1:$PORT/api/v1/native/attach" \
+curl -sf -X POST "$URL/api/v1/native/attach" \
   -H 'content-type: application/json' \
   -d '{"native_id":"smoke-sess-1","session_file":"'"$SMOKE"'/sessions/7777.json","client":"smoke"}' \
   >/dev/null || fail "attach refused"
 
-# clean the workspace through the real door: the restore candidates
-# then lead Cleaned
+# clean the workspace through the real door
 "$BIN" workspace clean "$WS" >/dev/null || fail "workspace clean"
 
 # the script loads the way fish loads vendor completions; probes run
@@ -73,15 +97,11 @@ fish -i -c '
   report launch_resume "sac launch --resume "
   report send_to "sac send --to "
   report send_task "sac send --task "
-  report switch_target "sac workspace switch "
-  report switch_to "sac workspace switch i-0 --to "
   report clean "sac workspace clean "
-  report restore "sac workspace restore "
   report board_static "sac board "
   report offer_tasks "sac offer "
   report create_static "sac create "
   report skill_static "sac skill "
-  report until_static "sac wait t-0 --until "
   report shell_static "sac completions "
   report global_flag "sac --ac"
   report cancel_flag_name "sac cancel t-0 --expl"
@@ -114,17 +134,10 @@ section launch_resume | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" 
 }
 section send_to | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" || { section send_to; fail "send --to misses incarnations"; }
 section send_task | grep -Fq "t-0${TAB}smoke the completions door" || { section send_task; fail "send --task misses tasks"; }
-section switch_target | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" || { section switch_target; fail "switch misses incarnations"; }
 
-# switch --to: recorded beside the fallback
-section switch_to | grep -Fq "$WS" || { section switch_to; fail "switch --to misses the recorded workspace"; }
-section switch_to | grep -q "realdir" || { section switch_to; fail "switch --to misses the fallback"; }
-
-# clean and restore: recorded paths only, no filesystem fallback
+# clean: recorded paths only, no filesystem fallback
 section clean | grep -Fq "$WS" || { section clean; fail "clean misses the recorded path"; }
 section clean | grep -q "realdir" && fail "clean leaked the filesystem fallback"
-section restore | grep -Fq "$WS" || { section restore; fail "restore misses the recorded path"; }
-section restore | grep -q "realdir" && fail "restore leaked the filesystem fallback"
 
 # the board controller's verbs complete statically; the decision verbs
 # name their tasks
@@ -138,8 +151,6 @@ section offer_tasks | grep -Fq "t-0${TAB}smoke the completions door" || { sectio
 section create_static | grep -qx "task" || { section create_static; fail "create offers no task kind"; }
 section skill_static | grep -qx "install" || { section skill_static; fail "skill lost install"; }
 section skill_static | grep -qx "check" || { section skill_static; fail "skill lost check"; }
-section until_static | grep -qx "activity" || { section until_static; fail "wait --until lost activity"; }
-section until_static | grep -qx "offer" || { section until_static; fail "wait --until lost offer"; }
 section shell_static | grep -Fqe "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }
 section shell_static | grep -qx "primary" && fail "the fish description split on spaces"
 section shell_static | grep -qx "shell" && fail "the fish description split on spaces"

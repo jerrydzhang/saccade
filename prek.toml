@@ -17,6 +17,10 @@ hooks = [
     entry = "sh", language = "system",
     args = ["-c", "test -x client/node_modules/.bin/vitest || { echo 'port-unit: client/node_modules is missing; run npm ci in client' >&2; exit 1; }; cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
     pass_filenames = false, always_run = true },
+  { id = "nix-fmt", name = "nix files are formatted (nixfmt; just fmt fixes)",
+    entry = "nixfmt", language = "system",
+    args = ["--check"],
+    files = '\.nix$' },
 ]
 
 [[repos]]

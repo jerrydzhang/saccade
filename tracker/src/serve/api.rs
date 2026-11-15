@@ -22,7 +22,6 @@ use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
 use crate::host::HostFail;
 use crate::store::{Context, RecordId, Scope, Tier, World};
-use crate::types::pointers::WorktreePath;
 use crate::workspace::{self, WorkspaceFail};
 use crate::{Command, MessageId, Reject};
 
@@ -532,9 +531,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         raw: String::from_utf8_lossy(&body).into_owned(),
     };
     // a send command rides the send operation like the send face: the
-    // an accept runs the effect layer's checkpoint guard in the same
-    // locked stretch that records it (D6): no actor of the task may
-    // hold unsaved checkpoints when the acceptance lands
     if let Command::AcceptBoard { task } = &command {
         let accept_task = *task;
         let accept_context = context.clone();
@@ -543,22 +539,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
         let outcome: Result<Vec<StoredRecord>, ApiFail> = (|| {
             let inner = board_ready(&mut guard)?;
-            if let Some(root) = app.repo_root() {
-                let boards = crate::boards::Boards::open(&crate::paths::state_dir(root)).map_err(
-                    |fail| {
-                        ApiFail::Refused(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            fail.code(),
-                            fail.detail(),
-                        )
-                    },
-                )?;
-                boards
-                    .accept_guard(&accept_task.0.to_string())
-                    .map_err(|fail| {
-                        ApiFail::Refused(StatusCode::CONFLICT, fail.code(), fail.detail())
-                    })?;
-            }
             db::record(
                 &mut inner.conn,
                 &accept_context,
@@ -838,10 +818,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/command", post(command))
         .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/create", post(workspace_create))
-        .route("/api/v1/workspace/change", post(workspace_change))
         .route("/api/v1/workspace/clean", post(workspace_clean))
-        .route("/api/v1/workspace/restore", post(workspace_restore))
-        .route("/api/v1/workspace/reconcile", post(workspace_reconcile))
         .route("/api/v1/native/attach", post(native_attach))
         .route("/api/v1/incarnations/register", post(incarnation_register))
         .route("/api/v1/incarnations/address", post(incarnation_address))
@@ -854,14 +831,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/log", get(board_log))
         .route("/api/v1/boards/search", post(board_search))
         .route(
-            "/api/v1/boards/checkpoint",
-            post(board_checkpoint).layer(board_body_limit()),
-        )
-        .route(
             "/api/v1/boards/commit",
             post(board_commit).layer(board_body_limit()),
         )
-        .route("/api/v1/boards/discard", post(board_discard))
         .route(
             "/api/v1/boards/update",
             post(board_update).layer(board_body_limit()),
@@ -1025,289 +997,12 @@ async fn workspace_create(State(app): State<AppState>, body: Bytes) -> Response 
     }
 }
 
-/// What a stopped-session change did: the incarnation, the directory
-/// it carried before, and the directory it carries now.
-#[derive(Serialize)]
-pub struct ChangeReply {
-    pub changed: bool,
-    /// The birth record position: the machine identity channel
-    pub incarnation: usize,
-    /// The incarnation's dense public number, the human-facing i-N
-    pub num: usize,
-    pub from: String,
-    pub to: String,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct ChangeRequest {
-    /// The incarnation's public number, the human-facing i-N
-    incarnation: usize,
-    /// The selected directory: an explicit existing one, never created here
-    to: String,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-/// One stopped-session change: resolve the recorded incarnation,
-/// prove quiescence through the host's liveness answer, then land the
-/// System change fact - the fold's change cache is the whole effect,
-/// and resume reads the workspace from it. Busy and unknown refuse
-/// before anything records.
-fn change_operation(guard: &mut ServerState, num: usize, to: &str) -> Result<ChangeReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
-    // the fold resolves the incarnation before anything moves: a
-    // missing or historical identity is no change target
-    let world = match db::load(&inner.conn)
-        .map_err(|e| ApiFail::Db(e.to_string()))?
-        .state
-    {
-        db::LoadState::Full(world) => world,
-        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
-    };
-    let id = world
-        .incarnation_at_num(num)
-        .ok_or(ApiFail::Reject(Reject::InvalidIncarnationId, None))?;
-    let (saved_session, carried, adopted) = match &world.incarnations[&id].incarnation {
-        crate::Incarnation::Native {
-            saved_session,
-            address,
-            adopted,
-            ..
-        } => {
-            // the change needs a from fact: a launch-door birth whose
-            // locator pi has not bound yet has no saved launch cwd and
-            // no recorded change, so it refuses rather than guessing
-            let Some(saved_session) = saved_session else {
-                return Err(ApiFail::Refused(
-                    StatusCode::BAD_REQUEST,
-                    "saved_session_missing",
-                    format!(
-                        "i-{num}'s saved session locator is not bound yet: the session has not saved, so there is no launch fact to change"
-                    ),
-                ));
-            };
-            (saved_session.clone(), address.clone(), *adopted)
-        }
-        crate::Incarnation::Established { .. } => {
-            return Err(ApiFail::Refused(
-                StatusCode::BAD_REQUEST,
-                "invalid_incarnation_id",
-                format!(
-                    "i-{num} is a historical attribution identity: it carries no saved native session to move"
-                ),
-            ));
-        }
-    };
-    // the target is validated before any probe runs: an explicit
-    // existing directory, never one this route creates
-    let target = std::path::PathBuf::from(to);
-    let target = WorktreePath::new(target.clone()).map_err(|_| {
-        ApiFail::Refused(
-            StatusCode::BAD_REQUEST,
-            "workspace_path_invalid",
-            format!("{} is not an absolute path", target.display()),
-        )
-    })?;
-    if !target.as_path().is_dir() {
-        return Err(ApiFail::Refused(
-            StatusCode::BAD_REQUEST,
-            "workspace_path_missing",
-            format!(
-                "{} does not exist; a change selects an existing directory and creates nothing",
-                target.as_path().display()
-            ),
-        ));
-    }
-    // a recorded Cleaned workspace blocks ordinary use as a switch
-    // target until an explicit restore; unrelated directories pass
-    let target_canonical =
-        crate::workspace::canonical_dir(target.as_path()).map_err(ApiFail::Workspace)?;
-    match crate::workspace::resolve_workspace_address(&world, target.as_path())
-        .map_err(ApiFail::Workspace)?
-    {
-        crate::workspace::LifecycleAddress::Single(birth) => {
-            if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
-                return Err(ApiFail::Refused(
-                    StatusCode::CONFLICT,
-                    "workspace_cleaned",
-                    format!(
-                        "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
-                        target_canonical.display(),
-                        birth.0,
-                        target_canonical.display()
-                    ),
-                ));
-            }
-        }
-        crate::workspace::LifecycleAddress::Ambiguous(births) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_ambiguous_path",
-                format!(
-                    "{} is the recorded path of {} workspace births; resolve their history by hand before switching there",
-                    target_canonical.display(),
-                    births.len()
-                ),
-            ));
-        }
-        crate::workspace::LifecycleAddress::Unrecorded => {}
-    }
-
-    // quiescence is host evidence, never a guess, and only for the
-    // launched kind: a launched terminal dies with its session, so a
-    // live terminal names a live session. An adopted pane is the
-    // caller's own program and outlives the session - terminal
-    // liveness is never session liveness for it, and the native
-    // duplicate-attach refusal is that kind's backstop. An
-    // unprobeable answer is unknown and refuses; an unaddressed
-    // recipient is the pre-B shape, whose migration is exit + resume
-    let Some(address) = carried.clone().filter(|_| !adopted) else {
-        if carried.is_none() {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "recipient_unaddressed",
-                format!(
-                    "i-{num} carries no host address: a pre-B session's switch needs its migration (exit + resume) first"
-                ),
-            ));
-        }
-        // an adopted pane outlives its session: no probe, the native
-        // duplicate-attach refusal is this kind's backstop
-        return record_change(inner, id, num, &world, saved_session, target);
-    };
-    let host = crate::herdr::HerdrCore::resolved().map_err(|e| {
-        ApiFail::Refused(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "host_unavailable",
-            e.to_string(),
-        )
-    })?;
-    use crate::host_contract::HostContract;
-    match host.live(&crate::host_contract::HostAddress(address)) {
-        crate::host_contract::Liveness::Gone => {}
-        crate::host_contract::Liveness::Live => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "session_live",
-                format!(
-                    "i-{num}'s terminal is live at its recorded host address; exit that session first - this route moves stopped sessions only"
-                ),
-            ));
-        }
-        crate::host_contract::Liveness::Unknown(detail) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "session_quiescence_unknown",
-                format!(
-                    "i-{num}'s liveness cannot be read from the host ({detail}); nothing was moved"
-                ),
-            ));
-        }
-    }
-    record_change(inner, id, num, &world, saved_session, target)
-}
-
-/// The change's whole effect is the record: the fold carries where a
-/// session lives, and resume reads it there - no session file is
-/// touched, so the record cannot strand a moved file. The from fact
-/// is the recorded change when one stands, else the saved header's
-/// launch cwd.
-fn record_change(
-    inner: &mut Inner,
-    id: crate::IncarnationId,
-    num: usize,
-    world: &World,
-    saved_session: crate::SessionLocator,
-    target: WorktreePath,
-) -> Result<ChangeReply, ApiFail> {
-    let from = match world.workspace_changes.get(&id) {
-        Some(change) => change.worktree.as_path().display().to_string(),
-        None => {
-            let header = crate::pi_session::read_header(saved_session.as_path()).map_err(|e| {
-                let (status, code) = match &e {
-                    crate::pi_session::HandoffFail::Missing(_) => {
-                        (StatusCode::BAD_REQUEST, "saved_session_missing")
-                    }
-                    _ => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "saved_session_unreadable",
-                    ),
-                };
-                ApiFail::Refused(status, code, e.to_string())
-            })?;
-            header.cwd
-        }
-    };
-    let command = Command::ChangeWorkspace {
-        incarnation: id,
-        worktree: target.clone(),
-    };
-    match db::record(
-        &mut inner.conn,
-        &Context::system(),
-        command,
-        db::now_epoch(),
-    ) {
-        Ok((records, _)) => Ok(ChangeReply {
-            changed: true,
-            incarnation: id.0.0,
-            num,
-            from,
-            to: target.as_path().display().to_string(),
-            records,
-        }),
-        Err(e) => Err(ApiFail::Refused(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage",
-            format!("the change record could not land: {e}; nothing moved - retry the switch"),
-        )),
-    }
-}
-
-async fn workspace_change(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: ChangeRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = change_operation(&mut guard, request.incarnation, &request.to);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
 // -- the workspace lifecycle controller ---------------------------------
-// Clean and restore: the ratified reversible lifecycle. The ordered
+// Clean: the ordered
 // clean contract runs can-clean checks, terminal close, terminal
 // verification, git worktree remove (branch retained), checkout and
 // worktree absence verification, and the host's visible absence,
-// and only then lands the Cleaned fact. Restore establishes or
-// validates the matching checkout and lands Restored; it launches no
-// session and creates no terminal. Reconciliation is the one-time
-// cutover verification: absent resources record Cleaned now, present
-// ones stand preserved, conflicts surface - never a classification.
+// and only then lands the Cleaned fact.
 
 /// The recorded facts of the lifecycle's target: the birth identity
 /// and what the birth carried.
@@ -1317,8 +1012,6 @@ pub struct LifecycleWorkspace {
     base: String,
     branch: String,
     path: String,
-    /// The establishment's home task, when the birth was task-bound
-    home: Option<usize>,
 }
 
 impl LifecycleWorkspace {
@@ -1328,7 +1021,6 @@ impl LifecycleWorkspace {
             base: facts.base.as_str().to_string(),
             branch: facts.branch.as_str().to_string(),
             path: facts.worktree.as_path().display().to_string(),
-            home: facts.home.map(|t| t.0),
         }
     }
 }
@@ -1352,56 +1044,6 @@ struct CleanRequest {
     /// The exact recorded workspace path; never inferred from a task
     /// or incarnation
     path: String,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct RestoreReply {
-    pub restored: bool,
-    /// Recorded Available with the matching registered checkout
-    /// already standing: no-op success, no duplicate restoration fact
-    pub already_restored: bool,
-    /// The matching registered worktree stood and was reused as-is,
-    /// local changes preserved; nothing was checked out
-    pub reused: bool,
-    /// The branch's current local tip after restoration, when git
-    /// named one; never a reset target, always a report
-    pub tip: Option<String>,
-    pub workspace: LifecycleWorkspace,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct RestoreRequest {
-    path: String,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct ReconcileEntry {
-    pub seq: usize,
-    pub path: String,
-    pub reason: String,
-}
-
-#[derive(Serialize)]
-pub struct ReconcileReply {
-    /// Whether the verified Cleaned facts were recorded (or a dry run)
-    pub applied: bool,
-    pub cleaned: Vec<ReconcileEntry>,
-    pub preserved: Vec<ReconcileEntry>,
-    pub conflicts: Vec<ReconcileEntry>,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct ReconcileRequest {
-    /// Record the verified Cleaned facts; without this the door only
-    /// verifies and reports
-    #[serde(default)]
-    apply: bool,
     #[serde(default)]
     client: Option<String>,
 }
@@ -1450,7 +1092,7 @@ fn lifecycle_target(
                 StatusCode::BAD_REQUEST,
                 "workspace_not_recorded",
                 format!(
-                    "{} names no recorded workspace birth; clean and restore select an exact recorded workspace, never a primary checkout or an unrecognized directory",
+                    "{} names no recorded workspace birth; clean selects an exact recorded workspace, never a primary checkout or an unrecognized directory",
                     canonical.display()
                 ),
             ));
@@ -1574,8 +1216,8 @@ fn clean_operation(
         ));
     }
     if destructive {
-        // the retained branch is the restore contract's foundation: a
-        // missing branch refuses the destructive act before anything runs
+        // the branch is retained: a missing branch refuses the
+        // destructive act before anything runs
         if workspace::branch_tip(&repo_root, &facts.branch)
             .map_err(ApiFail::Workspace)?
             .is_none()
@@ -1584,7 +1226,7 @@ fn clean_operation(
                 StatusCode::CONFLICT,
                 "workspace_branch_missing",
                 format!(
-                    "the recorded branch {} holds no local tip; a cleanup that would remove its checkout refuses, and restore would refuse too",
+                    "the recorded branch {} holds no local tip; a cleanup that would remove its checkout refuses",
                     facts.branch.as_str()
                 ),
             ));
@@ -1607,7 +1249,7 @@ fn clean_operation(
         );
     } else if present {
         // bytes at the recorded path are not the checkout: a probe
-        // finding them neither restores the identity nor deletes them
+        // finding them deletes nothing
         return Err(ApiFail::Refused(
             StatusCode::CONFLICT,
             "workspace_checkout_mismatch",
@@ -1753,366 +1395,6 @@ fn clean_operation(
     }
 }
 
-/// One completed restoration: establish or validate the matching
-/// checkout, then record. No terminal, no session, no incarnation.
-fn restore_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    path_str: &str,
-) -> Result<RestoreReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
-    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
-        return Err(ApiFail::NoRepo);
-    };
-    let (world, facts) = lifecycle_target(inner, path_str)?;
-    let birth = facts.birth;
-    let canonical =
-        workspace::canonical_dir(facts.worktree.as_path()).map_err(ApiFail::Workspace)?;
-    let dir_str = canonical.display().to_string();
-    let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
-    let registered = registrations.get(&canonical).cloned();
-    // a git registration whose directory is gone restores and reuses
-    // nothing, at either stage: a stale admin entry is named as the
-    // mismatch it is, and git's own repair stays a human act - nothing
-    // counts as a matching checkout without the directory standing
-    if registered.is_some() && !canonical.is_dir() {
-        return Err(ApiFail::Refused(
-            StatusCode::CONFLICT,
-            "workspace_checkout_mismatch",
-            format!(
-                "git still registers a worktree at {} whose directory is gone; a stale registration neither restores nor reuses - inspect it and run git worktree prune by hand",
-                dir_str
-            ),
-        ));
-    }
-
-    // the matching registered checkout standing on an Available
-    // workspace is no-op success: no duplicate restoration fact lands,
-    // and the local changes it holds stand untouched. The absent case
-    // is not special: restoration is idempotent by postcondition, so
-    // an Available workspace with no checkout recreates it below under
-    // the same safety checks and records the actual fact. The safety
-    // checks hold at both stages - the other shapes are mismatches.
-    if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Available)
-        && matches!(&registered, Some(Some(b)) if b.as_str() == facts.branch.as_str())
-        && canonical.is_dir()
-    {
-        let tip = workspace::branch_tip(&repo_root, &facts.branch)
-            .map_err(ApiFail::Workspace)?
-            .map(|c| c.as_str().to_string());
-        return Ok(RestoreReply {
-            restored: false,
-            already_restored: true,
-            reused: true,
-            tip,
-            workspace: LifecycleWorkspace::of(facts),
-            records: Vec::new(),
-        });
-    }
-    if workspace::branch_tip(&repo_root, &facts.branch)
-        .map_err(ApiFail::Workspace)?
-        .is_none()
-    {
-        return Err(ApiFail::Refused(
-            StatusCode::CONFLICT,
-            "workspace_branch_missing",
-            format!(
-                "the recorded branch {} holds no local tip; restoration refuses - the branch is never reconstructed from a base or a remote",
-                facts.branch.as_str()
-            ),
-        ));
-    }
-    let (reused, tip) = match registered {
-        Some(Some(checked_out)) if checked_out == facts.branch => {
-            // the matching worktree stands: reuse as-is, local changes
-            // preserved, no checkout, no reset - the tip is git's own
-            let tip = workspace::branch_tip(&repo_root, &facts.branch)
-                .map_err(ApiFail::Workspace)?
-                .map(|c| c.as_str().to_string());
-            (true, tip)
-        }
-        Some(Some(checked_out)) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered on branch {}, not the recorded {}; no forced checkout, reset, or overwrite runs",
-                    dir_str,
-                    checked_out.as_str(),
-                    facts.branch.as_str()
-                ),
-            ));
-        }
-        Some(None) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered without a branch (bare or detached); restoration matches a named branch and runs nothing",
-                    dir_str
-                ),
-            ));
-        }
-        None if canonical.exists() => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} holds a directory git does not register as this repo's worktree; restoration overwrites nothing - inspect it by hand",
-                    dir_str
-                ),
-            ));
-        }
-        None => {
-            // absent path: recreate at the branch's current local tip
-            // under git's normal protections - a branch already checked
-            // out elsewhere refuses, as does a missing-but-registered
-            // worktree at the path
-            workspace::add_checkout(&repo_root, &canonical, &facts.branch)
-                .map_err(ApiFail::Workspace)?;
-            let tip = workspace::branch_tip(&repo_root, &facts.branch)
-                .map_err(ApiFail::Workspace)?
-                .map(|c| c.as_str().to_string());
-            (false, tip)
-        }
-    };
-    let drafts = vec![db::RecordDraft {
-        context: Context::system(),
-        event: Event::WorkspaceRestored { workspace: birth },
-    }];
-    match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
-        Ok(records) => Ok(RestoreReply {
-            restored: true,
-            already_restored: false,
-            reused,
-            tip,
-            workspace: LifecycleWorkspace::of(facts),
-            records,
-        }),
-        Err(e) => Err(ApiFail::Refused(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage",
-            format!(
-                "the checkout at {} stands restored but the Restored fact could not land: {e}; the checkout is real - retry restore to record",
-                dir_str
-            ),
-        )),
-    }
-}
-
-/// The one-time cutover verification over every recorded workspace:
-/// absent resources record Cleaned now, matching present ones stand
-/// preserved, everything uncertain or conflicting surfaces. Never a
-/// deletion, never a terminal close, never an age classification.
-fn reconcile_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    apply: bool,
-) -> Result<ReconcileReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
-    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
-        return Err(ApiFail::NoRepo);
-    };
-    let world = match db::load(&inner.conn)
-        .map_err(|e| ApiFail::Db(e.to_string()))?
-        .state
-    {
-        db::LoadState::Full(world) => world,
-        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
-    };
-    let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
-    // every workspace birth in birth order, created and established
-    let births = world.workspace_births();
-    // paths shared by several births are a conflict before any act:
-    // sharing keys on the canonical form, so twin spellings of one
-    // directory count as the same unsafe address
-    let mut shared: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    let mut entries: Vec<(RecordId, crate::store::WorkspaceFacts)> = Vec::new();
-    for birth in births {
-        if let Some(facts) = world.workspace_facts(birth) {
-            if let Ok(canonical) = workspace::canonical_dir(facts.worktree.as_path()) {
-                *shared.entry(canonical.display().to_string()).or_default() += 1;
-            }
-            entries.push((birth, facts));
-        }
-    }
-    let mut cleaned = Vec::new();
-    let mut preserved = Vec::new();
-    let mut conflicts = Vec::new();
-    let mut to_record: Vec<Event> = Vec::new();
-    for (birth, facts) in entries {
-        let path_string = facts.worktree.as_path().display().to_string();
-        let entry = |reason: String| ReconcileEntry {
-            seq: birth.0,
-            path: path_string.clone(),
-            reason,
-        };
-        let shares = workspace::canonical_dir(facts.worktree.as_path())
-            .map(|canonical| shared.get(&canonical.display().to_string()).copied())
-            .unwrap_or(None)
-            .unwrap_or(0);
-        if shares > 1 {
-            conflicts.push(entry("several workspace births share this path".into()));
-            continue;
-        }
-        let canonical = match workspace::canonical_dir(facts.worktree.as_path()) {
-            Ok(canonical) => canonical,
-            Err(e) => {
-                conflicts.push(entry(format!(
-                    "the recorded path cannot canonicalize: {}",
-                    e.detail()
-                )));
-                continue;
-            }
-        };
-        let registered = registrations.get(&canonical).cloned();
-        let present = canonical.is_dir();
-        let stage = world.workspace_stage(birth);
-        match (stage, registered, present) {
-            (Some(crate::WorkspaceStage::Cleaned), None, false) => {
-                // recorded Cleaned is verified through the same doors the
-                // cleanup itself ran: orphan or live host resources
-                // surface as this birth's conflict, never as a
-                // reconciled state
-                let dir_str = canonical.display().to_string();
-                let read = crate::herdr::HerdrCore::resolved()
-                    .map_err(|e| e.to_string())
-                    .and_then(|h| {
-                        crate::host::workspace_terminals(&h, &dir_str).map_err(|e| e.to_string())
-                    });
-                match read
-                {
-                    Ok(t) if !t.is_empty() => {
-                        conflicts.push(entry(format!(
-                            "the host names {} live terminal(s) at a workspace recorded Cleaned",
-                            t.len()
-                        )));
-                    }
-                    Ok(_) => preserved.push(entry(
-                        "verified: recorded Cleaned, checkout absent, the host names no terminals there"
-                            .into(),
-                    )),
-                    Err(e) => {
-                        conflicts.push(entry(format!("terminal state unreadable: {e}")));
-                    }
-                }
-            }
-            (Some(crate::WorkspaceStage::Cleaned), _, true) => {
-                conflicts.push(entry(
-                    "recorded Cleaned but a directory stands there".into(),
-                ));
-            }
-            (Some(crate::WorkspaceStage::Cleaned), Some(_), false) => {
-                conflicts.push(entry(
-                    "recorded Cleaned but git still registers a worktree there".into(),
-                ));
-            }
-            (Some(crate::WorkspaceStage::Available), Some(Some(branch)), true)
-                if branch.as_str() == facts.branch.as_str() =>
-            {
-                match workspace::preserved_work(&canonical) {
-                    Ok(None) => preserved.push(entry(
-                        "matching registered worktree, no staged, unstaged, or untracked work"
-                            .into(),
-                    )),
-                    Ok(Some(_)) => conflicts.push(entry(
-                        "matching worktree holds staged, unstaged, or untracked work".into(),
-                    )),
-                    Err(e) => {
-                        conflicts.push(entry(format!("worktree state unreadable: {}", e.detail())))
-                    }
-                }
-            }
-            (Some(crate::WorkspaceStage::Available), Some(_), _) => {
-                conflicts.push(entry(
-                    "git registers the path on another branch, without a branch, or over gone bytes".into(),
-                ));
-            }
-            (Some(crate::WorkspaceStage::Available), None, true) => {
-                conflicts.push(entry(
-                    "a directory stands at the recorded path but git registers no worktree".into(),
-                ));
-            }
-            (Some(crate::WorkspaceStage::Available), None, false) => {
-                // absent checkout: the host's visible and terminal
-                // answers decide; uncertainty and live terminals surface
-                let dir_str = canonical.display().to_string();
-                let read = crate::herdr::HerdrCore::resolved()
-                    .map_err(|e| e.to_string())
-                    .and_then(|h| {
-                        crate::host::workspace_terminals(&h, &dir_str).map_err(|e| e.to_string())
-                    });
-                match read {
-                    Ok(t) if !t.is_empty() => {
-                        conflicts.push(entry(format!(
-                            "the host still names {} live terminal(s) there",
-                            t.len()
-                        )));
-                    }
-                    Err(e) => {
-                        conflicts.push(entry(format!("terminal state unreadable: {e}")));
-                    }
-                    Ok(_) => {
-                        if apply {
-                            to_record.push(Event::WorkspaceCleaned { workspace: birth });
-                        }
-                        cleaned.push(entry(format!(
-                            "checkout absent and the host names no terminals there{}",
-                            if apply {
-                                "; Cleaned recorded now"
-                            } else {
-                                "; dry run"
-                            }
-                        )));
-                    }
-                }
-            }
-            (None, _, _) => {
-                conflicts.push(entry("the fold holds no stage for this birth".into()));
-            }
-        }
-    }
-    let mut records = Vec::new();
-    if apply && !to_record.is_empty() {
-        let drafts = to_record
-            .into_iter()
-            .map(|event| db::RecordDraft {
-                context: Context::system(),
-                event,
-            })
-            .collect();
-        match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
-            Ok(landed) => records = landed,
-            Err(e) => {
-                return Err(ApiFail::Refused(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage",
-                    format!(
-                        "the verification ran but the Cleaned facts could not land: {e}; nothing is recorded - retry reconcile"
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(ReconcileReply {
-        applied: apply,
-        cleaned,
-        preserved,
-        conflicts,
-        records,
-    })
-}
-
 async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
     let raw = String::from_utf8_lossy(&body).into_owned();
     let request: CleanRequest = match serde_json::from_slice(&body) {
@@ -2126,62 +1408,6 @@ async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = clean_operation(&app, &mut guard, &request.path);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-async fn workspace_restore(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: RestoreRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = restore_operation(&app, &mut guard, &request.path);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-async fn workspace_reconcile(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: ReconcileRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = reconcile_operation(&app, &mut guard, request.apply);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     if outcome.is_ok() {
         app.wake_landing();
@@ -3205,9 +2431,8 @@ async fn records(State(app): State<AppState>) -> Response {
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::serve::board_wire::{
-    BoardFile, BoardFiles, CheckpointReply, CheckpointRequest, CommitReply, CommitRequest,
-    DiffQuery, DiffReply, DiscardReply, DiscardRequest, EditQuery, EditReply, GetQuery, GetReply,
-    MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
+    BoardFile, BoardFiles, CommitReply, CommitRequest, DiffQuery, DiffReply, EditQuery, EditReply,
+    GetQuery, GetReply, MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
 };
 use axum::extract::rejection::BytesRejection;
 use base64::Engine as _;
@@ -3279,10 +2504,9 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         | BoardsFail::UnknownSourceRevision { .. }
         | BoardsFail::TaskMismatch { .. }
         | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
-        BoardsFail::MissingCommit { .. }
-        | BoardsFail::Unchanged { .. }
-        | BoardsFail::UnsavedCheckpoints { .. }
-        | BoardsFail::Record(_) => StatusCode::CONFLICT,
+        BoardsFail::MissingCommit { .. } | BoardsFail::Unchanged { .. } | BoardsFail::Record(_) => {
+            StatusCode::CONFLICT
+        }
         BoardsFail::MissingCommits { .. } | BoardsFail::Git(_) | BoardsFail::Io { .. } => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
@@ -3305,67 +2529,6 @@ fn board_ready(guard: &mut ServerState) -> Result<&mut crate::serve::api::Inner,
         ServerState::Ready(inner) => Ok(inner),
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     }
-}
-
-async fn board_checkpoint(
-    State(app): State<AppState>,
-    body: Result<Bytes, BytesRejection>,
-) -> Response {
-    let body = match board_body(body) {
-        Ok(body) => body,
-        Err(fail) => return api_failure(fail),
-    };
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: CheckpointRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.context_client(),
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = board_checkpoint_operation(&app, &mut guard, &request);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-fn board_checkpoint_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    request: &CheckpointRequest,
-) -> Result<CheckpointReply, ApiFail> {
-    let _inner = board_ready(guard)?;
-    let boards = boards_of(app)?;
-    let workdir = board_tempdir(&format!("checkpoint-{}", request.task));
-    let outcome = (|| {
-        request
-            .files
-            .write_to(&workdir)
-            .map_err(ApiFail::Malformed)?;
-        let actor = request.context.actor.as_str().to_string();
-        boards
-            .checkpoint(
-                &request.task.to_string(),
-                &actor,
-                &workdir,
-                &request.base,
-                &request.message,
-            )
-            .map(|commit| CheckpointReply { commit })
-            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
-    })();
-    let _ = std::fs::remove_dir_all(&workdir);
-    outcome
 }
 
 async fn board_commit(
@@ -3471,48 +2634,6 @@ fn board_commit_operation(
     })
 }
 
-async fn board_discard(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: DiscardRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.context_client(),
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = board_discard_operation(&app, &mut guard, &request);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-fn board_discard_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    request: &DiscardRequest,
-) -> Result<DiscardReply, ApiFail> {
-    let _inner = board_ready(guard)?;
-    let boards = boards_of(app)?;
-    let actor = request.context.actor.as_str().to_string();
-    boards
-        .discard_checkpoint(&request.task.to_string(), &actor)
-        .map(|_| DiscardReply {
-            task: format!("t-{}", request.task),
-            actor,
-        })
-        .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
-}
-
 async fn board_update(
     State(app): State<AppState>,
     body: Result<Bytes, BytesRejection>,
@@ -3598,14 +2719,7 @@ async fn board_edit(
         };
         let boards = boards_of(&app)?;
         let current = ctx.commits.last().map(|c| c.commit.as_str().to_string());
-        let checkpoint = match query.actor.as_deref() {
-            Some(actor) if !actor.is_empty() => boards
-                .checkpoint_tip(&query.task.to_string(), actor)
-                .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?
-                .filter(|tip| current.as_ref() != Some(tip)),
-            _ => None,
-        };
-        let chosen = checkpoint.clone().or_else(|| current.clone());
+        let chosen = current.clone();
         let files = match &chosen {
             Some(commit) => {
                 let workdir = board_tempdir(&format!("edit-{}", query.task));

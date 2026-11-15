@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::RecordId;
 use crate::events::Event;
 use crate::objects::incarnation::IncarnationId;
-use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
 use crate::types::pointers::GitCommit;
 use crate::types::prose::Prose;
@@ -62,8 +61,6 @@ pub struct TaskContext {
     pub commits: Vec<BoardCommit>,
     /// The attribution that birthed the task, from the birth record
     pub birth_actor: ActorName,
-    /// The task's workspace lineage, present once registered
-    pub workspace: Option<WorkspaceContext>,
 }
 
 /// The owner an ownership entry names - exactly the ratified kinds.
@@ -198,7 +195,6 @@ mod test {
             ownership: Vec::new(),
             commits: Vec::new(),
             birth_actor: ActorName::new("human person".into()).unwrap(),
-            workspace: None,
         };
         for (record, hash) in [(RecordId(3), "a".repeat(40)), (RecordId(7), "b".repeat(40))] {
             ctx.commits.push(BoardCommit {

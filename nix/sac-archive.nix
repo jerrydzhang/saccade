@@ -34,22 +34,22 @@ let
     '';
   };
 in
-  pkgs.rustPlatform.buildRustPackage {
-    pname = "sac-archive";
-    version = "0.18.0";
-    src = archiveSrc;
-    nativeBuildInputs = [
-      pkgs.git
-      pkgs.direnv
-      pkgs.util-linux
-    ];
-    SACCADE_DIRENV = "${pkgs.direnv}/bin/direnv";
-    SACCADE_WEB_ASSETS = webAssets;
-    # the archive's use is reading the old log: clone, list, show. Its
-    # own suite is not the pin - the environment it assumed has moved -
-    # so the build runs no tests and the verification is the version
-    # and the clone dry run.
-    doCheck = false;
-    cargoLock.lockFile = "${archiveSrc}/Cargo.lock";
-    meta.mainProgram = "sac";
-  }
+pkgs.rustPlatform.buildRustPackage {
+  pname = "sac-archive";
+  version = "0.18.0";
+  src = archiveSrc;
+  nativeBuildInputs = [
+    pkgs.git
+    pkgs.direnv
+    pkgs.util-linux
+  ];
+  SACCADE_DIRENV = "${pkgs.direnv}/bin/direnv";
+  SACCADE_WEB_ASSETS = webAssets;
+  # the archive's use is reading the old log: clone, list, show. Its
+  # own suite is not the pin - the environment it assumed has moved -
+  # so the build runs no tests and the verification is the version
+  # and the clone dry run.
+  doCheck = false;
+  cargoLock.lockFile = "${archiveSrc}/Cargo.lock";
+  meta.mainProgram = "sac";
+}

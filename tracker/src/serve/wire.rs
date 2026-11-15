@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 22] = [
+const KINDS: [&str; 16] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -35,14 +35,8 @@ const KINDS: [&str; 22] = [
     "task_offered",
     "task_rejected",
     "task_accepted",
-    "workspace_established",
-    "task_workspace_checkpointed",
     "workspace_created",
-    "workspace_changed",
     "workspace_cleaned",
-    "workspace_restored",
-    "root_space_bound",
-    "root_space_cleared",
     "incarnation_registered",
     "saved_session_bound",
     "host_address_assigned",
@@ -132,29 +126,12 @@ mod test {
                 grounds: prose(),
             },
             Event::TaskAccepted { task: TaskId(0) },
-            Event::WorkspaceEstablished {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-            },
-            Event::TaskWorkspaceCheckpointed {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("def456".into()).unwrap(),
-            },
             Event::WorkspaceCreated {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
-            Event::WorkspaceChanged {
-                incarnation: IncarnationId(RecordId(16)),
-                worktree: WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap(),
-            },
             Event::WorkspaceCleaned {
-                workspace: RecordId(17),
-            },
-            Event::WorkspaceRestored {
                 workspace: RecordId(17),
             },
             Event::IncarnationRegistered {

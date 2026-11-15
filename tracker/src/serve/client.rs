@@ -658,36 +658,7 @@ pub fn create_workspace(
     )
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ChangeReply {
-    pub changed: bool,
-    pub incarnation: usize,
-    pub num: usize,
-    pub from: String,
-    pub to: String,
-    pub records: Vec<StoredRecord>,
-}
-
-/// Move a stopped native session's saved working directory to an
-/// explicit existing one; the server refuses a live or unprovable
-/// session before any mutation.
-pub fn change_workspace(
-    url: &str,
-    incarnation: usize,
-    to: &std::path::Path,
-) -> Result<ChangeReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/change",
-        serde_json::json!({
-            "incarnation": incarnation,
-            "to": to.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
-/// The lifecycle controller's client half: clean and restore name the
+/// The lifecycle controller's client half: clean names the
 /// exact recorded workspace path; the server runs the ordered effects
 /// and lands the completed facts itself.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -705,56 +676,6 @@ pub fn clean_workspace(url: &str, path: &std::path::Path) -> Result<CleanReply, 
         "/api/v1/workspace/clean",
         serde_json::json!({
             "path": path.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RestoreReply {
-    pub restored: bool,
-    pub already_restored: bool,
-    pub reused: bool,
-    pub tip: Option<String>,
-    pub workspace: WorkspaceBirth,
-    pub records: Vec<StoredRecord>,
-}
-
-pub fn restore_workspace(url: &str, path: &std::path::Path) -> Result<RestoreReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/restore",
-        serde_json::json!({
-            "path": path.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ReconcileEntry {
-    pub seq: usize,
-    pub path: String,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ReconcileReply {
-    pub applied: bool,
-    pub cleaned: Vec<ReconcileEntry>,
-    pub preserved: Vec<ReconcileEntry>,
-    pub conflicts: Vec<ReconcileEntry>,
-    pub records: Vec<StoredRecord>,
-}
-
-/// The one-time cutover verification: dry run by default, recording
-/// only under `--apply`.
-pub fn reconcile_workspaces(url: &str, apply: bool) -> Result<ReconcileReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/reconcile",
-        serde_json::json!({
-            "apply": apply,
             "client": env!("CARGO_PKG_VERSION"),
         }),
     )
@@ -939,16 +860,8 @@ fn board_read<T: serde::de::DeserializeOwned>(url: &str, route: &str) -> Result<
 pub fn board_edit(
     url: &str,
     task: usize,
-    actor: Option<&str>,
 ) -> Result<crate::serve::board_wire::EditReply, ClientFail> {
-    let actor = actor.map(|a| query_escape(a.to_string()));
-    board_read(
-        url,
-        &format!(
-            "/api/v1/boards/edit?task={task}{}",
-            actor.map(|a| format!("&actor={a}")).unwrap_or_default()
-        ),
-    )
+    board_read(url, &format!("/api/v1/boards/edit?task={task}"))
 }
 
 fn query_escape(value: String) -> String {
@@ -961,29 +874,6 @@ fn query_escape(value: String) -> String {
         .replace('=', "%3D")
         .replace('?', "%3F")
         .replace('#', "%23")
-}
-
-pub fn board_checkpoint(
-    url: &str,
-    context: &Context,
-    task: usize,
-    files: &crate::serve::board_wire::BoardFiles,
-    base: &str,
-    message: &str,
-) -> Result<crate::serve::board_wire::CheckpointReply, ClientFail> {
-    board_post_files(
-        url,
-        "/api/v1/boards/checkpoint",
-        &crate::serve::board_wire::CheckpointRequest {
-            context: wire_context(context),
-            task,
-            files: files.clone(),
-            base: base.to_string(),
-            message: message.to_string(),
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
-        files,
-    )
 }
 
 pub fn board_commit(
@@ -1004,22 +894,6 @@ pub fn board_commit(
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
         files,
-    )
-}
-
-pub fn board_discard(
-    url: &str,
-    context: &Context,
-    task: usize,
-) -> Result<crate::serve::board_wire::DiscardReply, ClientFail> {
-    board_post(
-        url,
-        "/api/v1/boards/discard",
-        &crate::serve::board_wire::DiscardRequest {
-            context: wire_context(context),
-            task,
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
     )
 }
 

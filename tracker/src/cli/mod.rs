@@ -5,11 +5,9 @@ pub mod completions;
 pub mod launch;
 pub mod message;
 pub mod name;
-pub mod root;
 pub mod serve;
 pub mod skill;
 pub mod task;
-pub mod wait;
 pub mod workspace;
 
 use std::io::IsTerminal;
@@ -26,19 +24,16 @@ use self::completions::{FISH, Kind, complete_candidates};
 use self::launch::{ask_door, harness_choice, launch_door, launch_here_door, launch_new_door};
 use self::message::{messages_door, send_door};
 use self::name::name_door;
-use self::root::{root_bind_door, root_clear_door, root_show_door};
 use self::serve::serve_door;
 use self::skill::skill_door;
 use self::task::{born_of, parse_task_id, read_only, render_records};
-use self::wait::wait_door;
 use self::workspace::workspace_door;
 
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::{
-    ActorName, Command, Context, IncarnationId, MessageId, Prose, RecordId, Reject, Scope, Target,
-    Tier, WorktreePath, wire,
+    ActorName, Command, Context, IncarnationId, Prose, RecordId, Reject, Scope, Tier, WorktreePath,
 };
 
 #[derive(Parser)]
@@ -65,7 +60,7 @@ struct Cli {
     #[arg(long, global = true)]
     at: Option<u64>,
 
-    /// Select this running server for reads, writes, and waits alike
+    /// Select this running server for reads and writes alike
     #[arg(long, global = true)]
     server: Option<String>,
 
@@ -237,7 +232,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "resume")]
         ask: Option<String>,
         /// Ask the host for one independent terminal running the
-        /// composed session, unplaced (no Herdr space), then attach
+        /// composed session, then attach
         /// this terminal as its viewer. Detaching (ctrl+\) ends the
         /// attach and leaves the session running at its recorded host
         /// address. Composes with --workspace and --resume
@@ -258,11 +253,8 @@ enum Cmd {
         #[arg(last = true)]
         prompt: Vec<String>,
     },
-    /// The task-free workspace controller: provision a new workspace,
-    /// or move a stopped native session's saved directory. Creation
-    /// births its own record - no task, claim, or incarnation; a
-    /// change refuses a live session and lands only after the saved
-    /// header actually moved
+    /// The task-free workspace controller: provision a new workspace.
+    /// Creation births its own record - no task, claim, or incarnation
     Workspace {
         #[command(subcommand)]
         verb: WorkspaceVerb,
@@ -286,18 +278,6 @@ enum Cmd {
         #[arg(value_enum)]
         kind: CompleteKind,
     },
-    /// The cutover import: carry workspaces, branches and the root
-    /// association from the pre-board log into a fresh tracker. No
-    /// tasks, comments, messages, incarnations or saved sessions. The
-    /// destination must be fresh
-    ImportWorkspaces {
-        /// The pre-board database to read
-        #[arg(long)]
-        from: PathBuf,
-        /// The fresh tracker to write; it must hold no records
-        #[arg(long)]
-        into: PathBuf,
-    },
     /// Clone the log's prefix through a storage seq into a fresh
     /// tracker: the reproduction recipe's cursor half
     Clone {
@@ -313,36 +293,12 @@ enum Cmd {
         #[command(subcommand)]
         verb: SkillVerb,
     },
-    /// The task board controller: author, checkpoint, commit, and
+    /// The task board controller: author, commit, and
     /// read board revisions. Working directories are local to this
     /// machine; the server does every Git effect
     Board {
         #[command(subcommand)]
         verb: BoardVerb,
-    },
-    /// Block until a match lands: a task (t-<n>) target matches
-    /// record activity, the cursor named by --after and the mode by
-    /// --until (activity or offer); an incarnation (i-<n>) target waits for messages
-    /// addressed to it - waking on arrivals at its host terminal,
-    /// reading its mailbox for truth, bounded overall by --timeout
-    /// seconds. Nothing is recorded
-    Wait {
-        /// The target: t-<n> for record activity, i-<n> for arrival
-        /// waiting
-        target: String,
-        /// The global record position matched strictly after - the
-        /// cursor a read disclosed, never defaulted; required for
-        /// t-<n>, refused for i-<n>
-        #[arg(long)]
-        after: Option<u64>,
-        /// What wakes a t-<n> wait - required there, refused for i-<n>
-        #[arg(long)]
-        until: Option<UntilMode>,
-        /// The overall bound in seconds for an i-<n> arrival wait;
-        /// without it the wait runs until a message lands or the call
-        /// is interrupted
-        #[arg(long)]
-        timeout: Option<u64>,
     },
 }
 
@@ -361,23 +317,6 @@ enum WorkspaceVerb {
         #[arg(long)]
         base: Option<String>,
     },
-    /// Change where a stopped native session lives: an explicit
-    /// existing directory; a live session refuses (exit it first), and
-    /// the record is the whole effect
-    Switch {
-        /// The incarnation (i-<n>)
-        incarnation: String,
-        /// The selected directory: it must already exist
-        #[arg(long)]
-        to: PathBuf,
-        /// Resume the session in the new directory after the change
-        #[arg(long)]
-        resume: bool,
-        /// The prompt for the resumed session; native human input when
-        /// omitted (with --resume)
-        #[arg(last = true)]
-        prompt: Vec<String>,
-    },
     /// Clean an exact recorded workspace: terminal close, terminal
     /// closure verified, git worktree removal with the branch
     /// retained, checkout and host visible absence verified, then the
@@ -388,47 +327,6 @@ enum WorkspaceVerb {
         /// The workspace's exact recorded path
         path: PathBuf,
     },
-    /// Restore an exact recorded cleaned workspace: establish or
-    /// validate the matching git checkout at the branch's current
-    /// local tip, then record Restored. No session is launched, no
-    /// terminal is created - execution stays an explicit launch.
-    Restore {
-        /// The workspace's exact recorded path
-        path: PathBuf,
-    },
-    /// The primary checkout's Herdr destination: bind the chosen
-    /// manual root space once, show the standing choice, or clear it.
-    /// Root launches declare the bound pair; an unbound root runs
-    /// unplaced.
-    Root {
-        #[command(subcommand)]
-        verb: RootVerb,
-    },
-    /// The one-time cutover verification over every recorded
-    /// workspace: absent resources verified against git and the host,
-    /// matching present ones preserved, conflicts surfaced. Dry run
-    /// unless --apply records the verified Cleaned facts.
-    Reconcile {
-        /// Record the verified Cleaned facts; without this the door
-        /// only verifies and reports
-        #[arg(long)]
-        apply: bool,
-    },
-}
-
-#[derive(Clone, Subcommand)]
-enum RootVerb {
-    /// Bind the chosen manual root space: run inside the terminal
-    /// standing in that space, in this repository's context. Records
-    /// the terminal's exact live space/tab pair; missing or unlabeled
-    /// terminal refuses. Human-only; a rebind replaces the latest
-    /// choice, the log keeps the history.
-    Bind,
-    /// Show the bound root destination, if any: a read, no host ask
-    Show,
-    /// Clear the bound root destination: root launches run unplaced
-    /// until a later bind. Human-only; the history stays in the log.
-    Clear,
 }
 
 #[derive(Clone, Copy, Subcommand)]
@@ -460,7 +358,6 @@ enum CompleteKind {
     Incarnations,
     Workspaces,
     WorkspacesClean,
-    WorkspacesRestore,
 }
 
 impl From<CompleteKind> for Kind {
@@ -470,22 +367,6 @@ impl From<CompleteKind> for Kind {
             CompleteKind::Incarnations => Kind::Incarnations,
             CompleteKind::Workspaces => Kind::Workspaces,
             CompleteKind::WorkspacesClean => Kind::WorkspacesClean,
-            CompleteKind::WorkspacesRestore => Kind::WorkspacesRestore,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum UntilMode {
-    Activity,
-    Offer,
-}
-
-impl UntilMode {
-    fn until(self) -> saccade::views::WaitUntil {
-        match self {
-            UntilMode::Activity => saccade::views::WaitUntil::Activity,
-            UntilMode::Offer => saccade::views::WaitUntil::Offer,
         }
     }
 }
@@ -603,10 +484,8 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Identity => "identity".into(),
         Cmd::Completions { .. } => "completions".into(),
         Cmd::Complete { .. } => "complete".into(),
-        Cmd::ImportWorkspaces { .. } => "import-workspaces".into(),
         Cmd::Clone { .. } => "clone".into(),
         Cmd::Skill { .. } => "skill".into(),
-        Cmd::Wait { .. } => "wait".into(),
         Cmd::Board { verb } => format!("board.{}", board_verb_name(verb)),
     }
 }
@@ -614,15 +493,7 @@ fn verb_path(command: &Cmd) -> String {
 fn verb_name(verb: &WorkspaceVerb) -> &'static str {
     match verb {
         WorkspaceVerb::New { .. } => "new",
-        WorkspaceVerb::Switch { .. } => "switch",
         WorkspaceVerb::Clean { .. } => "clean",
-        WorkspaceVerb::Restore { .. } => "restore",
-        WorkspaceVerb::Root { verb } => match verb {
-            RootVerb::Bind => "root-bind",
-            RootVerb::Show => "root-show",
-            RootVerb::Clear => "root-clear",
-        },
-        WorkspaceVerb::Reconcile { .. } => "reconcile",
     }
 }
 
@@ -630,10 +501,8 @@ fn board_verb_name(verb: &BoardVerb) -> &'static str {
     match verb {
         BoardVerb::Edit { .. } => "edit",
         BoardVerb::Check { .. } => "check",
-        BoardVerb::Checkpoint { .. } => "checkpoint",
         BoardVerb::Commit { .. } => "commit",
         BoardVerb::Update { .. } => "update",
-        BoardVerb::Discard { .. } => "discard",
         BoardVerb::Get { .. } => "get",
         BoardVerb::Diff { .. } => "diff",
         BoardVerb::Log { .. } => "log",
@@ -709,7 +578,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
         | Cmd::Messages { .. }
         | Cmd::Completions { .. }
         | Cmd::Clone { .. }
-        | Cmd::ImportWorkspaces { .. }
         | Cmd::Skill { .. }
         | Cmd::Complete { .. } => {}
         Cmd::Launch {
@@ -760,48 +628,10 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "--base");
                 }
             }
-            WorkspaceVerb::Switch {
-                to: _,
-                resume,
-                prompt,
-                ..
-            } => {
-                push(&mut flags, "--to");
-                if *resume {
-                    push(&mut flags, "--resume");
-                }
-                if !prompt.is_empty() {
-                    push(&mut flags, "prompt");
-                }
-            }
-            WorkspaceVerb::Clean { .. } | WorkspaceVerb::Restore { .. } => {}
-            WorkspaceVerb::Root { .. } => {}
-            WorkspaceVerb::Reconcile { apply } => {
-                if *apply {
-                    push(&mut flags, "--apply");
-                }
-            }
+            WorkspaceVerb::Clean { .. } => {}
         },
-        Cmd::Wait {
-            after,
-            until,
-            timeout,
-            ..
-        } => {
-            if after.is_some() {
-                push(&mut flags, "--after");
-            }
-            if until.is_some() {
-                push(&mut flags, "--until");
-            }
-            if timeout.is_some() {
-                push(&mut flags, "--timeout");
-            }
-        }
         Cmd::Board { verb } => match verb {
-            BoardVerb::Edit { dir, .. }
-            | BoardVerb::Checkpoint { dir, .. }
-            | BoardVerb::Update { dir, .. } => {
+            BoardVerb::Edit { dir, .. } | BoardVerb::Update { dir, .. } => {
                 if dir.is_some() {
                     push(&mut flags, "dir");
                 }
@@ -827,10 +657,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "--file");
                 }
             }
-            BoardVerb::Discard { .. }
-            | BoardVerb::Diff { .. }
-            | BoardVerb::Log { .. }
-            | BoardVerb::Path { .. } => {}
+            BoardVerb::Diff { .. } | BoardVerb::Log { .. } | BoardVerb::Path { .. } => {}
         },
     }
     flags
@@ -960,11 +787,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     {
         return serve_door(cli, bind, port, allow_origin, allow_host);
     }
-    // the cutover import names both databases itself; it lands no
-    // record through any server
-    if let Cmd::ImportWorkspaces { from, into } = &cli.command {
-        return task::import_door(cli, from, into);
-    }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {
         Cmd::Create {
@@ -1025,21 +847,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             within,
         } => {
             return task::search_door(cli, &destination, terms, *history, within);
-        }
-        Cmd::Wait {
-            target,
-            after,
-            until,
-            timeout,
-        } => {
-            return wait_door(
-                cli,
-                &destination,
-                target,
-                *after,
-                until.map(UntilMode::until),
-                *timeout,
-            );
         }
         Cmd::Send {
             to,
@@ -1150,9 +957,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
-        Cmd::ImportWorkspaces { .. } => {
-            unreachable!("the import door dispatches before the destination resolves")
-        }
     };
 
     // Identity is required only where it is recorded: mutating commands.
@@ -1612,7 +1416,7 @@ fn body_source(body: Option<String>, stdin: bool) -> Result<String, Fail> {
     body.ok_or_else(|| Fail::Usage("the body comes quoted or through --stdin".into()))
 }
 
-/// Every text read ends with this line, feedable to the next `wait --after`.
+/// Every text read ends with this line: the log position the read reached.
 fn cursor_line(cursor: Option<usize>) -> String {
     match cursor {
         Some(c) => format!("cursor {c}"),
@@ -1631,6 +1435,24 @@ fn dense_token(token: &str, prefix: &str) -> Result<usize, Fail> {
     })?;
     n.parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not an {prefix}<n> reference")))
+}
+
+/// The incarnation a public i-N names: dense birth order against the fold.
+fn resolve_incarnation(world: &World, token: &str) -> Result<IncarnationId, Fail> {
+    let n = token.strip_prefix("i-").ok_or_else(|| {
+        Fail::Usage(format!(
+            "'{token}' is not an incarnation reference (expected i-<n>)"
+        ))
+    })?;
+    let n: usize = n
+        .parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not an incarnation reference")))?;
+    world.incarnation_at_num(n).ok_or_else(|| {
+        Fail::Usage(format!(
+            "i-{n} names no incarnation; this fold holds {} incarnations",
+            world.incarnations.len()
+        ))
+    })
 }
 
 impl From<saccade::launch::LaunchFail> for Fail {
@@ -1681,7 +1503,6 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
 #[cfg(test)]
 mod test {
     use self::task::{ShowId, parse_show_id};
-    use self::wait::wait_target;
     use super::*;
 
     /// Possession, --actor, and the declared scope, one test owning every env mutation.
@@ -1833,17 +1654,6 @@ mod test {
              drop the '#': the task is addressed as t-3"
         );
 
-        let refused = wait_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
-        assert_eq!(
-            refused,
-            "'#t-3' is not a wait target; drop the '#': tasks are t-<n>"
-        );
-
-        assert!(matches!(
-            wait_target("t-3").unwrap_or_else(|f| panic!("{f}")),
-            TaskId(3)
-        ));
-
         assert!(matches!(
             parse_show_id("7").unwrap_or_else(|f| panic!("{f}")),
             ShowId::Position(RecordId(7))
@@ -1859,7 +1669,6 @@ mod test {
              drop the '#': the raw record at a position is the bare <seq>"
         );
         assert!(parse_show_id("184467440737095516160").is_err());
-        assert!(wait_target("#184467440737095516160").is_err());
         assert!(parse_show_id("#184467440737095516160").is_err());
     }
 }

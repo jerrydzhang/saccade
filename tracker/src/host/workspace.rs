@@ -301,7 +301,7 @@ pub enum LifecycleAddress {
 use crate::store::{RecordId, World};
 
 /// Resolve one caller path to its recorded workspace birth, for every
-/// door that names one - clean, restore, reconcile, and the
+/// door that names one - clean and the
 /// ordinary-use guards alike, so no door can drift apart again.
 pub fn resolve_workspace_address(
     world: &World,

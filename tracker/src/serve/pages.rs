@@ -18,10 +18,9 @@ use serde::Serialize;
 use crate::api::{AppState, ReadFail, Snapshot};
 use crate::boards::BoardsFail;
 use crate::db::StoredRecord;
-use crate::objects::incarnation::Incarnation;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{Owner, TaskId, TaskState};
-use crate::record::views::{self, Target, WaitUntil};
+use crate::record::views::{self, Target};
 use crate::serve::board_wire::{HistoryEntry, board_history};
 use crate::store::{RecordId, World};
 use crate::wire;
@@ -497,7 +496,6 @@ fn relevant(world: &World, watch: &Watch, row: &StoredRecord) -> bool {
                 RecordId(row.seq),
                 &event,
                 &Target::Task(TaskId(*task)),
-                WaitUntil::Activity,
             )
         }
     }
@@ -695,8 +693,8 @@ const AGENTS_WATCH: &[&str] = &[
 
 /// The tasks the incarnation currently owns, latest claim first: the
 /// record's claims are whole-task responsibility, so the latest claim
-/// names the task and the count of the rest rides the companion's
-/// title, not the page's facts.
+/// names the task and the count of the rest is not among the page's
+/// facts.
 fn owned_tasks(world: &World, id: IncarnationId) -> Vec<usize> {
     let mut owned: Vec<(RecordId, usize)> = world
         .tasks
@@ -727,9 +725,6 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
     let last_commits = last_commit_per_session(snapshot);
     let mut content: Vec<Part> = Vec::new();
     for (id, ctx) in &world.incarnations {
-        let Incarnation::Native { .. } = &ctx.incarnation else {
-            continue;
-        };
         // a superseded holder no longer carries the address; the
         // holder the fold names now is the one the page lists
         if world.superseded.contains_key(id) {
@@ -1821,7 +1816,6 @@ mod test {
                 at: last_at,
             }],
             birth_actor: actor.clone(),
-            workspace: None,
         };
         let now: u64 = 1_800_000_000;
         let day = 24 * 60 * 60;

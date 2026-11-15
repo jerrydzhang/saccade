@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.20.8"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.21.0"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -110,11 +110,9 @@ them.
   whole-task ownership. New versus existing workspace choice is
   explicit; established branch/path names never derive from task or
   incarnation numbering.
-- Workspace cleanup is reversible eviction: preserve identity, branch,
-  saved sessions, and recorded work; restoration uses the retained
-  branch's current local tip, never an implicit reset or pull.
-  Available and Cleaned change only through verified completed
-  effects; finding a directory does not silently restore.
+- Workspace cleanup is eviction: preserve identity, branch, saved
+  sessions, and recorded work. Available becomes Cleaned only through
+  verified completed effects; a path recorded Cleaned is not reused.
 - Messages are durable communication, never board content. Agent
   messages carry machine-supplied sender, message, and reply
   references; known contacts come from creation, contact, or explicit
@@ -159,10 +157,10 @@ them.
   offered revision cannot move.
 - A commit whose board matches its parent refuses, naming the parent
   revision: a published revision is a change (t-26). Revisions already
-  published empty stay; checkpoints are unaffected.
+  published empty stay.
 - A board crosses the wire whole, in one request, its files base64
   (8 MiB each, no total bound in the grammar). The board doors that
-  carry it (commit, checkpoint, update) take a deliberate 32 MiB body
+  carry it (commit, update) take a deliberate 32 MiB body
   limit (`DefaultBodyLimit`), about 24 MiB of files; past it the
   refusal is `request_too_large` in the error envelope. Servers through
   sac 0.20.2 apply axum's 2 MB default. `sac` names the board's total
@@ -171,9 +169,6 @@ them.
 - Acceptance requires every incorporation to cite exactly its source's
   accepted revision; reconciliation onto an accepted revision is an
   ordinary commit.
-- Checkpoints are snapshots mid-edit: they validate nothing, carry no
-  event, chain onto the actor's own ref, and must be discarded before
-  anything accepts the task.
 
 ## The pages (/view/v1)
 
@@ -280,7 +275,7 @@ record authority.
   file gains the width column and its version stamp in one
   transaction (its rows read width as absent), a newer version
   refuses to serve rather than guessing. Whatever reproduces
-  the log (clone, import, a fresh db) carries no window store, which is
+  the log (clone, a fresh db) carries no window store, which is
   correct: losing the window store loses window arrangements, never the
   record.
 - **Sync is the pages' hold contract on the window store's own sequence**:
