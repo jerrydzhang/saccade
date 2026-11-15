@@ -31,18 +31,6 @@
       url = "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz";
       flake = false;
     };
-    # the desktop app, the second side of the pairing: the 0.1.11
-    # line the laptop acceptance client runs, pinned the same way the
-    # core is (app 0.1.11 + core 0.1.17 - placement belongs to the
-    # door, no mod between them)
-    herdr-app-x86_64-linux = {
-      url = "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz";
-      flake = false;
-    };
-    herdr-app-aarch64-linux = {
-      url = "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz";
-      flake = false;
-    };
     # the pinned Claude Code, one official npm platform package per
     # target; see claudeCodePin beside the derivations
     claude-code-x86_64-linux = {
@@ -56,10 +44,9 @@
   };
 
   nixConfig = {
-    extra-substituters = ["https://devenv.cachix.org"];
-    extra-trusted-public-keys = ["devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw="];
+    extra-substituters = [ "https://devenv.cachix.org" ];
+    extra-trusted-public-keys = [ "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=" ];
   };
 
   outputs = inputs: import ./nix/outputs.nix inputs;
-
 }

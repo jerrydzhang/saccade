@@ -101,6 +101,6 @@ and fake hc: enrollment, rename on the word, end marking, the focus
 re-assert vocabulary, restart re-attach, human-closed suppression, and
 an inventory pinning that no command the companion composes can send
 keys, kill, or remove anything. The end-to-end loop (real tmux server
-on a private socket, the pinned core in the herdr-ui sandbox, typed
+on a private socket, the pinned core in its dev sandbox, typed
 interaction, sizing, focus re-assert, reconnect, retained ends) is a
 phase-gate activity, exercised per `AGENTS.md` with retained logs.

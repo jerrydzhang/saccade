@@ -38,9 +38,7 @@ pub(super) fn placement_lines(
         (Some(_), Some(evidence)) => {
             format!("  placement was refused: {evidence} - the session runs unlabeled")
         }
-        (Some(_), None) => format!(
-            "  look for it in the herdr app's sidebar, or attach from a terminal: hc attach {terminal}"
-        ),
+        (Some(_), None) => format!("  attach from a terminal: hc attach {terminal}"),
         (None, _) => format!(
             "  unplaced: no Herdr space was declared, attach from a terminal: hc attach {terminal}"
         ),

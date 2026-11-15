@@ -2,8 +2,8 @@
 
 Saccade is a tracker for agent work. The packages: `tracker` (the `sac`
 binary: event log, server, CLI, boards), `grammar` (the board format),
-`client` (the Saccade app), `tools/herdr-ui` (the desktop-app
-sandbox). Each package owns its version and its docs. `AXIOMS.md`
+`client` (the Saccade app), `companion` (the tmux companion). Each
+package owns its version and its docs. `AXIOMS.md`
 carries world belief - read it before proposing anything
 architectural. Using the tracker is not required to develop this
 project; `tracker/skill/SKILL.md` teaches the `sac` CLI for when you
@@ -94,9 +94,9 @@ do, and `tracker/README.md` carries the tracker's law.
 
 ## Sandboxes and safety
 
-- Drive the desktop app headless only through `just herdr-ui up`;
-  never reconstruct its runtime environment. The mechanical loop is
-  `tools/herdr-ui/README.md`.
+- Drive the Saccade app headless only through the session lane
+  (`just app-test-native`, `client/harness/entry.py`); never
+  reconstruct its runtime environment.
 - Never add production machines to a sandbox, never automate the
   person's real display, never stop another session's core or
   compositor.
