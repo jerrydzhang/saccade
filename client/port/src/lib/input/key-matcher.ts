@@ -168,10 +168,9 @@ export function createMatcher(context: InputContext, options: MatcherOptions = {
   let pending: KeyInput[] = [];
   let pendingAt: number | null = null;
 
-  // A stroke that matches no pending continuation resolves fresh, as
-  // if no sequence were pending (the executed prototype behavior: an
-  // unrelated key resolves on its own and the pending buffer
-  // survives, inst16.html:499).
+  // A stroke that matches no pending continuation ends the pending
+  // sequence (its which-key popup closes with it) and then resolves
+  // fresh, as if nothing were pending: the stray key runs on its own.
   function resolveFresh(stroke: KeyInput): KeyResolution {
     const declared = declaredOf(context);
     const lone = [stroke];
@@ -208,7 +207,10 @@ export function createMatcher(context: InputContext, options: MatcherOptions = {
         pendingAt = null;
         return { kind: "invoke", action: exact.action };
       }
-      // Unrelated to the pending sequence: resolved on its own.
+      // Unrelated to the pending sequence: the sequence ends, and the
+      // stroke resolves on its own.
+      pending = [];
+      pendingAt = null;
       return resolveFresh(stroke);
     },
 

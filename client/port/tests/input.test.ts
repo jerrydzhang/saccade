@@ -178,6 +178,45 @@ test("the matcher's expiry fires the completed spelling when it is its own bindi
   assert.deepEqual(ran, []);
 });
 
+test("a stray key ends the pending sequence, closing its which-key, and still runs on its own", () => {
+  const windowEvents: string[] = [];
+  const bufferEvents: KeyInput[] = [];
+  const scheduler = manualScheduler();
+  const windowHost = createHostMatcher(
+    windowContext({
+      openPicker: () => windowEvents.push("picker"),
+      closeOverlays: () => windowEvents.push("close"),
+      pickerIsOpen: () => false,
+      trailBack: (): boolean => true,
+      trailForward: (): boolean => true,
+      linkByLabels: () => {},
+      enterFind: () => {}, unlink: () => {}, showHelp: () => {},
+    }),
+    { scheduler, expirySuspended: () => true },
+  );
+  const buffer = {
+    handleKey(input: KeyInput): KeyDisposition {
+      bufferEvents.push(input);
+      return "consume";
+    },
+  };
+  let notified = 0;
+  windowHost.subscribePending(() => { notified += 1; });
+  // space opens a pending sequence (the which-key popup's source)
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  assert.notEqual(windowHost.pendingView(), null);
+  // j continues nothing under space: the sequence ends and j runs
+  const before = notified;
+  dispatchStroke(windowHost, buffer, stroke("j"));
+  assert.equal(windowHost.pendingView(), null, "the popup's pending is gone");
+  assert.ok(notified > before, "the popup is told");
+  assert.equal(bufferEvents.at(-1)?.key, "j", "the stray key runs");
+  // a later space starts fresh: space space still opens the picker
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  dispatchStroke(windowHost, buffer, stroke(" "));
+  assert.deepEqual(windowEvents, ["picker"]);
+});
+
 test("the window chain: space-space opens the picker at the window level; other keys reach the buffer", () => {
   const windowEvents: string[] = [];
   const bufferEvents: KeyInput[] = [];
