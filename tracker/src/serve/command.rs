@@ -12,8 +12,7 @@ use crate::attempts::{AsReceived, Outcome};
 use crate::db::{self, StoredRecord};
 use crate::store::{Context, RecordId, Tier};
 
-use super::board::board_ready;
-use super::door::integration_outcome;
+use super::door::{integration_outcome, ready};
 use super::fail::{ApiFail, api_failure, execute_failure_response};
 use super::message::{message_facts, send_operation};
 use super::state::AppState;
@@ -68,7 +67,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         let started = Instant::now();
         let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
         let outcome: Result<Vec<StoredRecord>, ApiFail> = (|| {
-            let inner = board_ready(&mut guard)?;
+            let inner = ready(&mut guard)?;
             db::record(
                 &mut inner.conn,
                 &accept_context,

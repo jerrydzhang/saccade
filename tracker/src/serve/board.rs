@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -7,11 +5,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::Reject;
-use crate::attempts::AsReceived;
 use crate::db::{self, ExecuteFail, StoredRecord};
 use serde_json::json;
 
-use super::door::integration_outcome;
+use super::door::{door_limited, ready};
 use super::fail::{ApiFail, api_failure, boards_status};
 use super::state::{AppState, ReadFail, ServerState, boards_of, snapshot_of};
 use super::wire::wire_context_of;
@@ -83,7 +80,7 @@ pub(super) fn board_body_limit() -> axum::extract::DefaultBodyLimit {
 
 /// A board door's body, or the refusal its rejection earns: past the
 /// limit is the error envelope naming it, never the extractor's text.
-fn board_body(body: Result<Bytes, BytesRejection>) -> Result<Bytes, ApiFail> {
+pub(super) fn board_body(body: Result<Bytes, BytesRejection>) -> Result<Bytes, ApiFail> {
     use crate::serve::board_wire::BOARD_REQUEST_LIMIT;
     body.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
@@ -107,47 +104,17 @@ fn board_tempdir(label: &str) -> std::path::PathBuf {
     let n = BOARD_TEMP.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("saccade-board-{label}-{}-{n}", std::process::id()))
 }
-pub(super) fn board_ready(
-    guard: &mut ServerState,
-) -> Result<&mut crate::serve::api::Inner, ApiFail> {
-    match guard {
-        ServerState::Ready(inner) => Ok(inner),
-        ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
-    }
-}
 pub(super) async fn board_commit(
     State(app): State<AppState>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    let body = match board_body(body) {
-        Ok(body) => body,
-        Err(fail) => return api_failure(fail),
-    };
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: CommitRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.context_client(),
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = board_commit_operation(&app, &mut guard, &request);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+    door_limited(
+        &app,
+        body,
+        "boards/commit",
+        |r: &CommitRequest| r.context_client(),
+        |app, guard, request| board_commit_operation(app, guard, &request),
+    )
 }
 
 /// The publish sequence (D7): the objects land first, every selector
@@ -160,7 +127,7 @@ fn board_commit_operation(
     guard: &mut ServerState,
     request: &CommitRequest,
 ) -> Result<CommitReply, ApiFail> {
-    let inner = board_ready(guard)?;
+    let inner = ready(guard)?;
     let world = match db::load(&inner.conn)
         .map_err(|e| ApiFail::Db(e.to_string()))?
         .state

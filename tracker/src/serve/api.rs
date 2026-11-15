@@ -19,7 +19,6 @@ use super::message::{message_send, messages_history};
 use super::workspace::{workspace_clean, workspace_create};
 pub use crate::serve::hosts::Hosts;
 pub(crate) use crate::serve::hosts::origin_policy;
-pub(super) use crate::serve::state::Inner;
 pub use crate::serve::state::{AppState, LandingWake, ReadFail, Snapshot};
 pub use crate::serve::wire::{Envelope, WireContext, WireTier};
 

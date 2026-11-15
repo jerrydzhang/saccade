@@ -1,19 +1,14 @@
-use std::time::Instant;
-
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Command;
-use crate::attempts::AsReceived;
 use crate::db::{self, StoredRecord};
 use crate::store::{Context, RecordId, World};
 
-use super::door::integration_outcome;
+use super::door::{door, ready};
 use super::fail::{ApiFail, api_failure};
 use super::state::{AppState, Inner, ServerState};
 
@@ -98,12 +93,7 @@ fn attach_operation(
     harness: crate::Harness,
     terminal: Option<&PresentedTerminal>,
 ) -> Result<AttachReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
+    let inner = ready(guard)?;
     let loadout = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
     let world = match loadout.state {
         db::LoadState::Full(world) => world,
@@ -239,44 +229,28 @@ struct IncarnationRegisterRequest {
 }
 
 pub(super) async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: IncarnationRegisterRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = match &mut *guard {
-        ServerState::Ready(inner) => incarnation_register_operation(
-            inner,
-            request.native_id,
-            request.address,
-            request.adopted,
-            request.harness,
-            request.name,
-        ),
-        ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
-    };
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    match outcome {
-        Ok((records, incarnation, registered)) => (
-            StatusCode::OK,
-            Json(json!({
+    door(
+        &app,
+        body,
+        "incarnations/register",
+        |r: &IncarnationRegisterRequest| r.client.clone(),
+        |_app, guard, request| {
+            let inner = ready(guard)?;
+            let (records, incarnation, registered) = incarnation_register_operation(
+                inner,
+                request.native_id,
+                request.address,
+                request.adopted,
+                request.harness,
+                request.name,
+            )?;
+            Ok(json!({
                 "registered": registered,
                 "incarnation": incarnation,
                 "records": records,
-            })),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+            }))
+        },
+    )
 }
 
 /// Recovery is the attach-born unaddressed case only: an addressed
@@ -373,85 +347,55 @@ struct IncarnationAddressRequest {
 }
 
 pub(super) async fn incarnation_address(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: IncarnationAddressRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = match &mut *guard {
-        ServerState::Ready(inner) => {
+    door(
+        &app,
+        body,
+        "incarnations/address",
+        |r: &IncarnationAddressRequest| r.client.clone(),
+        |_app, guard, request| {
+            let inner = ready(guard)?;
             let command = Command::AssignHostAddress {
                 incarnation: crate::IncarnationId(RecordId(request.incarnation)),
                 address: Some(request.address),
                 adopted: request.adopted,
             };
-            db::record(
+            let (records, _) = db::record(
                 &mut inner.conn,
                 &Context::system(),
                 command,
                 db::now_epoch(),
             )
-            .map(|(stored, _)| stored)
-            .map_err(ApiFail::from)
-        }
-        ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
-    };
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    match outcome {
-        Ok(records) => (
-            StatusCode::OK,
-            Json(json!({"assigned": true, "records": records})),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+            .map_err(ApiFail::from)?;
+            Ok(json!({"assigned": true, "records": records}))
+        },
+    )
 }
 
 pub(super) async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: AttachRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    if let Some(presented) = &request.terminal
+    // the presented terminal is the request's shape, not a judged
+    // write: an empty address refuses before the attempt, unlogged
+    // like the parse refusal, so the check rides ahead of the door
+    if let Ok(request) = serde_json::from_slice::<AttachRequest>(&body)
+        && let Some(presented) = &request.terminal
         && presented.address.is_empty()
     {
         return api_failure(ApiFail::Malformed(
             "the presented terminal address is empty".into(),
         ));
     }
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = attach_operation(
-        &mut guard,
-        &request.native_id,
-        &request.session_file,
-        request.harness,
-        request.terminal.as_ref(),
-    );
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+    door(
+        &app,
+        body,
+        "native/attach",
+        |r: &AttachRequest| r.client.clone(),
+        |_app, guard, request| {
+            attach_operation(
+                guard,
+                &request.native_id,
+                &request.session_file,
+                request.harness,
+                request.terminal.as_ref(),
+            )
+        },
+    )
 }

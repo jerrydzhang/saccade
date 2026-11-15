@@ -1,21 +1,18 @@
 use std::path::Path;
-use std::time::Instant;
 
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 
-use crate::attempts::AsReceived;
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
 use crate::store::Context;
 use crate::workspace;
 
-use super::door::integration_outcome;
-use super::fail::{ApiFail, api_failure};
+use super::door::{door, ready};
+use super::fail::ApiFail;
 use super::state::{AppState, Inner, ServerState};
 
 // -- the task-free workspace controller ----------------------------------
@@ -59,12 +56,7 @@ fn create_operation(
     label: Option<&str>,
     base: Option<&str>,
 ) -> Result<CreateReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
+    let inner = ready(guard)?;
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return Err(ApiFail::NoRepo);
     };
@@ -108,36 +100,20 @@ fn create_operation(
 }
 
 pub(super) async fn workspace_create(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: CreateRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = create_operation(
+    door(
         &app,
-        &mut guard,
-        request.label.as_deref(),
-        request.base.as_deref(),
-    );
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+        body,
+        "workspace/create",
+        |r: &CreateRequest| r.client.clone(),
+        |app, guard, request| {
+            create_operation(
+                app,
+                guard,
+                request.label.as_deref(),
+                request.base.as_deref(),
+            )
+        },
+    )
 }
 
 // -- the workspace lifecycle controller ---------------------------------
@@ -249,12 +225,7 @@ fn clean_operation(
     guard: &mut ServerState,
     path_str: &str,
 ) -> Result<CleanReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
+    let inner = ready(guard)?;
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return Err(ApiFail::NoRepo);
     };
@@ -539,29 +510,11 @@ fn clean_operation(
 }
 
 pub(super) async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: CleanRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = clean_operation(&app, &mut guard, &request.path);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
+    door(
+        &app,
+        body,
+        "workspace/clean",
+        |r: &CleanRequest| r.client.clone(),
+        |app, guard, request| clean_operation(app, guard, &request.path),
+    )
 }
