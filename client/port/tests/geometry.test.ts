@@ -67,3 +67,34 @@ test("part bounds and viewport reveal share content coordinates after scrolling"
   viewport.moveTo({ left: 60, top: 35 });
   assert.deepEqual(viewport.metrics().position, { left: 60, top: 35 }, "exact restoration moves both axes");
 });
+
+// t-52: every scroll the viewport makes itself is heard at once. The
+// window's place listened only for the scroller's scroll events, which
+// WebKitGTK dispatches on a rendering update - a window that is not
+// active may render none, and a keyboard page went unheard (its stored
+// place stayed one page back).
+test("the viewport reports each of its own moves, with no scroll event", () => {
+  const scroller = { scrollTop: 0, scrollLeft: 0, clientWidth: 300, clientHeight: 200, scrollHeight: 2000 };
+  let moves = 0;
+  const viewport = createViewport(() => {
+    moves += 1;
+  });
+  viewport.scrollFraction(1, 0.5);
+  assert.equal(moves, 0, "no scroller: nothing moved, nothing reported");
+  viewport.attachElement(scroller as unknown as HTMLElement);
+  const steps: [string, () => void][] = [
+    ["scrollFraction", () => viewport.scrollFraction(1, 0.5)],
+    ["scrollPage", () => viewport.scrollPage(1, "half")],
+    ["scrollLines", () => viewport.scrollLines(2)],
+    ["end", () => viewport.end()],
+    ["start", () => viewport.start()],
+    ["moveTo", () => viewport.moveTo({ left: 0, top: 300 })],
+    ["reveal", () => viewport.reveal({ left: 0, top: 900, right: 10, bottom: 950 })],
+  ];
+  for (const [name, step] of steps) {
+    const before: number = moves;
+    step();
+    assert.equal(moves, before + 1, `${name} reports its move`);
+  }
+  assert.equal(scroller.scrollTop, 950 - 200, "the moves themselves still land");
+});

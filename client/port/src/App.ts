@@ -135,7 +135,9 @@ export interface PortWindow {
 export function createPortWindow(windowId = "main"): PortWindow {
   const diagnostics: SliceDiagnostics = createDiagnostics();
   const buffers = createBufferFactory(windowId);
-  const viewport: SliceBufferViewport = createViewport();
+  // the viewport's own moves reach the window's place at once, not
+  // only through the scroller's scroll events (createViewport)
+  const viewport: SliceBufferViewport = createViewport(() => windowPlace.changed());
 
   // The window's buffers, one per surface kind, retained: the board
   // constructs at assembly, the tasks buffer constructs at its first
