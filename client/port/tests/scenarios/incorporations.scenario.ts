@@ -27,6 +27,9 @@ test("an incorporation is collapsed; z expands it to the cited component alone; 
   expect(await app.shows("cited")).toBe(false);
   const collapsed = (await app.partText(part)) ?? "";
   expect(collapsed).toContain(`incorporates ${tracker.tasks.cited}`);
+  // the source line names the citation once, and no select path
+  expect(collapsed.match(/@r\d+/g), "the revision shows once").toHaveLength(1);
+  expect(collapsed).not.toContain(SELECT);
   expect(collapsed).toContain("the receiving text for the first group child");
 
   await app.clickPart(part, { button: "right", at: "header" });

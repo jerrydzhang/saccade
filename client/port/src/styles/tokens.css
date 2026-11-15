@@ -89,4 +89,12 @@
   --port-reading-width: 1;
   --port-world-leading: 1.5;
   --port-radius: 0;
+
+  /* the board */
+  /* the document's base text size, before the reading zoom */
+  --port-text-size: 1rem;
+  /* the sheet's corners, and the margin beside it where history's
+   * commit card reads */
+  --port-sheet-radius: 0;
+  --port-margin-width: 18rem;
 }

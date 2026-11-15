@@ -261,11 +261,12 @@ import { partMeasureIn } from "../lib/select/measure.ts";
       bind:value={findValue}
       data-port-control="find-input"
       data-port-captured-input=""
-      placeholder="find in this revision"
+      aria-label="find"
+      spellcheck="false"
       oninput={(event) => controller.typeFind(event.currentTarget.value)}
     />
     <span class="port-find-status" data-port-find-status="">
-      {find.count > 0 ? `${find.active + 1} / ${find.count}` : "type to search"}
+      {find.count > 0 ? `${find.active + 1} / ${find.count}` : find.query.trim().length > 0 ? "no match" : ""}
     </span>
   </div>
 {:else if find.count > 0}
@@ -273,7 +274,21 @@ import { partMeasureIn } from "../lib/select/measure.ts";
     {find.active + 1} / {find.count}
   </div>
 {/if}
-<div class="port-board-stage">
+<!-- the board: its sheet, and the margin the commit card reads in (a
+footer under the sheet when the window is too narrow for a margin) -->
+<div class="port-board" data-port-history={content.history ? "" : undefined}>
+  <div class="port-board-sheet">
+    <div class="port-board-stage">
+      <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
+      </div>
+      {#if select !== null}
+        <LabelOverlay chips={select.labels} measure={partMeasureIn(host)} typed={select.pendingLabel} />
+      {/if}
+      {#if menu !== null}
+        <ActMenu {menu} {host} session={controller.menuSession()} />
+      {/if}
+    </div>
+  </div>
   {#if historyRefusal !== null && !content.history}
     <aside class="port-history" data-port-control="history-refusal" aria-label="history">
       <div class="port-history-card">
@@ -282,13 +297,13 @@ import { partMeasureIn } from "../lib/select/measure.ts";
     </aside>
   {/if}
   {#if content.history}
-    <!-- the aside spans the board's height; its card sticks to the
-    top of the view, so the commit message reads beside the change
-    wherever it sits -->
+    <!-- the aside spans the board's height; its card sticks to the top
+    of the view, so the commit message reads beside the change wherever
+    it sits; narrow, it is the footer, stuck to the view's bottom -->
     <aside class="port-history" data-port-control="history" aria-label="history">
       <div class="port-history-card">
         <div class="port-history-head" data-port-control="history-revision">
-          {content.history.task}@r{content.history.revision} of r{content.history.latest} - {content.history.changed.length} changed
+          {`r${content.history.revision} of ${content.history.latest} \u00b7 ${content.history.changed.length} changed`}
         </div>
         {#if content.history.tracked !== null}
           <div class="port-history-head" data-port-control="history-tracked">tracking {content.history.trackedLabel}</div>
@@ -296,13 +311,5 @@ import { partMeasureIn } from "../lib/select/measure.ts";
         <div class="port-history-message" data-port-control="history-message">{content.history.message}</div>
       </div>
     </aside>
-  {/if}
-  <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
-  </div>
-  {#if select !== null}
-    <LabelOverlay chips={select.labels} measure={partMeasureIn(host)} typed={select.pendingLabel} />
-  {/if}
-  {#if menu !== null}
-    <ActMenu {menu} {host} session={controller.menuSession()} />
   {/if}
 </div>

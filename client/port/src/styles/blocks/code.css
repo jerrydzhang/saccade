@@ -2,15 +2,28 @@
  * A block's stylesheet reads tokens only (tests/theme.test.ts). */
 
 /* a fenced code block (t-40): its own surface, set apart from the
- * prose around it; the spans are lib/highlight.ts's kinds */
+ * prose around it by its ground alone, no rule; the spans are
+ * lib/highlight.ts's kinds */
 .md-fence {
-  margin: 0.75em 0;
-  padding: 0.6em 0.85em;
-  line-height: 1.45;
+  margin: 0;
+  padding: 0.75em 1em;
+  font-size: 0.82em;
+  line-height: 1.6;
   background: var(--port-code-background);
   color: var(--port-code-foreground);
-  border: 1px solid var(--port-code-line);
   border-radius: var(--port-radius);
+  tab-size: 4;
+}
+.md-fence code {
+  font: inherit;
+}
+/* code in a line of prose: the mono face, a breath of the code ground */
+.md-inline-code {
+  font-family: var(--port-font-mono);
+  font-size: 0.86em;
+  padding: 0.05em 0.3em;
+  background: var(--port-code-background);
+  border-radius: 3px;
 }
 .md-fence .code-keyword,
 .md-fence .code-selector-tag,

@@ -1,40 +1,67 @@
 /* Find in a board: the field, the matches.
  * A block's stylesheet reads tokens only (tests/theme.test.ts). */
 
-/* Placement only: the find bar. */
+/* the find bar: a float, at the foot of the window over the reading
+ * column; the query in the text face, the count faint beside it */
 .port-find {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 50%;
+  bottom: 1.25rem;
   z-index: 20;
-  background: var(--port-color-background);
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: min(34rem, calc(100% - 2.5rem));
   display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  padding: var(--port-space-block);
-  border-top: 1px solid var(--port-color-muted);
-}
-/* D2's marks and indicator: behaviour-level feedback, form open.
- * The match tint and the active tint ride the tokens. */
-[data-port-find-match] {
-  background: var(--port-color-hover);
-}
-[data-port-find-active] {
-  background: var(--port-color-selection);
-}
-.port-find-indicator {
-  padding: 0.125rem 0.5rem;
-  font-family: var(--port-font-mono);
-  font-size: 0.75rem;
-  color: var(--port-color-muted);
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.55rem 1rem;
+  background: var(--port-float-background);
+  color: var(--port-float-ink);
+  box-shadow: var(--port-float-shadow);
+  border-radius: var(--port-radius);
+  font-family: var(--port-font-text);
 }
 .port-find input {
   flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0.15rem 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
   font: inherit;
-  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  caret-color: var(--port-color-accent);
 }
-.port-find-status {
-  color: var(--port-color-muted);
-  font-size: 0.875rem;
+.port-find-status,
+.port-find-indicator {
+  font-family: var(--port-font-mono);
+  font-size: var(--port-size-small);
+  color: var(--port-color-faint);
+  white-space: nowrap;
+}
+/* the count once find is closed and its matches stay marked */
+.port-find-indicator {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 20;
+  padding: 0.3rem 0.65rem;
+  background: var(--port-float-background);
+  box-shadow: var(--port-float-shadow);
+  border-radius: var(--port-radius);
+}
+
+/* the matches: every one tinted as the pointer's row, the active one
+ * as the selection */
+[data-port-find-match] {
+  background: var(--port-color-hover);
+  color: inherit;
+  border-radius: 2px;
+}
+[data-port-find-active] {
+  background: var(--port-color-selection);
+  outline: 1px solid var(--port-color-muted);
+  outline-offset: 0;
 }

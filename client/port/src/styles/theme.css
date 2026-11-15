@@ -66,6 +66,11 @@
   --port-measure: 36em;
   --port-world-leading: 1.62;
   --port-radius: 6px;
+
+  /* the board */
+  --port-text-size: 16.5px;
+  --port-sheet-radius: 10px;
+  --port-margin-width: 20rem;
 }
 
 :root[data-theme="dark"] {
