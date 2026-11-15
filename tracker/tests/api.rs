@@ -6828,7 +6828,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
-// ---- the workspace lifecycle: ordered cleanup, restoration, guards ----
+// ---- the workspace lifecycle: ordered cleanup, guards ----
 
 /// A lifecycle rig: a scratch repo, a REAL `sac serve` subprocess with
 /// the fake host on its PATH - the lifecycle effects run exactly where
@@ -7027,41 +7027,6 @@ async fn clean_runs_the_ordered_contract_and_the_branch_stands() {
         "the idempotent re-run landed no record"
     );
 
-    // restore brings the checkout back at the branch's current tip
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
-    assert!(ok, "restore refuses: {out}{err}");
-    assert!(out.contains("restored"), "{out}");
-    assert!(std::path::Path::new(&ws).join("readme").is_file());
-    assert_eq!(
-        sh(&std::path::PathBuf::from(&ws), &["rev-parse", "HEAD"]).trim(),
-        tip,
-        "the checkout stands at the branch's current local tip"
-    );
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let kinds: Vec<String> = json_of(&body)["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["kind"].as_str().unwrap().to_string())
-        .collect();
-    assert!(
-        kinds.contains(&"workspace_restored".to_string()),
-        "{kinds:?}"
-    );
-    let records_at_restored = body.clone();
-
-    // the matching checkout standing on an Available workspace is
-    // no-op success: no duplicate restoration fact
-    let (ok, out, _err) = rig_sac(&rig, &["workspace", "restore", &ws]);
-    assert!(ok, "the no-op restore refuses: {out}");
-    assert!(out.contains("already restored"), "{out}");
-    let (_, body_after) = get_json(&rig.url, "/api/v1/records");
-    assert_eq!(
-        json_of(&records_at_restored)["records"],
-        json_of(&body_after)["records"],
-        "the no-op restore landed no record"
-    );
-
     // an empty tail: nothing was left behind
     let _ = worktree_rows(&rig);
 }
@@ -7209,205 +7174,6 @@ async fn clean_refuses_an_unreadable_terminal_table() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn restore_reuses_recreates_and_refuses_its_mismatches() {
-    let rig = lifecycle_rig("restore");
-    let (_, branch, ws) = rig_provision(&rig, "reborn");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
-    assert!(ok, "the setup clean refuses: {err}");
-    assert!(!std::path::Path::new(&ws).exists());
-
-    // a matching worktree that stands again is reused as-is: a local
-    // change made out-of-band survives the restoration untouched
-    sh(&rig.root, &["worktree", "add", &ws, &branch]);
-    std::fs::write(std::path::Path::new(&ws).join("local.txt"), "mine\n").unwrap();
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
-    assert!(ok, "the reuse restore refuses: {out}{err}");
-    assert!(out.contains("reused as-is"), "{out}");
-    assert_eq!(
-        std::fs::read_to_string(std::path::Path::new(&ws).join("local.txt")).unwrap(),
-        "mine\n",
-        "the local change did not survive the restoration"
-    );
-    // reuse carries no duplicate checkout act: the worktree stands once
-    let rows = sh(&rig.root, &["worktree", "list", "--porcelain"]);
-    assert_eq!(
-        rows.lines()
-            .filter(|line| line == &format!("worktree {ws}"))
-            .count(),
-        1
-    );
-
-    // a stale git registration whose directory is gone restores
-    // nothing: the mismatch refuses, no fact lands, the stage stays
-    let (_, _, ws_stale) = rig_provision(&rig, "stale-entry");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_stale]);
-    assert!(ok, "the stale setup clean refuses: {err}");
-    let stale_branch = {
-        let (_, body) = get_json(&rig.url, "/api/v1/records");
-        json_of(&body)["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| {
-                r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws_stale)
-            })
-            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
-            .expect("the stale birth names its branch")
-    };
-    sh(&rig.root, &["worktree", "add", &ws_stale, &stale_branch]);
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let records_before_stale = body.clone();
-    std::fs::remove_dir_all(&ws_stale).unwrap();
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws_stale]);
-    assert!(!ok, "the stale registration restored anyway: {err}");
-    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
-    assert!(err.contains("stale registration"), "{err}");
-    assert!(!std::path::Path::new(&ws_stale).exists());
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    assert_eq!(
-        json_of(&records_before_stale)["records"],
-        json_of(&body)["records"],
-        "the stale registration landed no restoration fact"
-    );
-
-    // the absent-path recreate stands at the branch's CURRENT local
-    // tip, never the cleanup-time commit: advance the branch first
-    let (_, _, ws2) = rig_provision(&rig, "recreated");
-    let (seq2, branch2, _p2) = (0usize, String::new(), ());
-    let _ = seq2;
-    let _ = branch2;
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws2]);
-    assert!(ok, "the second setup clean refuses: {err}");
-    let ws2_branch = {
-        let (_, body) = get_json(&rig.url, "/api/v1/records");
-        json_of(&body)["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws2))
-            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
-            .expect("the second birth names its branch")
-    };
-    // a throwaway checkout advances the branch past its cleanup-time tip
-    let throwaway = rig.dir.join("throwaway");
-    sh(
-        &rig.root,
-        &[
-            "worktree",
-            "add",
-            &throwaway.display().to_string(),
-            &ws2_branch,
-        ],
-    );
-    std::fs::write(throwaway.join("readme"), "advanced past cleanup\n").unwrap();
-    sh(&throwaway, &["commit", "-qam", "advance"]);
-    let advanced_tip = sh(&throwaway, &["rev-parse", "HEAD"]);
-    sh(
-        &rig.root,
-        &["worktree", "remove", &throwaway.display().to_string()],
-    );
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws2]);
-    assert!(ok, "the recreate restore refuses: {err}");
-    assert_eq!(
-        sh(&std::path::PathBuf::from(&ws2), &["rev-parse", "HEAD"]).trim(),
-        advanced_tip.trim(),
-        "the restore took the branch's current local tip"
-    );
-
-    // restoration is idempotent by postcondition: an Available
-    // workspace with no checkout recreates it at the branch's current
-    // local tip and records the actual fact, no clean-first ceremony
-    let (_, _, ws_edge) = rig_provision(&rig, "edge");
-    // Available with no checkout: git's own removal, the stage never
-    // moved to Cleaned
-    sh(&rig.root, &["worktree", "remove", &ws_edge]);
-    let edge_branch = {
-        let (_, body) = get_json(&rig.url, "/api/v1/records");
-        json_of(&body)["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| {
-                r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws_edge)
-            })
-            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
-            .expect("the edge birth names its branch")
-    };
-    let edge_tip = rig_tip(&rig, &edge_branch);
-    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
-    assert!(ok, "the ruled absent-case restore refuses: {out}{err}");
-    assert!(out.contains("restored"), "{out}");
-    assert!(std::path::Path::new(&ws_edge).join("readme").is_file());
-    assert_eq!(
-        sh(&std::path::PathBuf::from(&ws_edge), &["rev-parse", "HEAD"]).trim(),
-        edge_tip,
-        "the recreate stands at the branch's current local tip"
-    );
-    let (_, body) = get_json(&rig.url, "/api/v1/records");
-    let kinds: Vec<String> = json_of(&body)["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["kind"].as_str().unwrap().to_string())
-        .collect();
-    assert!(
-        kinds.contains(&"workspace_restored".to_string()),
-        "{kinds:?}"
-    );
-    // and the matching checkout standing afterwards is the no-op
-    let (ok, out, _err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
-    assert!(ok, "the no-op restore refuses: {out}");
-    assert!(out.contains("already restored"), "{out}");
-
-    // the recorded branch gone refuses: never reconstructed from a
-    // base or a remote
-    let (_, _, ws3) = rig_provision(&rig, "baseless");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws3]);
-    assert!(ok, "the third setup clean refuses: {err}");
-    let ws3_branch = {
-        let (_, body) = get_json(&rig.url, "/api/v1/records");
-        json_of(&body)["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws3))
-            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
-            .expect("the third birth names its branch")
-    };
-    sh(&rig.root, &["branch", "-D", &ws3_branch]);
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws3]);
-    assert!(!ok, "the branchless restore ran: {err}");
-    assert!(err.contains("workspace_branch_missing"), "{err}");
-    assert!(!std::path::Path::new(&ws3).exists());
-
-    // a checkout on another branch is a mismatch: no forced checkout
-    let (_, _, ws4) = rig_provision(&rig, "swapped");
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws4]);
-    assert!(ok, "the fourth setup clean refuses: {err}");
-    let ws4_branch = {
-        let (_, body) = get_json(&rig.url, "/api/v1/records");
-        json_of(&body)["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws4))
-            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
-            .expect("the fourth birth names its branch")
-    };
-    sh(
-        &rig.root,
-        &["worktree", "add", &ws4, "-b", "another-line", "HEAD"],
-    );
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws4]);
-    assert!(!ok, "the mismatched restore ran: {err}");
-    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
-    let rows = sh(&rig.root, &["worktree", "list", "--porcelain"]);
-    assert!(rows.contains("refs/heads/another-line"));
-    let _ = ws4_branch;
-    let _ = ws;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn the_cleaned_stage_guards_launch_and_switch() {
     let rig = lifecycle_rig("guards");
     let (_, _branch, ws) = rig_provision(&rig, "guarded-lifecycle");
@@ -7416,7 +7182,7 @@ async fn the_cleaned_stage_guards_launch_and_switch() {
 
     // a checkout that stands again at the recorded path (re-created
     // out-of-band) stays recorded Cleaned: a fresh launch into it
-    // refuses until an explicit restore
+    // refuses
     let guard_branch = {
         let (_, body) = get_json(&rig.url, "/api/v1/records");
         json_of(&body)["records"]
@@ -7464,8 +7230,8 @@ async fn the_cleaned_stage_guards_launch_and_switch() {
     );
 
     // the resume path pins the same guard: a saved session whose
-    // header cwd sits in the cleaned workspace refuses until an
-    // explicit restore - the guard fires before any host submission
+    // header cwd sits in the cleaned workspace refuses - the guard
+    // fires before any host submission
     let saved_resume = rig.dir.join("native-cafe0001.jsonl");
     std::fs::write(
         &saved_resume,
@@ -7484,14 +7250,6 @@ async fn the_cleaned_stage_guards_launch_and_switch() {
     let (ok, _out, err) = rig_sac(&rig, &["launch", "--resume", &format!("i-{resume_num}")]);
     assert!(!ok, "a cleaned workspace took a resume: {err}");
     assert!(err.contains("recorded Cleaned"), "{err}");
-
-    // the explicit restore admits the directory again: a fresh launch
-    // proceeds past the stage guard (its host answer is the fake
-    // host's acceptance)
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
-    assert!(ok, "the restore refuses: {err}");
-    let (ok, out, _err) = rig_sac(&rig, &["launch", "--workspace", &ws]);
-    assert!(ok, "the restored workspace launches: {out}{err}");
 }
 
 /// A recorded path addresses its own birth: a historical establishment
@@ -7667,20 +7425,13 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     assert_eq!(out.trim(), "t-0\timplement floop (open)");
 
     // workspaces: recorded paths with branch and stage, clean leading
-    // Available, restore leading Cleaned
+    // Available
     let (ok, out, err) = sac(&["complete", "workspaces-clean"]);
     assert!(ok, "complete workspaces-clean: {err}");
     assert_eq!(
         out.trim(),
         "/tmp/sac-api-floop\tworkspace-floop, available\n\
          /tmp/sac-api-gloom\tworkspace-gloom, cleaned"
-    );
-    let (ok, out, err) = sac(&["complete", "workspaces-restore"]);
-    assert!(ok, "complete workspaces-restore: {err}");
-    assert_eq!(
-        out.trim(),
-        "/tmp/sac-api-gloom\tworkspace-gloom, cleaned\n\
-         /tmp/sac-api-floop\tworkspace-floop, available"
     );
 
     // incarnations: the birth actor beside what the record holds

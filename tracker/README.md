@@ -110,11 +110,9 @@ them.
   whole-task ownership. New versus existing workspace choice is
   explicit; established branch/path names never derive from task or
   incarnation numbering.
-- Workspace cleanup is reversible eviction: preserve identity, branch,
-  saved sessions, and recorded work; restoration uses the retained
-  branch's current local tip, never an implicit reset or pull.
-  Available and Cleaned change only through verified completed
-  effects; finding a directory does not silently restore.
+- Workspace cleanup is eviction: preserve identity, branch, saved
+  sessions, and recorded work. Available becomes Cleaned only through
+  verified completed effects; a path recorded Cleaned is not reused.
 - Messages are durable communication, never board content. Agent
   messages carry machine-supplied sender, message, and reply
   references; known contacts come from creation, contact, or explicit

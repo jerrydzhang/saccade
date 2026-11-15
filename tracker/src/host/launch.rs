@@ -446,7 +446,7 @@ fn canonical_workspace(workspace: &Path) -> Result<PathBuf, LaunchFail> {
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
-/// stage is Cleaned refuses ordinary use until an explicit restore,
+/// stage is Cleaned refuses ordinary use,
 /// addressed by the one shared resolver - its own stored string or the
 /// canonical form it resolves to. Unrecognized directories and
 /// primary checkouts are not workspaces and pass untouched; aliased
@@ -462,10 +462,9 @@ fn cleaned_guard(world: &World, dir: &Path) -> Result<(), LaunchFail> {
                 return Err(LaunchFail::Refused {
                     code: "workspace_cleaned",
                     detail: format!(
-                        "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
+                        "{} is recorded Cleaned (record {}); a cleaned workspace is not reused: create one with sac workspace new",
                         canonical.display(),
-                        birth.0,
-                        canonical.display()
+                        birth.0
                     ),
                 });
             }

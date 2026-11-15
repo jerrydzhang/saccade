@@ -821,7 +821,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/workspace/create", post(workspace_create))
         .route("/api/v1/workspace/change", post(workspace_change))
         .route("/api/v1/workspace/clean", post(workspace_clean))
-        .route("/api/v1/workspace/restore", post(workspace_restore))
         .route("/api/v1/native/attach", post(native_attach))
         .route("/api/v1/incarnations/register", post(incarnation_register))
         .route("/api/v1/incarnations/address", post(incarnation_address))
@@ -1100,7 +1099,7 @@ fn change_operation(guard: &mut ServerState, num: usize, to: &str) -> Result<Cha
         ));
     }
     // a recorded Cleaned workspace blocks ordinary use as a switch
-    // target until an explicit restore; unrelated directories pass
+    // target; unrelated directories pass
     let target_canonical =
         crate::workspace::canonical_dir(target.as_path()).map_err(ApiFail::Workspace)?;
     match crate::workspace::resolve_workspace_address(&world, target.as_path())
@@ -1112,10 +1111,9 @@ fn change_operation(guard: &mut ServerState, num: usize, to: &str) -> Result<Cha
                     StatusCode::CONFLICT,
                     "workspace_cleaned",
                     format!(
-                        "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
+                        "{} is recorded Cleaned (record {}); a cleaned workspace is not reused: create one with sac workspace new",
                         target_canonical.display(),
-                        birth.0,
-                        target_canonical.display()
+                        birth.0
                     ),
                 ));
             }
@@ -1274,15 +1272,11 @@ async fn workspace_change(State(app): State<AppState>, body: Bytes) -> Response 
 }
 
 // -- the workspace lifecycle controller ---------------------------------
-// Clean and restore: the ratified reversible lifecycle. The ordered
+// Clean: the ordered
 // clean contract runs can-clean checks, terminal close, terminal
 // verification, git worktree remove (branch retained), checkout and
 // worktree absence verification, and the host's visible absence,
-// and only then lands the Cleaned fact. Restore establishes or
-// validates the matching checkout and lands Restored; it launches no
-// session and creates no terminal. Reconciliation is the one-time
-// cutover verification: absent resources record Cleaned now, present
-// ones stand preserved, conflicts surface - never a classification.
+// and only then lands the Cleaned fact.
 
 /// The recorded facts of the lifecycle's target: the birth identity
 /// and what the birth carried.
@@ -1326,29 +1320,6 @@ pub struct CleanReply {
 struct CleanRequest {
     /// The exact recorded workspace path; never inferred from a task
     /// or incarnation
-    path: String,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct RestoreReply {
-    pub restored: bool,
-    /// Recorded Available with the matching registered checkout
-    /// already standing: no-op success, no duplicate restoration fact
-    pub already_restored: bool,
-    /// The matching registered worktree stood and was reused as-is,
-    /// local changes preserved; nothing was checked out
-    pub reused: bool,
-    /// The branch's current local tip after restoration, when git
-    /// named one; never a reset target, always a report
-    pub tip: Option<String>,
-    pub workspace: LifecycleWorkspace,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct RestoreRequest {
     path: String,
     #[serde(default)]
     client: Option<String>,
@@ -1398,7 +1369,7 @@ fn lifecycle_target(
                 StatusCode::BAD_REQUEST,
                 "workspace_not_recorded",
                 format!(
-                    "{} names no recorded workspace birth; clean and restore select an exact recorded workspace, never a primary checkout or an unrecognized directory",
+                    "{} names no recorded workspace birth; clean selects an exact recorded workspace, never a primary checkout or an unrecognized directory",
                     canonical.display()
                 ),
             ));
@@ -1522,8 +1493,8 @@ fn clean_operation(
         ));
     }
     if destructive {
-        // the retained branch is the restore contract's foundation: a
-        // missing branch refuses the destructive act before anything runs
+        // the branch is retained: a missing branch refuses the
+        // destructive act before anything runs
         if workspace::branch_tip(&repo_root, &facts.branch)
             .map_err(ApiFail::Workspace)?
             .is_none()
@@ -1532,7 +1503,7 @@ fn clean_operation(
                 StatusCode::CONFLICT,
                 "workspace_branch_missing",
                 format!(
-                    "the recorded branch {} holds no local tip; a cleanup that would remove its checkout refuses, and restore would refuse too",
+                    "the recorded branch {} holds no local tip; a cleanup that would remove its checkout refuses",
                     facts.branch.as_str()
                 ),
             ));
@@ -1555,7 +1526,7 @@ fn clean_operation(
         );
     } else if present {
         // bytes at the recorded path are not the checkout: a probe
-        // finding them neither restores the identity nor deletes them
+        // finding them deletes nothing
         return Err(ApiFail::Refused(
             StatusCode::CONFLICT,
             "workspace_checkout_mismatch",
@@ -1701,158 +1672,6 @@ fn clean_operation(
     }
 }
 
-/// One completed restoration: establish or validate the matching
-/// checkout, then record. No terminal, no session, no incarnation.
-fn restore_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    path_str: &str,
-) -> Result<RestoreReply, ApiFail> {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return Err(ApiFail::Degraded(reason.clone()));
-    };
-    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
-        return Err(ApiFail::NoRepo);
-    };
-    let (world, facts) = lifecycle_target(inner, path_str)?;
-    let birth = facts.birth;
-    let canonical =
-        workspace::canonical_dir(facts.worktree.as_path()).map_err(ApiFail::Workspace)?;
-    let dir_str = canonical.display().to_string();
-    let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
-    let registered = registrations.get(&canonical).cloned();
-    // a git registration whose directory is gone restores and reuses
-    // nothing, at either stage: a stale admin entry is named as the
-    // mismatch it is, and git's own repair stays a human act - nothing
-    // counts as a matching checkout without the directory standing
-    if registered.is_some() && !canonical.is_dir() {
-        return Err(ApiFail::Refused(
-            StatusCode::CONFLICT,
-            "workspace_checkout_mismatch",
-            format!(
-                "git still registers a worktree at {} whose directory is gone; a stale registration neither restores nor reuses - inspect it and run git worktree prune by hand",
-                dir_str
-            ),
-        ));
-    }
-
-    // the matching registered checkout standing on an Available
-    // workspace is no-op success: no duplicate restoration fact lands,
-    // and the local changes it holds stand untouched. The absent case
-    // is not special: restoration is idempotent by postcondition, so
-    // an Available workspace with no checkout recreates it below under
-    // the same safety checks and records the actual fact. The safety
-    // checks hold at both stages - the other shapes are mismatches.
-    if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Available)
-        && matches!(&registered, Some(Some(b)) if b.as_str() == facts.branch.as_str())
-        && canonical.is_dir()
-    {
-        let tip = workspace::branch_tip(&repo_root, &facts.branch)
-            .map_err(ApiFail::Workspace)?
-            .map(|c| c.as_str().to_string());
-        return Ok(RestoreReply {
-            restored: false,
-            already_restored: true,
-            reused: true,
-            tip,
-            workspace: LifecycleWorkspace::of(facts),
-            records: Vec::new(),
-        });
-    }
-    if workspace::branch_tip(&repo_root, &facts.branch)
-        .map_err(ApiFail::Workspace)?
-        .is_none()
-    {
-        return Err(ApiFail::Refused(
-            StatusCode::CONFLICT,
-            "workspace_branch_missing",
-            format!(
-                "the recorded branch {} holds no local tip; restoration refuses - the branch is never reconstructed from a base or a remote",
-                facts.branch.as_str()
-            ),
-        ));
-    }
-    let (reused, tip) = match registered {
-        Some(Some(checked_out)) if checked_out == facts.branch => {
-            // the matching worktree stands: reuse as-is, local changes
-            // preserved, no checkout, no reset - the tip is git's own
-            let tip = workspace::branch_tip(&repo_root, &facts.branch)
-                .map_err(ApiFail::Workspace)?
-                .map(|c| c.as_str().to_string());
-            (true, tip)
-        }
-        Some(Some(checked_out)) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered on branch {}, not the recorded {}; no forced checkout, reset, or overwrite runs",
-                    dir_str,
-                    checked_out.as_str(),
-                    facts.branch.as_str()
-                ),
-            ));
-        }
-        Some(None) => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered without a branch (bare or detached); restoration matches a named branch and runs nothing",
-                    dir_str
-                ),
-            ));
-        }
-        None if canonical.exists() => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} holds a directory git does not register as this repo's worktree; restoration overwrites nothing - inspect it by hand",
-                    dir_str
-                ),
-            ));
-        }
-        None => {
-            // absent path: recreate at the branch's current local tip
-            // under git's normal protections - a branch already checked
-            // out elsewhere refuses, as does a missing-but-registered
-            // worktree at the path
-            workspace::add_checkout(&repo_root, &canonical, &facts.branch)
-                .map_err(ApiFail::Workspace)?;
-            let tip = workspace::branch_tip(&repo_root, &facts.branch)
-                .map_err(ApiFail::Workspace)?
-                .map(|c| c.as_str().to_string());
-            (false, tip)
-        }
-    };
-    let drafts = vec![db::RecordDraft {
-        context: Context::system(),
-        event: Event::WorkspaceRestored { workspace: birth },
-    }];
-    match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
-        Ok(records) => Ok(RestoreReply {
-            restored: true,
-            already_restored: false,
-            reused,
-            tip,
-            workspace: LifecycleWorkspace::of(facts),
-            records,
-        }),
-        Err(e) => Err(ApiFail::Refused(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage",
-            format!(
-                "the checkout at {} stands restored but the Restored fact could not land: {e}; the checkout is real - retry restore to record",
-                dir_str
-            ),
-        )),
-    }
-}
-
 async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
     let raw = String::from_utf8_lossy(&body).into_owned();
     let request: CleanRequest = match serde_json::from_slice(&body) {
@@ -1866,34 +1685,6 @@ async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = clean_operation(&app, &mut guard, &request.path);
-    integration_outcome(&app, &guard, None, &received, started, &outcome);
-    if outcome.is_ok() {
-        app.wake_landing();
-    }
-    drop(guard);
-    match outcome {
-        Ok(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        Err(fail) => api_failure(fail),
-    }
-}
-
-async fn workspace_restore(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: RestoreRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let started = Instant::now();
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = restore_operation(&app, &mut guard, &request.path);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     if outcome.is_ok() {
         app.wake_landing();

@@ -75,9 +75,6 @@ enum Action {
     CleanWorkspace {
         draw: u8,
     },
-    RestoreWorkspace {
-        draw: u8,
-    },
     Send {
         from: u8,
         to: u8,
@@ -111,7 +108,6 @@ impl Action {
             | Action::BindSaved { .. }
             | Action::AssignAddress { .. }
             | Action::CleanWorkspace { .. }
-            | Action::RestoreWorkspace { .. }
             | Action::Send { .. }
             | Action::Submit { .. }
             | Action::Name { .. } => false,
@@ -350,13 +346,9 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         },
         // the lifecycle facts name whichever birth the draw resolves
         // to; unknown draws refuse and the sequence carries on
-        Action::CleanWorkspace { draw } | Action::RestoreWorkspace { draw } => {
+        Action::CleanWorkspace { draw } => {
             let birth = record_ref_at(records, *draw);
-            if matches!(action, Action::CleanWorkspace { .. }) {
-                Command::CleanWorkspace { workspace: birth }
-            } else {
-                Command::RestoreWorkspace { workspace: birth }
-            }
+            Command::CleanWorkspace { workspace: birth }
         }
         Action::Send { from, to, reply } => Command::SendMessage {
             from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
@@ -393,7 +385,6 @@ fn context(action: &Action, world: &World) -> Context {
     | Action::BindSaved { .. }
     | Action::AssignAddress { .. }
     | Action::CleanWorkspace { .. }
-    | Action::RestoreWorkspace { .. }
     | Action::Submit { .. } = action
     {
         return Context::system();
@@ -485,7 +476,6 @@ fn action_strategy() -> BoxedStrategy<Action> {
         1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, file)| Action::BindSaved { draw, locator: file }),
         1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, variant)| Action::AssignAddress { draw, variant }),
         2 => any::<u8>().prop_map(|draw| Action::CleanWorkspace { draw }),
-        2 => any::<u8>().prop_map(|draw| Action::RestoreWorkspace { draw }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
             from,
             to,
@@ -648,11 +638,6 @@ fn generator_reaches_deep_states() {
                         Action::CleanWorkspace { .. } => {
                             if last.kind == "workspace_cleaned" {
                                 *milestones.entry("workspace cleaned").or_default() += 1;
-                            }
-                        }
-                        Action::RestoreWorkspace { .. } => {
-                            if last.kind == "workspace_restored" {
-                                *milestones.entry("workspace restored").or_default() += 1;
                             }
                         }
                         Action::Register { .. } => {

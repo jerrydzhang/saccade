@@ -55,8 +55,7 @@ curl -sf -X POST "http://127.0.0.1:$PORT/api/v1/native/attach" \
   -d '{"native_id":"smoke-sess-1","session_file":"'"$SMOKE"'/sessions/7777.json","client":"smoke"}' \
   >/dev/null || fail "attach refused"
 
-# clean the workspace through the real door: the restore candidates
-# then lead Cleaned
+# clean the workspace through the real door
 "$BIN" workspace clean "$WS" >/dev/null || fail "workspace clean"
 
 # the script loads the way fish loads vendor completions; probes run
@@ -76,7 +75,6 @@ fish -i -c '
   report switch_target "sac workspace switch "
   report switch_to "sac workspace switch i-0 --to "
   report clean "sac workspace clean "
-  report restore "sac workspace restore "
   report board_static "sac board "
   report offer_tasks "sac offer "
   report create_static "sac create "
@@ -120,11 +118,9 @@ section switch_target | grep -Fq "i-0${TAB}saccade native session smoke-sess-1" 
 section switch_to | grep -Fq "$WS" || { section switch_to; fail "switch --to misses the recorded workspace"; }
 section switch_to | grep -q "realdir" || { section switch_to; fail "switch --to misses the fallback"; }
 
-# clean and restore: recorded paths only, no filesystem fallback
+# clean: recorded paths only, no filesystem fallback
 section clean | grep -Fq "$WS" || { section clean; fail "clean misses the recorded path"; }
 section clean | grep -q "realdir" && fail "clean leaked the filesystem fallback"
-section restore | grep -Fq "$WS" || { section restore; fail "restore misses the recorded path"; }
-section restore | grep -q "realdir" && fail "restore leaked the filesystem fallback"
 
 # the board controller's verbs complete statically; the decision verbs
 # name their tasks

@@ -376,14 +376,6 @@ enum WorkspaceVerb {
         /// The workspace's exact recorded path
         path: PathBuf,
     },
-    /// Restore an exact recorded cleaned workspace: establish or
-    /// validate the matching git checkout at the branch's current
-    /// local tip, then record Restored. No session is launched, no
-    /// terminal is created - execution stays an explicit launch.
-    Restore {
-        /// The workspace's exact recorded path
-        path: PathBuf,
-    },
     /// The primary checkout's Herdr destination: bind the chosen
     /// manual root space once, show the standing choice, or clear it.
     /// Root launches declare the bound pair; an unbound root runs
@@ -438,7 +430,6 @@ enum CompleteKind {
     Incarnations,
     Workspaces,
     WorkspacesClean,
-    WorkspacesRestore,
 }
 
 impl From<CompleteKind> for Kind {
@@ -448,7 +439,6 @@ impl From<CompleteKind> for Kind {
             CompleteKind::Incarnations => Kind::Incarnations,
             CompleteKind::Workspaces => Kind::Workspaces,
             CompleteKind::WorkspacesClean => Kind::WorkspacesClean,
-            CompleteKind::WorkspacesRestore => Kind::WorkspacesRestore,
         }
     }
 }
@@ -593,7 +583,6 @@ fn verb_name(verb: &WorkspaceVerb) -> &'static str {
         WorkspaceVerb::New { .. } => "new",
         WorkspaceVerb::Switch { .. } => "switch",
         WorkspaceVerb::Clean { .. } => "clean",
-        WorkspaceVerb::Restore { .. } => "restore",
         WorkspaceVerb::Root { verb } => match verb {
             RootVerb::Bind => "root-bind",
             RootVerb::Show => "root-show",
@@ -747,7 +736,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "prompt");
                 }
             }
-            WorkspaceVerb::Clean { .. } | WorkspaceVerb::Restore { .. } => {}
+            WorkspaceVerb::Clean { .. } => {}
             WorkspaceVerb::Root { .. } => {}
         },
         Cmd::Wait {

@@ -687,7 +687,7 @@ pub fn change_workspace(
     )
 }
 
-/// The lifecycle controller's client half: clean and restore name the
+/// The lifecycle controller's client half: clean names the
 /// exact recorded workspace path; the server runs the ordered effects
 /// and lands the completed facts itself.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -703,27 +703,6 @@ pub fn clean_workspace(url: &str, path: &std::path::Path) -> Result<CleanReply, 
     post_json(
         url,
         "/api/v1/workspace/clean",
-        serde_json::json!({
-            "path": path.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RestoreReply {
-    pub restored: bool,
-    pub already_restored: bool,
-    pub reused: bool,
-    pub tip: Option<String>,
-    pub workspace: WorkspaceBirth,
-    pub records: Vec<StoredRecord>,
-}
-
-pub fn restore_workspace(url: &str, path: &std::path::Path) -> Result<RestoreReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/restore",
         serde_json::json!({
             "path": path.display().to_string(),
             "client": env!("CARGO_PKG_VERSION"),

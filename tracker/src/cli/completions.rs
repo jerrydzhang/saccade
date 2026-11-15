@@ -16,7 +16,7 @@ use saccade::store::{RecordId, World};
 
 /// The hidden candidate doors: one kind per calling position in the
 /// completion scripts. The workspace kinds differ only in the stage
-/// that leads - clean and restore complete recorded paths only,
+/// that leads - clean completes recorded paths only,
 /// launch and switch take the plain birth order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -24,7 +24,6 @@ pub enum Kind {
     Incarnations,
     Workspaces,
     WorkspacesClean,
-    WorkspacesRestore,
 }
 
 impl Kind {
@@ -38,7 +37,6 @@ impl Kind {
             Kind::Incarnations => "incarnations",
             Kind::Workspaces => "workspaces",
             Kind::WorkspacesClean => "workspaces-clean",
-            Kind::WorkspacesRestore => "workspaces-restore",
         }
     }
 
@@ -51,7 +49,6 @@ impl Kind {
             Kind::Incarnations => incarnation_lines(world, records),
             Kind::Workspaces => workspace_lines(world, None),
             Kind::WorkspacesClean => workspace_lines(world, Some(WorkspaceStage::Available)),
-            Kind::WorkspacesRestore => workspace_lines(world, Some(WorkspaceStage::Cleaned)),
         };
         lines.join("\n")
     }
@@ -283,7 +280,7 @@ mod test {
     }
 
     #[test]
-    fn clean_leads_available_and_restore_leads_cleaned() {
+    fn clean_leads_available() {
         let (world, mut rows) = world_with_records();
         let fact = record(
             5,
@@ -302,17 +299,11 @@ mod test {
              /home/j/worktrees/gloom\tworkspace-gloom, cleaned"
         );
 
-        // clean leads Available, restore leads Cleaned; birth order
-        // holds inside each group
+        // clean leads Available; birth order holds inside each group
         assert_eq!(
             Kind::WorkspacesClean.candidates(&world, &rows),
             "/home/j/worktrees/floop\tworkspace-floop, available\n\
              /home/j/worktrees/gloom\tworkspace-gloom, cleaned"
-        );
-        assert_eq!(
-            Kind::WorkspacesRestore.candidates(&world, &rows),
-            "/home/j/worktrees/gloom\tworkspace-gloom, cleaned\n\
-             /home/j/worktrees/floop\tworkspace-floop, available"
         );
     }
 
@@ -338,7 +329,6 @@ mod test {
         assert_eq!(Kind::Incarnations.name(), "incarnations");
         assert_eq!(Kind::Workspaces.name(), "workspaces");
         assert_eq!(Kind::WorkspacesClean.name(), "workspaces-clean");
-        assert_eq!(Kind::WorkspacesRestore.name(), "workspaces-restore");
     }
 
     /// The emitted script is authored text: ASCII only, it invokes the
@@ -360,7 +350,6 @@ mod test {
             Kind::Incarnations,
             Kind::Workspaces,
             Kind::WorkspacesClean,
-            Kind::WorkspacesRestore,
         ] {
             assert!(
                 FISH.contains(&format!("__saccade_candidates {}", kind.name())),

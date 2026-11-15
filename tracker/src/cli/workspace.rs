@@ -133,7 +133,6 @@ pub(super) fn workspace_door(
             prompt,
         } => workspace_switch_door(cli, destination, incarnation, to, *resume, prompt),
         WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
-        WorkspaceVerb::Restore { path } => workspace_restore_door(cli, destination, path),
         WorkspaceVerb::Root { verb } => match verb {
             RootVerb::Bind => root_bind_door(cli, destination),
             RootVerb::Show => root_show_door(cli, destination),
@@ -186,50 +185,5 @@ pub(super) fn workspace_clean_door(
             .map(|step| format!("  - {step}"))
             .collect::<Vec<_>>()
             .join("\n")
-    ))
-}
-
-/// `sac workspace restore`: checkout-only restoration; execution stays
-/// a separate explicit launch or manual resume.
-pub(super) fn workspace_restore_door(
-    cli: &Cli,
-    destination: &Destination,
-    path: &Path,
-) -> Result<String, Fail> {
-    let url = server_url(destination, "workspace restore")?;
-    client::handshake(&url);
-    let reply = client::restore_workspace(&url, path).map_err(Fail::Client)?;
-    let record = reply.records.first().map(|r| r.seq);
-    let fact = if reply.already_restored {
-        "already restored - the matching worktree stands Available, no new record".to_string()
-    } else if reply.reused {
-        "restored - the matching worktree stood and was reused as-is, local changes preserved"
-            .to_string()
-    } else {
-        format!(
-            "restored - checkout established at branch {}'s current local tip - record {}",
-            reply.workspace.branch,
-            record.map(|r| r.to_string()).unwrap_or_default()
-        )
-    };
-    let tip = reply
-        .tip
-        .as_deref()
-        .map(|t| format!("\n  branch tip {t}"))
-        .unwrap_or_default();
-    if cli.json {
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "restored": reply.restored,
-            "already_restored": reply.already_restored,
-            "reused": reply.reused,
-            "tip": reply.tip,
-            "workspace": reply.workspace,
-            "records": reply.records,
-        }))
-        .expect("plain data"));
-    }
-    Ok(format!(
-        "workspace {} ({}, branch {})\n  {}{}",
-        reply.workspace.path, reply.workspace.seq, reply.workspace.branch, fact, tip
     ))
 }

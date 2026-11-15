@@ -34,10 +34,8 @@ pub struct CreatedWorkspaceContext {
 }
 
 /// A workspace's lifecycle stage, owned by the workspace: Available
-/// stands at birth, Cleaned stands after a completed cleanup, and a
-/// completed restoration returns Available - idempotent by
-/// postcondition. The latest completed fact after the birth is the
-/// stage; earlier facts stay in the log.
+/// stands at birth, Cleaned stands after a completed cleanup. The
+/// latest completed fact after the birth is the stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceStage {
@@ -56,18 +54,11 @@ impl WorkspaceStage {
     /// The pure transition table: the stage a completed lifecycle fact
     /// moves this workspace to, or None when the fact does not apply -
     /// a cleanup of an already Cleaned workspace names a stage already
-    /// there, and a restoration is idempotent by postcondition, so it
-    /// re-states Available over Available.
+    /// there. Cleaned is terminal.
     pub fn transition(&self, event: &Event) -> Option<WorkspaceStage> {
         match (self, event) {
             (WorkspaceStage::Available, Event::WorkspaceCleaned { .. }) => {
                 Some(WorkspaceStage::Cleaned)
-            }
-            (WorkspaceStage::Available, Event::WorkspaceRestored { .. }) => {
-                Some(WorkspaceStage::Available)
-            }
-            (WorkspaceStage::Cleaned, Event::WorkspaceRestored { .. }) => {
-                Some(WorkspaceStage::Available)
             }
             // every other event moves no workspace stage
             _ => None,
@@ -148,29 +139,21 @@ mod test {
     #[test]
     fn the_stage_transition_table_admits_exactly_the_legal_cells() {
         let stages = [WorkspaceStage::Available, WorkspaceStage::Cleaned];
-        let facts = [
-            Event::WorkspaceCleaned {
-                workspace: RecordId(0),
-            },
-            Event::WorkspaceRestored {
-                workspace: RecordId(0),
-            },
-        ];
+        let facts = [Event::WorkspaceCleaned {
+            workspace: RecordId(0),
+        }];
         let expected = [
-            // available: cleanup cleans, restoration re-states available
+            // available: cleanup cleans
             Some(WorkspaceStage::Cleaned),
-            Some(WorkspaceStage::Available),
-            // cleaned: a second cleanup names a stage already there,
-            // and restoration returns available
+            // cleaned: a second cleanup names a stage already there
             None,
-            Some(WorkspaceStage::Available),
         ];
         for (cell, stage) in stages.iter().enumerate() {
             for (fact_cell, fact) in facts.iter().enumerate() {
                 let moved = stage.transition(fact);
                 assert_eq!(
                     moved,
-                    expected[cell * 2 + fact_cell],
+                    expected[cell + fact_cell],
                     "{stage:?} under {:?} moves wrong",
                     fact
                 );

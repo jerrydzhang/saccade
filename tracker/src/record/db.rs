@@ -750,8 +750,8 @@ mod test {
         )
         .unwrap();
         // the workspace lifecycle rides the same round-trip: the
-        // completed cleanup, then the completed restoration, both
-        // machinery facts referencing the birth identity alone
+        // completed cleanup, a machinery fact referencing the birth
+        // identity alone
         record(
             &mut conn,
             &system,
@@ -759,15 +759,6 @@ mod test {
                 workspace: RecordId(16),
             },
             27,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::RestoreWorkspace {
-                workspace: RecordId(16),
-            },
-            28,
         )
         .unwrap();
         // the write path's world is the one a full reload produces,
@@ -960,11 +951,11 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 37);
+        assert_eq!(loadout.rows.len(), 36);
         // the namings: the latest one stands, the log keeps the rest
-        assert_eq!(loadout.rows[33].kind, "incarnation_named");
-        assert!(loadout.rows[33].payload.contains("th\u{e9}orie"));
-        assert_eq!(loadout.rows[35].kind, "incarnation_named");
+        assert_eq!(loadout.rows[32].kind, "incarnation_named");
+        assert!(loadout.rows[32].payload.contains("th\u{e9}orie"));
+        assert_eq!(loadout.rows[34].kind, "incarnation_named");
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(12))]
                 .name
@@ -1049,7 +1040,7 @@ mod test {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                stage: crate::WorkspaceStage::Available,
+                stage: crate::WorkspaceStage::Cleaned,
             }
         );
         assert_eq!(world.provenance[&RecordId(16)], None);
@@ -1063,13 +1054,12 @@ mod test {
         );
         assert_eq!(world.provenance[&RecordId(17)], None);
         assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
-        // the lifecycle facts: reference-only payloads, machinery
-        // authorship, and the stage the fold carries after both
+        // the lifecycle fact: a reference-only payload, machinery
+        // authorship, and the stage the fold carries after it
         assert_eq!(loadout.rows[18].kind, "workspace_cleaned");
         assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
         assert_eq!(loadout.rows[18].tier, "system");
         assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
-        assert_eq!(loadout.rows[19].kind, "workspace_restored");
         // the board family rode its own kinds with the declared pairs:
         // the eight rows before the three namings and the closing checkpoint
         let board = |back: usize| &loadout.rows[loadout.rows.len() - 12 + back];
@@ -1105,10 +1095,9 @@ mod test {
         );
 
         assert_eq!(world.provenance[&RecordId(18)], None);
-        assert_eq!(world.provenance[&RecordId(19)], None);
         assert_eq!(
             world.workspace_stage(RecordId(16)),
-            Some(crate::WorkspaceStage::Available)
+            Some(crate::WorkspaceStage::Cleaned)
         );
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
@@ -1140,9 +1129,9 @@ mod test {
         // the human's root destination: both kinds ride the round-trip,
         // the final bind is the standing choice; the closing checkpoint
         // follows them
-        assert_eq!(loadout.rows[22].kind, "root_space_bound");
-        assert_eq!(loadout.rows[23].kind, "root_space_cleared");
-        assert_eq!(loadout.rows[24].kind, "root_space_bound");
+        assert_eq!(loadout.rows[21].kind, "root_space_bound");
+        assert_eq!(loadout.rows[22].kind, "root_space_cleared");
+        assert_eq!(loadout.rows[23].kind, "root_space_bound");
         assert_eq!(
             world
                 .root_space

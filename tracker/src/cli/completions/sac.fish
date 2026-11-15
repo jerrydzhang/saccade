@@ -121,7 +121,6 @@ function __saccade_workspace_verbs
     printf 'new\tProvision a NEW workspace through Git effects\n'
     printf 'switch\tMove a stopped native session saved directory\n'
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
-    printf 'restore\tBring an exact recorded cleaned workspace back\n'
     printf 'root\tBind, show, or clear the primary checkout destination\n'
 end
 
@@ -153,7 +152,6 @@ complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not
 complete -c sac -n '__saccade_verb wait; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-clean)'
-complete -c sac -n '__saccade_verb workspace restore; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-restore)'
 
 # per-verb flag names, exactly as the CLI defines them: fish offers
 # option names only on dash-prefixed tokens, so these never leak into

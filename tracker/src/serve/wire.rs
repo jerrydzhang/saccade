@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 22] = [
+const KINDS: [&str; 21] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -40,7 +40,6 @@ const KINDS: [&str; 22] = [
     "workspace_created",
     "workspace_changed",
     "workspace_cleaned",
-    "workspace_restored",
     "root_space_bound",
     "root_space_cleared",
     "incarnation_registered",
@@ -152,9 +151,6 @@ mod test {
                 worktree: WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap(),
             },
             Event::WorkspaceCleaned {
-                workspace: RecordId(17),
-            },
-            Event::WorkspaceRestored {
                 workspace: RecordId(17),
             },
             Event::IncarnationRegistered {

@@ -81,9 +81,8 @@ pub enum Reason {
     /// A lifecycle fact names a record that is no workspace's birth:
     /// neither an independent creation nor a task-bound establishment.
     InvalidWorkspaceId,
-    /// A cleanup names a workspace that is already Cleaned, or a
-    /// restoration names one that is Available: the stage is not there
-    /// to move, and no duplicate lifecycle fact lands.
+    /// A cleanup names a workspace that is already Cleaned: the stage
+    /// is not there to move, and no duplicate lifecycle fact lands.
     WorkspaceStageMismatch,
 }
 
@@ -740,7 +739,7 @@ impl World {
                 self.provenance.insert(record.id, None);
                 self.root_space = None;
             }
-            Event::WorkspaceCleaned { workspace } | Event::WorkspaceRestored { workspace } => {
+            Event::WorkspaceCleaned { workspace } => {
                 // the fact references an existing workspace birth of
                 // either kind: the store keeps only the existence guard
                 // and the provenance landing - the stage's transition
@@ -1925,8 +1924,7 @@ mod test {
     }
 
     /// The lifecycle stage rides the workspace birth, both birth kinds
-    /// alike: Available at birth, Cleaned on the completed fact,
-    /// Available again on restoration, and every cycle's fact kept.
+    /// alike: Available at birth, Cleaned on the completed fact.
     /// Historical attribution stands beside the stage, untouched.
     #[test]
     fn the_lifecycle_rides_the_workspace_birth_across_both_kinds() {
@@ -1987,7 +1985,7 @@ mod test {
             established_birth
         );
 
-        // the created one cycles: clean, restore, clean again
+        // the created one cleans
         log.execute_system(
             Command::CleanWorkspace {
                 workspace: created_birth,
@@ -2007,33 +2005,9 @@ mod test {
                 .cleaned_workspace_at(Path::new("/repo/wt/feature-abc123ab")),
             Some(created_birth)
         );
-        log.execute_system(
-            Command::RestoreWorkspace {
-                workspace: created_birth,
-            },
-            5,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().workspace_stage(created_birth),
-            Some(crate::WorkspaceStage::Available)
-        );
-        assert_eq!(
-            log.world()
-                .cleaned_workspace_at(Path::new("/repo/wt/feature-abc123ab")),
-            None
-        );
-        log.execute_system(
-            Command::CleanWorkspace {
-                workspace: created_birth,
-            },
-            6,
-        )
-        .unwrap();
-        // earlier facts stay in the log; the stage is the latest's
-        assert_eq!(log.records().len(), 6);
+        assert_eq!(log.records().len(), 4);
 
-        // the established one cycles through the same door
+        // the established one cleans through the same door
         log.execute_system(
             Command::CleanWorkspace {
                 workspace: established_birth,
@@ -2050,22 +2024,11 @@ mod test {
             log.world().tasks[0].workspace.as_ref().unwrap().birth,
             established_birth
         );
-        log.execute_system(
-            Command::RestoreWorkspace {
-                workspace: established_birth,
-            },
-            8,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().workspace_stage(established_birth),
-            Some(crate::WorkspaceStage::Available)
-        );
     }
 
     /// The lifecycle gates know what they move: an unknown birth
-    /// refuses, a duplicate cleanup refuses, restoring an Available
-    /// workspace is the held seam, and the door is machinery-only.
+    /// refuses, a duplicate cleanup refuses, and the door is
+    /// machinery-only.
     #[test]
     fn the_lifecycle_gates_know_what_they_move() {
         let mut log = Log::new();
@@ -2104,32 +2067,23 @@ mod test {
         let refused = log.execute_system(Command::CleanWorkspace { workspace: birth }, 5);
         assert!(matches!(refused, Err(Reject::WorkspaceStageMismatch)));
 
-        // a fresh workspace stands Available: restoration is idempotent
-        // by postcondition - the fact lands and the stage stays what it
-        // already gives, with the latest fact named on the lifecycle
+        // a fresh workspace stands Available
         log.execute_system(
             created("workspace-deadbeef", "/repo/wt/workspace-deadbeef"),
             6,
-        )
-        .unwrap();
-        log.execute_system(
-            Command::RestoreWorkspace {
-                workspace: RecordId(3),
-            },
-            7,
         )
         .unwrap();
         assert_eq!(
             log.world().workspace_stage(RecordId(3)),
             Some(crate::WorkspaceStage::Available)
         );
-        // the latest fact's provenance lives on the context
+        // the setting fact's provenance lives on the context
         assert_eq!(
-            log.world().workspaces[&crate::WorkspaceId(RecordId(3))]
+            log.world().workspaces[&crate::WorkspaceId(birth)]
                 .stage_fact
                 .as_ref()
                 .map(|fact| fact.record),
-            Some(RecordId(4))
+            Some(RecordId(2))
         );
 
         // judgment tiers refuse the door: the completed facts are the
@@ -2143,10 +2097,8 @@ mod test {
                 8,
             );
             assert!(matches!(refused, Err(Reject::HumanOnly)));
-            let refused = log.execute(ctx, Command::RestoreWorkspace { workspace: birth }, 8);
-            assert!(matches!(refused, Err(Reject::HumanOnly)));
         }
-        assert_eq!(log.records().len(), 5);
+        assert_eq!(log.records().len(), 4);
     }
 
     /// The confirmed change names a native incarnation and lands as a

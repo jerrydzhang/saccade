@@ -102,12 +102,6 @@ pub enum Event {
     WorkspaceCleaned {
         workspace: RecordRef,
     },
-    /// A completed workspace restoration: the matching Git checkout
-    /// established or validated before this lands. It references the
-    /// existing workspace birth identity only.
-    WorkspaceRestored {
-        workspace: RecordRef,
-    },
     // Root destination events: the human's explicit association of
     // the primary checkout with a Herdr space/tab pair
     /// The chosen destination for launches at the primary checkout,
@@ -256,13 +250,10 @@ pub enum Command {
         incarnation: IncarnationId,
         worktree: WorktreePath,
     },
-    // Cleanup and restoration are machinery verbs: System authorship
+    // Cleanup is a machinery verb: System authorship
     // comes from the role, never input - a door requests the effect,
     // the serving controller records the completed fact
     CleanWorkspace {
-        workspace: RecordRef,
-    },
-    RestoreWorkspace {
         workspace: RecordRef,
     },
     // The primary checkout's Herdr destination: the human binds the
