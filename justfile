@@ -5,14 +5,15 @@ fmt:
 lint:
     cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings
 
-# the full suite: the cargo workspace, the app shell's own tests, then
-# the app frontend's vitest unit and browser projects (the native
-# project is gated: just app-test-native)
+# the full suite: the cargo workspace, the app shell's own tests, the
+# app frontend's vitest unit and browser projects, then the native
+# node suites (the vitest native project is gated: just app-test-native)
 test:
     cargo test -q
     just shell-test
     just app-test
     just app-test-browser
+    just native-test
 
 # the app shell library's tests (client/src-tauri/src, compiled through
 # client/port-shell): the GTK/WebKit build needs the saccade-app shell
