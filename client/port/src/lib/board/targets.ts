@@ -26,6 +26,10 @@ export type BoardTarget = Readonly<{
   /** The incorporation's model-authored citation source, for
    * reference targets (t-36@r90); absent for every other kind. */
   source?: Readonly<{ task: string; revision: number; select: readonly string[] }>;
+  /** The part this target sits inside: a nested block's group or
+   * incorporation, a diagram's or ref's block, a citation's
+   * incorporation; absent at the board's top level (t-63). */
+  within?: string;
 }>;
 
 /** The model-derived targets of a decoded board: every content part,
@@ -72,7 +76,7 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       else if (block.kind === "figure") text = block.caption;
       // an incorporation reads as its source line (its menu head)
       else if (block.kind === "incorporation") text = `incorporates ${block.source.task}@r${block.source.revision}`;
-      const base = { part, kind: block.kind as BoardTargetKind, text };
+      const base = prefix === "" ? { part, kind: block.kind as BoardTargetKind, text } : { part, kind: block.kind as BoardTargetKind, text, within: prefix };
       out.push(
         block.kind === "incorporation"
           ? { ...base, source: { task: block.source.task, revision: block.source.revision, select: block.source.select } }
@@ -82,12 +86,12 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       // own (the prototype's mermaid figure kind, inst16.html:224)
       if (block.kind === "text" || block.kind === "annotation") {
         parseMarkdown(block.markdown, 0, 1).mermaidFences.forEach((_, ordinal) => {
-          out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram" });
+          out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram", within: part });
         });
         // every ref in the prose is a target of its own (the prototype's
         // linkify, inst16.html:197); its text is the ref itself
         refsIn(block.markdown).forEach((ref, ordinal) => {
-          out.push({ part: refPart(part, ordinal), kind: "ref", text: ref });
+          out.push({ part: refPart(part, ordinal), kind: "ref", text: ref, within: part });
         });
       }
       // an incorporation's citation is a target of its own (the
@@ -98,6 +102,7 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
           kind: "reference",
           text: `${block.source.task}@r${block.source.revision}`,
           source: { task: block.source.task, revision: block.source.revision, select: block.source.select },
+          within: part,
         });
       }
       if (block.kind === "group" || block.kind === "incorporation") {

@@ -214,6 +214,7 @@ async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver
         [...document.querySelectorAll("[data-port-label]")].map((element) => ({
           label: element.getAttribute("data-port-label") ?? "",
           part: element.getAttribute("data-port-part") ?? "",
+          nested: element.hasAttribute("data-port-label-nested"),
         })));
     },
     async strip() {

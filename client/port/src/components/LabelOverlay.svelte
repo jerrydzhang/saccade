@@ -19,7 +19,9 @@
     measure,
     typed = "",
   }: {
-    chips: readonly { readonly part: string; readonly label: string }[];
+    /** `nested` (t-63): the target sits inside another labelled one;
+     * its chip is drawn outlined (labels.css). */
+    chips: readonly { readonly part: string; readonly label: string; readonly nested?: boolean }[];
     measure: PartMeasure;
     /** The label keystrokes typed so far: each chip shows them marked
      * (the prototype's hintKey span.typed). */
@@ -44,6 +46,8 @@
     return release;
   });
 
+  const nested = $derived(new Set(chips.filter((chip) => chip.nested === true).map((chip) => chip.part)));
+
   const placements = $derived.by(() => {
     void laidOut;
     return chipPlacements(chips, measure);
@@ -58,6 +62,7 @@
         data-port-label={entry.label}
         data-port-part={entry.part}
         data-port-label-side={entry.side}
+        data-port-label-nested={nested.has(entry.part) ? "" : undefined}
         style="left: {entry.left}px; top: {entry.top}px"
         >{#if typed.length > 0}<span class="port-label-typed">{entry.label.slice(0, typed.length)}</span>{entry.label.slice(typed.length)}{:else}{entry.label}{/if}</span>
     {/if}

@@ -26,6 +26,15 @@
   line-height: 1;
   white-space: nowrap;
 }
+/* a nested target's chip (t-63): the same stamp outlined - its target
+ * sits inside another target labelled at the same time (a project's
+ * agent, a group's block, a ref in its paragraph); a top-level chip
+ * stays solid. Two looks only, whatever the depth. */
+.port-label-chip[data-port-label-nested] {
+  background: transparent;
+  color: var(--port-label-background);
+  box-shadow: inset 0 0 0 1.5px var(--port-label-background);
+}
 /* the anchor: a block's chip has its right edge there, centred on the
  * block's first line; an inline target's has its left edge there, in
  * the room its line reserves, centred on the line; so does a block's in

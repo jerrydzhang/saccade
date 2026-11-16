@@ -53,12 +53,12 @@ test("targets come from the model, nested included, identity is the part path", 
     ],
   } as unknown as Board;
   assert.deepEqual(
-    boardTargetsOf(board).map((t) => [t.part, t.kind]),
+    boardTargetsOf(board).map((t) => [t.part, t.kind, t.within]),
     [
-      ["/content/0", "text"],
-      ["/content/1", "group"],
-      ["/content/1/content/0", "text"],
-      ["/content/1/content/1", "figure"],
+      ["/content/0", "text", undefined],
+      ["/content/1", "group", undefined],
+      ["/content/1/content/0", "text", "/content/1"],
+      ["/content/1/content/1", "figure", "/content/1"],
     ],
   );
 });
@@ -112,6 +112,28 @@ test("invisible targets get no labels: existence is never visibility", () => {
   assert.equal(step?.kind, "consume");
   assert.equal(session.view(), null);
   assert.ok(!events.some((event) => event.startsWith("selected:")), "nothing selected");
+});
+
+test("t-63: a label is nested when its target sits inside another labelled target", () => {
+  const targets: SelectableTarget[] = [
+    { part: "rail/project/saccade", kind: "project", text: "saccade" },
+    { part: "rail/agent/saccade/i-3", kind: "agent", text: "theory", within: "rail/project/saccade" },
+    { part: "rail/terminal/t7q", kind: "agent", text: "pi run" },
+  ];
+  const all = harness(targets, () => true);
+  all.session.enter();
+  assert.deepEqual(
+    all.session.view()?.labels.map((l) => [l.part, l.nested]),
+    [
+      ["rail/project/saccade", false],
+      ["rail/agent/saccade/i-3", true],
+      ["rail/terminal/t7q", false],
+    ],
+  );
+  // the container scrolled away: one level on screen, every chip solid
+  const alone = harness(targets, (part) => part !== "rail/project/saccade");
+  alone.session.enter();
+  assert.deepEqual(alone.session.view()?.labels.map((l) => l.nested), [false, false]);
 });
 
 test("enter is a no-op with nothing visible; escape exits without selecting", () => {

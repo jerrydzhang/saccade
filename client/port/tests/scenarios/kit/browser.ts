@@ -115,6 +115,7 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       return [...portWindow().document.querySelectorAll("[data-port-label]")].map((element) => ({
         label: element.getAttribute("data-port-label") ?? "",
         part: element.getAttribute("data-port-part") ?? "",
+        nested: element.hasAttribute("data-port-label-nested"),
       }));
     },
     async strip() {
