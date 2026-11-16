@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::attempts::AsReceived;
 use crate::db::{self, ExecuteFail, StoredRecord};
@@ -12,23 +12,13 @@ use crate::store::{Context, RecordId, Tier, World};
 use crate::{Command, MessageId, Reject};
 
 use super::fail::{ApiFail, api_failure, execute_failure_response};
+use super::message_wire::{
+    MailboxEndpoint, MailboxMessage, MailboxReply, MessageFacts, MessageSendRequest,
+    SendMessageReply, SubmissionFacts,
+};
 use super::state::{AppState, ReadFail, ServerState, Snapshot};
-use super::wire::{WireContext, WireTier};
+use super::wire::WireTier;
 
-#[derive(Deserialize)]
-struct MessageSendRequest {
-    context: WireContext,
-    /// The recipient's public number, the human-facing i-N - the same
-    /// token every envelope and contact names
-    to: usize,
-    #[serde(default)]
-    reply_to: Option<usize>,
-    #[serde(default)]
-    task: Option<usize>,
-    body: crate::Prose,
-    #[serde(default)]
-    client: Option<String>,
-}
 // -- the send path at the sole writer -------------------------------------
 
 /// One send's submission attempt at the sole writer, after its record
@@ -48,16 +38,26 @@ pub(super) enum SubmitOutcome {
 impl SubmitOutcome {
     /// The reply face's summary: the state plus, on refusal, the
     /// evidence.
-    pub(super) fn json(&self) -> Value {
+    pub(super) fn facts(&self) -> SubmissionFacts {
         match self {
-            SubmitOutcome::Submitted => json!({"state": "submitted"}),
-            SubmitOutcome::Unrecorded => json!({
-                "state": "unrecorded",
-                "detail": "the host accepted the submission but its outcome record could not land; the message reads pending",
-            }),
-            SubmitOutcome::Refused { code, detail } => {
-                json!({"state": "refused", "code": code, "detail": detail})
-            }
+            SubmitOutcome::Submitted => SubmissionFacts {
+                state: "submitted".into(),
+                code: None,
+                detail: None,
+            },
+            SubmitOutcome::Unrecorded => SubmissionFacts {
+                state: "unrecorded".into(),
+                code: None,
+                detail: Some(
+                    "the host accepted the submission but its outcome record could not land; the message reads pending"
+                        .into(),
+                ),
+            },
+            SubmitOutcome::Refused { code, detail } => SubmissionFacts {
+                state: "refused".into(),
+                code: Some((*code).to_string()),
+                detail: Some(detail.clone()),
+            },
         }
     }
 }
@@ -221,7 +221,10 @@ pub(super) fn send_operation(
 
 /// The message facts both send faces reply with: the birth position,
 /// the dense m-N, and the sender's resolved identity.
-pub(super) fn message_facts(app: &AppState, stored: &[StoredRecord]) -> (usize, Value, Value) {
+pub(super) fn message_facts(
+    app: &AppState,
+    stored: &[StoredRecord],
+) -> (MessageFacts, MessageFacts) {
     let sent = stored.first().expect("a message lands its one record").seq;
     let numbers = app
         .snapshot()
@@ -231,16 +234,15 @@ pub(super) fn message_facts(app: &AppState, stored: &[StoredRecord]) -> (usize, 
         .messages
         .get(&crate::MessageId(RecordId(sent)))
         .expect("the landed message folds in");
-    let num = numbers.message_num(crate::MessageId(RecordId(sent)));
-    let message = json!({
-        "seq": sent,
-        "num": num,
-    });
-    let from = json!({
-        "seq": mctx.message.from.0 .0,
-        "num": numbers.incarnation_num(mctx.message.from),
-    });
-    (sent, message, from)
+    let message = MessageFacts {
+        seq: sent,
+        num: numbers.message_num(crate::MessageId(RecordId(sent))),
+    };
+    let from = MessageFacts {
+        seq: mctx.message.from.0.0,
+        num: numbers.incarnation_num(mctx.message.from),
+    };
+    (message, from)
 }
 pub(super) async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
     let raw = String::from_utf8_lossy(&body).into_owned();
@@ -317,18 +319,21 @@ pub(super) async fn message_send(State(app): State<AppState>, body: Bytes) -> Re
     .expect("the send operation does not panic");
     match outcome {
         Ok((stored, submission)) => {
-            let (_, message, from) = message_facts(&app, &stored);
+            let (message, from) = message_facts(&app, &stored);
             match submission {
-                SubmitOutcome::Submitted | SubmitOutcome::Unrecorded => (
-                    StatusCode::OK,
-                    Json(json!({
-                        "records": stored,
-                        "message": message,
-                        "from": from,
-                        "submission": submission.json(),
-                    })),
-                )
-                    .into_response(),
+                SubmitOutcome::Submitted | SubmitOutcome::Unrecorded => {
+                    let reply = SendMessageReply {
+                        records: stored,
+                        message,
+                        from,
+                        submission: Some(submission.facts()),
+                    };
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+                    )
+                        .into_response()
+                }
                 SubmitOutcome::Refused { code, detail } => (
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -350,40 +355,45 @@ pub(super) struct MailboxQuery {
     incarnation: usize,
 }
 
-/// The mailbox JSON: the reader's mail in birth order, any state, both
-/// directions, with the log's cursor.
-fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> Value {
+/// The mailbox read: the reader's mail in birth order, any state,
+/// both directions, with the log's cursor.
+fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> MailboxReply {
     let world = &snapshot.world;
-    let messages: Vec<Value> = world
+    let messages: Vec<MailboxMessage> = world
         .messages
         .iter()
         .filter(|(_, mctx)| mctx.message.to == id || mctx.message.from == id)
         .map(|(mid, mctx)| {
             let sender = &mctx.message.from;
-            json!({
-                "seq": mid.0 .0,
-                "num": world.message_num(*mid),
-                "from": {
-                    "seq": sender.0 .0,
-                    "num": world.incarnation_num(*sender),
-                    "actor": mctx.actor.as_str(),
+            MailboxMessage {
+                seq: mid.0.0,
+                num: world.message_num(*mid),
+                from: MailboxEndpoint {
+                    seq: sender.0.0,
+                    num: world.incarnation_num(*sender),
+                    actor: Some(mctx.actor.as_str().to_string()),
                 },
-                "to": {
-                    "seq": mctx.message.to.0 .0,
-                    "num": world.incarnation_num(mctx.message.to),
+                to: MailboxEndpoint {
+                    seq: mctx.message.to.0.0,
+                    num: world.incarnation_num(mctx.message.to),
+                    actor: None,
                 },
-                "reply_to": mctx.message.reply_to.map(|r| world.message_num(r)),
-                "task": mctx.message.task.map(|t| t.0),
-                "state": match mctx.state {
+                reply_to: mctx.message.reply_to.and_then(|r| world.message_num(r)),
+                task: mctx.message.task.map(|t| t.0),
+                state: match mctx.state {
                     crate::MessageState::Pending => "pending",
                     crate::MessageState::Submitted => "submitted",
-                },
-                "body": mctx.message.body.as_str(),
-                "born_at": mctx.born_at,
-            })
+                }
+                .to_string(),
+                body: mctx.message.body.as_str().to_string(),
+                born_at: mctx.born_at,
+            }
         })
         .collect();
-    json!({ "messages": messages, "cursor": snapshot.rows.last().map(|r| r.seq) })
+    MailboxReply {
+        messages,
+        cursor: snapshot.rows.last().map(|r| r.seq),
+    }
 }
 
 /// The descriptive history read: a reader's own mail, in birth order,
@@ -413,5 +423,12 @@ pub(super) async fn messages_history(
     if !snapshot.world.incarnations.contains_key(&id) {
         return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
     }
-    (StatusCode::OK, Json(mailbox_view(&snapshot, id))).into_response()
+    (
+        StatusCode::OK,
+        Json(
+            serde_json::to_value(mailbox_view(&snapshot, id))
+                .expect("the mailbox view is plain data"),
+        ),
+    )
+        .into_response()
 }

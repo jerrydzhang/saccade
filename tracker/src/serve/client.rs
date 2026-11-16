@@ -4,8 +4,21 @@
 use crate::Command;
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
+use crate::serve::incarnation_wire::{
+    AttachRequest, IncarnationAddressRequest, IncarnationRegisterRequest,
+};
+use crate::serve::message_wire::{MailboxReply, MessageSendRequest};
+use crate::serve::workspace_wire::{CleanRequest, CreateRequest};
 use crate::store::{Context, Tier};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+// the replies the CLI reads, one definition shared with the server's
+// doors (t-60 2.4): the types live beside the doors' requests
+pub use crate::serve::incarnation_wire::AttachReply;
+pub use crate::serve::message_wire::{
+    MailboxEndpoint, MailboxMessage, MessageFacts, SendMessageReply, SubmissionFacts,
+};
+pub use crate::serve::workspace_wire::{CleanReply, CreateReply, WorkspaceBirth};
 
 #[derive(Debug)]
 pub enum ClientFail {
@@ -370,13 +383,13 @@ pub fn handshake(url: &str) {
 fn post_json<T: serde::de::DeserializeOwned>(
     url: &str,
     path: &str,
-    body: serde_json::Value,
+    request: &impl serde::Serialize,
 ) -> Result<T, ClientFail> {
     let mut response = ureq::post(&format!("{url}{path}"))
         .config()
         .http_status_as_error(false)
         .build()
-        .send_json(body)
+        .send_json(serde_json::to_value(request).expect("the request is plain data"))
         .map_err(|_| ClientFail::ServerUnreachable {
             url: url.to_string(),
         })?;
@@ -400,12 +413,16 @@ fn post_json<T: serde::de::DeserializeOwned>(
 
 /// A POST whose 200 reply carries no body worth reading: the door
 /// cares that the record landed, and failures surface by code.
-fn post_json_unit(url: &str, path: &str, body: serde_json::Value) -> Result<(), ClientFail> {
+fn post_json_unit(
+    url: &str,
+    path: &str,
+    request: &impl serde::Serialize,
+) -> Result<(), ClientFail> {
     let mut response = ureq::post(&format!("{url}{path}"))
         .config()
         .http_status_as_error(false)
         .build()
-        .send_json(body)
+        .send_json(serde_json::to_value(request).expect("the request is plain data"))
         .map_err(|_| ClientFail::ServerUnreachable {
             url: url.to_string(),
         })?;
@@ -481,17 +498,6 @@ fn bound(detail: &str) -> String {
 
 // -- the native integration's client half -------------------------------
 
-/// What the native integration learns when its session attaches.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AttachReply {
-    pub registered: bool,
-    /// The birth record position: the machine identity channel
-    pub incarnation: usize,
-    /// The incarnation's dense public number, the human-facing i-N
-    pub num: usize,
-    pub records: Vec<StoredRecord>,
-}
-
 /// Attach a native session: an existing exact native session resolves
 /// its incarnation, a fresh one registers - the machinery's own act.
 pub fn attach(
@@ -502,36 +508,35 @@ pub fn attach(
     post_json(
         url,
         "/api/v1/native/attach",
-        serde_json::json!({
-            "native_id": native_id,
-            "session_file": session_file.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
+        &AttachRequest {
+            native_id: native_request_id(native_id)?,
+            session_file: native_session_file(session_file)?,
+            harness: crate::Harness::default(),
+            terminal: None,
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
     )
 }
 
-/// One sent message's facts: its stable birth position and the dense
-/// m-N, plus the sender's resolved identity.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MessageFacts {
-    pub seq: usize,
-    pub num: Option<usize>,
+/// The typed request pointers are validated where they are built: a
+/// native id or locator this binary cannot build refuses here with
+/// the code the door's parse refusal carries, never a guessed POST.
+fn native_request_id(native_id: &str) -> Result<crate::NativeSessionId, ClientFail> {
+    crate::NativeSessionId::new(native_id.to_string()).map_err(|e| ClientFail::Refused {
+        code: "malformed_request".into(),
+        detail: format!("{e:?}"),
+        message: None,
+    })
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SendMessageReply {
-    pub records: Vec<StoredRecord>,
-    pub message: MessageFacts,
-    pub from: MessageFacts,
-    /// The native-submission attempt's truth; absent only from a
-    /// pre-attempt server, never from this wire's own success reply
-    #[serde(default)]
-    pub submission: Option<SubmissionFacts>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SubmissionFacts {
-    pub state: String,
+fn native_session_file(
+    session_file: &std::path::Path,
+) -> Result<crate::SessionLocator, ClientFail> {
+    crate::SessionLocator::new(session_file.to_path_buf()).map_err(|e| ClientFail::Refused {
+        code: "malformed_request".into(),
+        detail: format!("{e:?}"),
+        message: None,
+    })
 }
 
 /// Send a durable addressed message from the declared incarnation;
@@ -547,54 +552,20 @@ pub fn send_message(
     post_json(
         url,
         "/api/v1/messages/send",
-        serde_json::json!({
-            "context": {
-                "actor": context.actor.as_str(),
-                "tier": match context.tier {
-                    Tier::Human => "human",
-                    Tier::Agent => "agent",
-                    Tier::System => unreachable!("the API has no system tier"),
-                },
-                "scope": context.scope,
-            },
-            "to": to,
-            "reply_to": reply_to,
-            "task": task,
-            "body": body.as_str(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
+        &MessageSendRequest {
+            context: wire_context(context),
+            to,
+            reply_to,
+            task,
+            body: body.clone(),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
     )
-}
-
-/// One message as the mailbox read returns it: the stable birth
-/// position, the dense endpoints, and the delivery state.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MailboxMessage {
-    pub seq: usize,
-    pub num: Option<usize>,
-    pub from: MailboxEndpoint,
-    pub to: MailboxEndpoint,
-    pub reply_to: Option<usize>,
-    pub task: Option<usize>,
-    pub state: String,
-    pub body: String,
-    pub born_at: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MailboxEndpoint {
-    pub seq: usize,
-    pub num: Option<usize>,
-    pub actor: String,
 }
 
 /// The reader's own mail, in birth order, any state: a read the
 /// integration polls, never a subscription the tracker keeps.
 pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, ClientFail> {
-    #[derive(Deserialize)]
-    struct MailboxBody {
-        messages: Vec<MailboxMessage>,
-    }
     let mut response = ureq::get(&format!("{url}/api/v1/messages?incarnation={incarnation}"))
         .config()
         .http_status_as_error(false)
@@ -613,7 +584,7 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
     if status != 200 {
         return Err(error_of(status, &text));
     }
-    let body: MailboxBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+    let body: MailboxReply = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
         message: None,
@@ -622,23 +593,6 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
 }
 
 // -- the task-free workspace controller's client half --------------------
-
-/// What a creation provisioned: actual Git facts and the birth record
-/// carrying them - the workspace's identity, never a numbering.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WorkspaceBirth {
-    pub seq: usize,
-    pub base: String,
-    pub branch: String,
-    pub path: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CreateReply {
-    pub created: bool,
-    pub workspace: WorkspaceBirth,
-    pub records: Vec<StoredRecord>,
-}
 
 /// Provision a NEW task-free workspace through the server's Git
 /// effects; the birth lands with the facts the effect produced.
@@ -650,34 +604,25 @@ pub fn create_workspace(
     post_json(
         url,
         "/api/v1/workspace/create",
-        serde_json::json!({
-            "label": label,
-            "base": base,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
+        &CreateRequest {
+            label: label.map(str::to_string),
+            base: base.map(str::to_string),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
     )
 }
 
 /// The lifecycle controller's client half: clean names the
 /// exact recorded workspace path; the server runs the ordered effects
 /// and lands the completed facts itself.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CleanReply {
-    pub cleaned: bool,
-    pub already_cleaned: bool,
-    pub workspace: WorkspaceBirth,
-    pub verified: Vec<String>,
-    pub records: Vec<StoredRecord>,
-}
-
 pub fn clean_workspace(url: &str, path: &std::path::Path) -> Result<CleanReply, ClientFail> {
     post_json(
         url,
         "/api/v1/workspace/clean",
-        serde_json::json!({
-            "path": path.display().to_string(),
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
+        &CleanRequest {
+            path: path.display().to_string(),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
     )
 }
 
@@ -694,19 +639,18 @@ pub fn register_incarnation(
     harness: crate::Harness,
     name: Option<&crate::IncarnationName>,
 ) -> Result<(), ClientFail> {
-    let mut body = serde_json::json!({
-        "native_id": native_id,
-        "address": address,
-        "adopted": adopted,
-        "harness": harness,
-        "client": env!("CARGO_PKG_VERSION"),
-    });
-    // the name rides only when the launch carries one, so a server
-    // that predates naming still answers an unnamed launch
-    if let Some(name) = name {
-        body["name"] = serde_json::json!(name);
-    }
-    post_json_unit(url, "/api/v1/incarnations/register", body)
+    post_json_unit(
+        url,
+        "/api/v1/incarnations/register",
+        &IncarnationRegisterRequest {
+            native_id: native_request_id(native_id)?,
+            address: address.to_string(),
+            adopted,
+            harness,
+            name: name.cloned(),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
+    )
 }
 
 /// The association's address moves with a relaunch: the same
@@ -720,12 +664,12 @@ pub fn assign_host_address(
     post_json_unit(
         url,
         "/api/v1/incarnations/address",
-        serde_json::json!({
-            "incarnation": incarnation,
-            "address": address,
-            "adopted": adopted,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
+        &IncarnationAddressRequest {
+            incarnation,
+            address: address.to_string(),
+            adopted,
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
     )
 }
 

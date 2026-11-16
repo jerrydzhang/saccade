@@ -1,8 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::Response;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::Command;
 use crate::db::{self, StoredRecord};
@@ -10,48 +8,13 @@ use crate::store::{Context, RecordId, World};
 
 use super::door::{door, ready};
 use super::fail::{ApiFail, api_failure};
+use super::incarnation_wire::{
+    AttachReply, AttachRequest, IncarnationAddressReply, IncarnationAddressRequest,
+    IncarnationRegisterReply, IncarnationRegisterRequest, PresentedTerminal,
+};
 use super::state::{AppState, Inner, ServerState};
 
 // -- the native integration's doors -------------------------------------
-
-/// What the integration learns when its session attaches.
-#[derive(Serialize)]
-pub struct AttachReply {
-    /// Whether this call birthed the registration; an existing exact
-    /// native session resolves, never a second incarnation
-    pub registered: bool,
-    /// The birth record position: the machine identity channel
-    pub incarnation: usize,
-    /// The incarnation's dense public number, the human-facing i-N
-    pub num: usize,
-    pub records: Vec<StoredRecord>,
-}
-
-/// The attaching process's presented terminal: the host-injected
-/// self-address of the terminal it runs in, with launched-versus-
-/// adopted provenance from the door's session-scoped launch word.
-/// Machine-supplied disclosure at the contract boundary - honest
-/// deployment evidence of where the process runs, never proof of
-/// which launch spawned it; identity rides the exact resolution.
-#[derive(Deserialize)]
-struct PresentedTerminal {
-    address: String,
-    adopted: bool,
-}
-
-#[derive(Deserialize)]
-struct AttachRequest {
-    native_id: crate::NativeSessionId,
-    session_file: crate::SessionLocator,
-    /// The harness the attaching session runs under; the pi
-    /// extension sends none and folds as pi.
-    #[serde(default)]
-    harness: crate::Harness,
-    #[serde(default)]
-    terminal: Option<PresentedTerminal>,
-    #[serde(default)]
-    client: Option<String>,
-}
 
 /// Move the recorded (address, adopted) pair to what the attaching
 /// process presents, through the association's own command; an equal
@@ -207,27 +170,6 @@ fn attach_operation(
     })
 }
 
-/// The launch door's own birth: the pre-allocated native id and the
-/// opaque host address, recorded before pi's first save - the
-/// association exists at launch time, no correlation token, no wait.
-#[derive(Deserialize)]
-struct IncarnationRegisterRequest {
-    native_id: crate::NativeSessionId,
-    address: String,
-    /// The address kind: the here door adopts the caller terminal,
-    /// every other birth launches a new terminal.
-    #[serde(default)]
-    adopted: bool,
-    /// The harness the fresh session runs under; absent folds as pi.
-    #[serde(default)]
-    harness: crate::Harness,
-    /// The launch's name, recorded as the birth's first naming.
-    #[serde(default)]
-    name: Option<crate::IncarnationName>,
-    #[serde(default)]
-    client: Option<String>,
-}
-
 pub(super) async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Response {
     door(
         &app,
@@ -244,11 +186,11 @@ pub(super) async fn incarnation_register(State(app): State<AppState>, body: Byte
                 request.harness,
                 request.name,
             )?;
-            Ok(json!({
-                "registered": registered,
-                "incarnation": incarnation,
-                "records": records,
-            }))
+            Ok(IncarnationRegisterReply {
+                incarnation,
+                records,
+                registered,
+            })
         },
     )
 }
@@ -334,18 +276,6 @@ fn register_or_recover(
     }
 }
 
-/// The association's address moves with a relaunch: the same
-/// incarnation, another terminal.
-#[derive(Deserialize)]
-struct IncarnationAddressRequest {
-    incarnation: usize,
-    address: String,
-    #[serde(default)]
-    adopted: bool,
-    #[serde(default)]
-    client: Option<String>,
-}
-
 pub(super) async fn incarnation_address(State(app): State<AppState>, body: Bytes) -> Response {
     door(
         &app,
@@ -366,7 +296,10 @@ pub(super) async fn incarnation_address(State(app): State<AppState>, body: Bytes
                 db::now_epoch(),
             )
             .map_err(ApiFail::from)?;
-            Ok(json!({"assigned": true, "records": records}))
+            Ok(IncarnationAddressReply {
+                assigned: true,
+                records,
+            })
         },
     )
 }

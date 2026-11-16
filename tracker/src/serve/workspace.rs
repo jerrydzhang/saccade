@@ -4,9 +4,8 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
-use serde::{Deserialize, Serialize};
 
-use crate::db::{self, ExecuteFail, StoredRecord};
+use crate::db::{self, ExecuteFail};
 use crate::events::Event;
 use crate::store::Context;
 use crate::workspace;
@@ -14,39 +13,9 @@ use crate::workspace;
 use super::door::{door, ready};
 use super::fail::ApiFail;
 use super::state::{AppState, Inner, ServerState};
+use super::workspace_wire::{CleanReply, CleanRequest, CreateReply, CreateRequest, WorkspaceBirth};
 
 // -- the task-free workspace controller ----------------------------------
-
-/// What a creation provisioned: actual Git facts and the birth record
-/// that carries them - the workspace's identity, never a numbering.
-#[derive(Serialize)]
-pub struct WorkspaceBirth {
-    /// The birth record's position: the workspace's stable identity
-    pub seq: usize,
-    pub base: String,
-    pub branch: String,
-    pub path: String,
-}
-
-#[derive(Serialize)]
-pub struct CreateReply {
-    pub created: bool,
-    pub workspace: WorkspaceBirth,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct CreateRequest {
-    /// The descriptive label of the c-366 name: optional, falling
-    /// back to workspace-<token>
-    #[serde(default)]
-    label: Option<String>,
-    /// The canonical base: a ref, defaulting to the primary HEAD
-    #[serde(default)]
-    base: Option<String>,
-    #[serde(default)]
-    client: Option<String>,
-}
 
 /// Provision through the real Git provisioner under the writer lock,
 /// then land the birth with the facts the effect actually produced.
@@ -122,50 +91,6 @@ pub(super) async fn workspace_create(State(app): State<AppState>, body: Bytes) -
 // verification, git worktree remove (branch retained), checkout and
 // worktree absence verification, and the host's visible absence,
 // and only then lands the Cleaned fact.
-
-/// The recorded facts of the lifecycle's target: the birth identity
-/// and what the birth carried.
-#[derive(Serialize)]
-pub struct LifecycleWorkspace {
-    seq: usize,
-    base: String,
-    branch: String,
-    path: String,
-}
-
-impl LifecycleWorkspace {
-    fn of(facts: crate::store::WorkspaceFacts) -> Self {
-        LifecycleWorkspace {
-            seq: facts.birth.0,
-            base: facts.base.as_str().to_string(),
-            branch: facts.branch.as_str().to_string(),
-            path: facts.worktree.as_path().display().to_string(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct CleanReply {
-    /// A Cleaned fact landed with this call
-    pub cleaned: bool,
-    /// Recorded cleaned and every verified resource already absent:
-    /// idempotent success, no duplicate transition
-    pub already_cleaned: bool,
-    pub workspace: LifecycleWorkspace,
-    /// The honest step list: what the door asked, what it verified,
-    /// and any host ask that failed before the list confirmed closure
-    pub verified: Vec<String>,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct CleanRequest {
-    /// The exact recorded workspace path; never inferred from a task
-    /// or incarnation
-    path: String,
-    #[serde(default)]
-    client: Option<String>,
-}
 
 /// The world fold plus the canonical target resolution every lifecycle
 /// door shares: exact recorded workspace births at this path, primary
@@ -310,7 +235,7 @@ fn clean_operation(
         return Ok(CleanReply {
             cleaned: false,
             already_cleaned: true,
-            workspace: LifecycleWorkspace::of(facts),
+            workspace: WorkspaceBirth::of(facts),
             verified,
             records: Vec::new(),
         });
@@ -484,7 +409,7 @@ fn clean_operation(
         Ok(records) => Ok(CleanReply {
             cleaned: true,
             already_cleaned: false,
-            workspace: LifecycleWorkspace::of(facts),
+            workspace: WorkspaceBirth::of(facts),
             verified,
             records,
         }),
@@ -494,7 +419,7 @@ fn clean_operation(
             Ok(CleanReply {
                 cleaned: false,
                 already_cleaned: true,
-                workspace: LifecycleWorkspace::of(facts),
+                workspace: WorkspaceBirth::of(facts),
                 verified,
                 records: Vec::new(),
             })

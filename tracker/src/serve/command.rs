@@ -108,11 +108,11 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         .expect("the send operation does not panic");
         return match outcome {
             Ok((stored, submission)) => {
-                let (_, message, from) = message_facts(&app, &stored);
+                let (message, from) = message_facts(&app, &stored);
                 let mut reply = json!({"records": &stored});
-                reply["message"] = message;
-                reply["from"] = from;
-                reply["submission"] = submission.json();
+                reply["message"] = json!(message);
+                reply["from"] = json!(from);
+                reply["submission"] = json!(submission.facts());
                 (StatusCode::OK, Json(reply)).into_response()
             }
             Err(e) => execute_failure_response(&app, e, &command),
