@@ -34,6 +34,11 @@ just test
 just viewer-check
 ```
 
+The recipes that run the frontend's tools depend on `just client-deps`,
+which runs `npm ci` in `client/` whenever `package-lock.json` is newer
+than the installed copy, so a merge that adds a dependency never leaves
+a checkout or worktree on a stale install.
+
 The native test project runs only through the gated session lane:
 `just app-test-native` (below, and `port/tests/scenarios/README.md`).
 
