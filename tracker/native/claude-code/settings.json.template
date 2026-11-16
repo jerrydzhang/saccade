@@ -38,8 +38,5 @@
         ]
       }
     ]
-  },
-  "permissions": {
-    "additionalDirectories": ["@workspaceRoot@"]
   }
 }

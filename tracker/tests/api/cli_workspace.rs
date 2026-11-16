@@ -2802,3 +2802,78 @@ async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
         "the moved branch went at its new tip"
     );
 }
+
+/// The list's json face names the repository's workspace root: the
+/// worktrees home beside the tracker's own db, derived locally by the
+/// same composition provisioning uses (`worktree_home` over the db
+/// path), no server round-trip in the derivation. A provisioned
+/// workspace stands under the named root; the text face carries no
+/// trace of the field.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_list_json_names_the_repository_s_workspace_root() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("ws-root");
+    let dir = db.dir.clone();
+    let (root, _first, _head) = scratch_repo(&dir);
+    let url = spawn_workspace_server(&db, &root).await;
+
+    let run = |args: &[&str]| {
+        let envs = [("SACCADE_ACTOR", "root-bot".to_string())];
+        let (ok, out, err, timed_out) = bounded_sac(bin, args, &envs);
+        assert!(!timed_out, "sac {args:?} ran past its bound: {out}{err}");
+        (ok, out, err)
+    };
+    let local = |args: &[&str]| {
+        let mut full = vec![
+            "--db".to_string(),
+            db.db.display().to_string(),
+            "--repo".to_string(),
+            root.display().to_string(),
+        ];
+        full.extend(args.iter().map(|s| s.to_string()));
+        let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+        run(&refs)
+    };
+
+    // the home comes first: the workspace door provisions under it
+    let expected = dir.join("worktrees");
+    let (ok, out, err) = run(&[
+        "--server",
+        &url,
+        "--repo",
+        root.to_str().unwrap(),
+        "--json",
+        "workspace",
+        "new",
+        "root-probe",
+    ]);
+    assert!(ok, "workspace new refused: {out}{err}");
+    let birth = json_of(&out)["workspace"].clone();
+    let path = birth["path"].as_str().unwrap().to_string();
+    let branch = birth["branch"].as_str().unwrap().to_string();
+    assert!(
+        Path::new(&path).starts_with(&expected),
+        "{path} stands under the home the list must name"
+    );
+
+    // the json face: the root field, additive, beside the rows - and
+    // the standing workspace's path confirms the derivation is the
+    // home provisioning itself cuts into
+    let (ok, out, err) = local(&["workspace", "list", "--json"]);
+    assert!(ok, "list refused: {out}{err}");
+    let listing = json_of(&out);
+    assert_eq!(
+        listing["root"],
+        json!(expected.display().to_string()),
+        "{out}"
+    );
+    let rows = listing["workspaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{out}");
+    assert_eq!(rows[0]["branch"], json!(branch), "{out}");
+
+    // the text face: unchanged, the home named nowhere on it
+    let (ok, out, err) = local(&["workspace", "list"]);
+    assert!(ok, "list refused: {out}{err}");
+    assert!(!out.contains(&expected.display().to_string()), "{out}");
+    assert_eq!(out.lines().count(), 2, "{out}");
+}

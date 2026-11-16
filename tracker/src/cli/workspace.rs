@@ -1,6 +1,6 @@
 use super::launch::provision_new;
 use super::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use saccade::host::workspace::{ListRow, MissingPiece};
 use saccade::serve::client::CleanReply;
@@ -67,25 +67,59 @@ pub(super) fn workspace_door(
 /// read like `sac list`: the fold and git only, over either
 /// destination shape, no server door. A missing worktree or branch is
 /// a status of its own, never a crash; any other git plumbing
-/// failure refuses the read.
+/// failure refuses the read. The json face names the repository's
+/// workspace root (additive, t-60 4.1i); the text face carries no
+/// trace of it.
 pub(super) fn workspace_list_door(cli: &Cli, destination: &Destination) -> Result<String, Fail> {
     let loadout = loadout_of(destination)?;
     let world = match loadout.state {
         LoadState::Full(world) => world,
         LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
     };
-    let root = resolve_repo(cli)?;
-    let rows = saccade::workspace::workspace_list(&world, &root)?;
+    let repo = resolve_repo(cli)?;
+    let rows = saccade::workspace::workspace_list(&world, &repo)?;
     let cursor = loadout.rows.last().map(|r| r.seq);
     if cli.json {
+        let workspace_root = workspace_root_of(cli, &repo, &rows);
         let rows: Vec<serde_json::Value> = rows.iter().map(list_row_value).collect();
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "root": workspace_root,
             "workspaces": rows,
             "cursor": cursor,
         }))
         .expect("rows are plain data"));
     }
     Ok(render_list_table(&rows))
+}
+
+/// The repository's workspace root: the worktrees home beside the
+/// tracker's own db. The standing births know it best - their recorded
+/// paths share the parent provisioning itself cut into - and with no
+/// birth standing the answer falls to the same composition
+/// provisioning uses (`worktree_home` over the db path: the explicit
+/// --db, else the state-dir composition of the resolved repo), a pure
+/// path derivation, no server round-trip in it. Births that disagree
+/// on their home leave the answer to the composition too. Additive
+/// json field (t-60 4.1i); the text face carries nothing.
+fn workspace_root_of(cli: &Cli, repo: &Path, rows: &[ListRow]) -> PathBuf {
+    let mut parents = rows.iter().map(|row| {
+        row.worktree
+            .as_path()
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_path_buf()
+    });
+    if let Some(first) = parents.next()
+        && !first.as_os_str().is_empty()
+        && parents.all(|p| p == first)
+    {
+        return first;
+    }
+    let db = match &cli.db {
+        Some(db) => db.clone(),
+        None => saccade::paths::db_at(repo),
+    };
+    saccade::host::workspace::worktree_home(&db)
 }
 
 /// One row's json face: the same fields the text row carries, the

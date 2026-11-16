@@ -111,15 +111,6 @@ let
       binarySha256 = "53a0d7e219d7b0804ecba5dbc002745e89f786cc946d2de85a6470d5b2d1fb06";
     };
   };
-  # the machine posture the packaged Claude Code settings bake: this
-  # repository's own tracker workspace root, the worktrees directory
-  # beside the tracker's db the workspace door cuts into. The path is
-  # per-machine and per-tracker by construction - the state-dir slug
-  # is the tracker's own hash of the repo root - so it can never be a
-  # constant of the packages: this machine names it here, as the
-  # devenv names its serve repo below, and a moved repo or state home
-  # re-names it.
-  workspaceRootPin = "/home/jerry/.local/state/saccade/saccade-f1f3b490/worktrees";
   # the package's own version line, read straight from Cargo.toml:
   # the hook's expected server version is generated, never hardcoded
   cargoVersion =
@@ -205,13 +196,10 @@ let
       set -o errexit
       export attachHook="${attachHook}"
       export worktreeHook="${worktreeHook}"
-      export workspaceRoot="${workspaceRootPin}"
       substituteAll ${../tracker/native/claude-code/settings.json.template} $out
       # the packaged file must parse as settings: a template that no
-      # longer carries the hook wire or the workspace root refuses the
-      # build here
+      # longer carries the hook wire refuses the build here
       ${pkgs.jq}/bin/jq -e .hooks.SessionStart $out >/dev/null
-      ${pkgs.jq}/bin/jq -e .permissions.additionalDirectories $out >/dev/null
     '';
   # the composed harness: the pinned binary with the packaged
   # per-launch settings injected ahead of the caller's argv, which
