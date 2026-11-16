@@ -2190,3 +2190,360 @@ async fn a_dirty_refusal_still_refuses_before_any_branch_act() {
     );
     assert!(!local_branch_stands(&rig.repo, &branch));
 }
+
+/// The sweep previews through the CLI face: one line per standing
+/// workspace in birth order, exactly the sketch's shape - the merged
+/// and clean row reads cleaned, everything else reads left with its
+/// own reason (the dirt, the unmerged truth, the missing pieces). A
+/// preview acts on nothing: no clean asked, nothing records, every
+/// branch and worktree stands.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sweep_previews_the_sketch_s_lines_and_acts_on_nothing() {
+    let (rig, _serve, _scratch) = clean_rig("ws-sweep-preview").await;
+    let root = PathBuf::from(&rig.repo);
+
+    // the merged, clean row: one commit, ff-merged into main
+    let (merged_seq, merged_branch, merged_path) = rig.provision("sweep-merged", None);
+    commit_in(Path::new(&merged_path), "a.txt", "merged work\n");
+    sh(&root, &["merge", "-q", "--ff-only", &merged_branch]);
+
+    // the unmerged row and the dirty row, both plain commits
+    let (unmerged_seq, unmerged_branch, unmerged_path) = rig.provision("sweep-unmerged", None);
+    commit_in(Path::new(&unmerged_path), "u.txt", "unmerged work\n");
+    let (dirty_seq, dirty_branch, dirty_path) = rig.provision("sweep-dirty", None);
+    commit_in(Path::new(&dirty_path), "d.txt", "dirty work\n");
+    std::fs::write(Path::new(&dirty_path).join("untracked.txt"), "kept\n").unwrap();
+
+    // merged but dirty: the rule says merged, the dirt says left
+    let (mdirty_seq, mdirty_branch, mdirty_path) = rig.provision("sweep-mdirty", None);
+    commit_in(Path::new(&mdirty_path), "m.txt", "merged dirty work\n");
+    sh(&root, &["merge", "-q", "--ff-only", &mdirty_branch]);
+    std::fs::write(Path::new(&mdirty_path).join("untracked.txt"), "kept\n").unwrap();
+
+    // the gone worktree: merged, its directory since removed by hand
+    let (gone_seq, gone_branch, gone_path) = rig.provision("sweep-gone", None);
+    commit_in(Path::new(&gone_path), "g.txt", "gone work\n");
+    sh(&root, &["merge", "-q", "--ff-only", &gone_branch]);
+    std::fs::remove_dir_all(&gone_path).unwrap();
+
+    // the lost branch: the checkout detaches, then the branch goes
+    let (lost_seq, lost_branch, lost_path) = rig.provision("sweep-lost", None);
+    sh(Path::new(&lost_path), &["checkout", "-q", "--detach"]);
+    sh(&root, &["branch", "-D", &lost_branch]);
+
+    // the preview text face: the sketch's shape, birth order, every
+    // reason the rows carry
+    let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
+    assert!(ok, "the sweep preview refused: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 6, "{out}");
+    let line_at = |at: usize| lines[at].to_string();
+    assert!(
+        line_at(0).starts_with(&format!("cleaned w-{merged_seq}  "))
+            && line_at(0).contains(&merged_branch)
+            && line_at(0).contains("(merged into main; worktree and branch removed)"),
+        "{out}"
+    );
+    assert!(
+        line_at(1).starts_with(&format!("left    w-{unmerged_seq}  "))
+            && line_at(1).contains("(unmerged)"),
+        "{out}"
+    );
+    assert!(
+        line_at(2).starts_with(&format!("left    w-{dirty_seq}  "))
+            && line_at(2).contains("(unmerged; dirty)"),
+        "{out}"
+    );
+    assert!(
+        line_at(3).starts_with(&format!("left    w-{mdirty_seq}  "))
+            && line_at(3).contains("(merged into main; dirty)"),
+        "{out}"
+    );
+    assert!(
+        line_at(4).starts_with(&format!("left    w-{gone_seq}  "))
+            && line_at(4).contains("(worktree missing)"),
+        "{out}"
+    );
+    assert!(
+        line_at(5).starts_with(&format!("left    w-{lost_seq}  "))
+            && line_at(5).contains("(branch missing)"),
+        "{out}"
+    );
+
+    // the preview json face: acted false, the same words per row
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", "--merged"]);
+    assert!(ok, "the sweep preview refused: {out}{err}");
+    let sweep = json_of(&out);
+    assert_eq!(sweep["acted"], json!(false), "{out}");
+    let rows = sweep["workspaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 6, "{out}");
+    let row_of = |seq: usize| {
+        rows.iter()
+            .find(|r| r["id"] == json!(format!("w-{seq}")))
+            .unwrap_or_else(|| panic!("no row w-{seq}: {out}"))
+    };
+    assert_eq!(row_of(merged_seq)["outcome"], json!("cleaned"), "{out}");
+    assert_eq!(
+        row_of(merged_seq)["reason"],
+        json!("merged into main; worktree and branch removed"),
+        "{out}"
+    );
+    assert_eq!(row_of(unmerged_seq)["outcome"], json!("left"), "{out}");
+    assert_eq!(row_of(unmerged_seq)["reason"], json!("unmerged"), "{out}");
+    assert_eq!(
+        row_of(dirty_seq)["reason"],
+        json!("unmerged; dirty"),
+        "{out}"
+    );
+    assert_eq!(
+        row_of(mdirty_seq)["reason"],
+        json!("merged into main; dirty"),
+        "{out}"
+    );
+    assert_eq!(
+        row_of(gone_seq)["reason"],
+        json!("worktree missing"),
+        "{out}"
+    );
+    assert_eq!(row_of(lost_seq)["reason"], json!("branch missing"), "{out}");
+    assert!(
+        rows.iter()
+            .all(|r| r.get("record").is_none() && r.get("code").is_none()),
+        "a preview names no record and no refusal: {out}"
+    );
+    assert!(
+        sweep["cursor"].as_u64().unwrap() >= lost_seq as u64,
+        "{out}"
+    );
+
+    // the preview acted on nothing: every branch and worktree stands,
+    // and no Cleaned fact landed
+    for branch in [
+        &merged_branch,
+        &unmerged_branch,
+        &dirty_branch,
+        &mdirty_branch,
+        &gone_branch,
+    ] {
+        assert!(
+            local_branch_stands(&rig.repo, branch),
+            "the preview deleted {branch}"
+        );
+    }
+    for path in [&unmerged_path, &dirty_path, &mdirty_path, &lost_path] {
+        assert!(Path::new(path).exists(), "the preview removed {path}");
+    }
+    let (ok, out, err) = rig.sac(&["--json", "log"]);
+    assert!(ok, "log refused: {out}{err}");
+    assert!(
+        !json_of(&out)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "workspace_cleaned"),
+        "the preview recorded"
+    );
+}
+
+/// The sweep acts only under --yes, one clean per qualifying
+/// workspace through the same door the named clean uses: the merged
+/// and clean rows record and lose worktree and branch, the unmerged
+/// row stands as left, and the named single clean keeps acting
+/// exactly as today beside the new flags. The flags themselves gate
+/// at the parser: --merged takes no path, --yes rides --merged, and
+/// the bare verb still names its target.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sweep_yes_cleans_each_qualifying_workspace_through_the_door() {
+    let (rig, _serve, _scratch) = clean_rig("ws-sweep-yes").await;
+    let root = PathBuf::from(&rig.repo);
+
+    let (m1_seq, m1_branch, m1_path) = rig.provision("sweep-act-one", None);
+    commit_in(Path::new(&m1_path), "a.txt", "one work\n");
+    sh(&root, &["merge", "-q", "--ff-only", &m1_branch]);
+    let (m2_seq, m2_branch, m2_path) = rig.provision("sweep-act-two", None);
+    commit_in(Path::new(&m2_path), "b.txt", "two work\n");
+    sh(&root, &["merge", "-q", "--ff-only", &m2_branch]);
+    let (u_seq, u_branch, u_path) = rig.provision("sweep-act-kept", None);
+    commit_in(Path::new(&u_path), "u.txt", "kept work\n");
+
+    // the parser gates: the sweep takes no path, --yes rides --merged,
+    // and the bare verb names its target
+    let (ok, _out, err) = rig.sac(&["workspace", "clean", &u_path, "--merged"]);
+    assert!(!ok, "--merged beside a path must refuse");
+    assert!(err.contains("cannot be used with"), "{err}");
+    let (ok, _out, err) = rig.sac(&["workspace", "clean", &u_path, "-y"]);
+    assert!(!ok, "-y without --merged must refuse");
+    assert!(err.contains("--merged"), "{err}");
+    let (ok, _out, err) = rig.sac(&["workspace", "clean"]);
+    assert!(!ok, "the bare clean must name its target");
+    assert!(
+        err.contains(
+            "workspace clean names a recorded workspace path, or --merged previews the sweep"
+        ),
+        "{err}"
+    );
+
+    // nothing has acted yet: the gates refused before any clean ask
+    assert!(Path::new(&u_path).exists());
+    assert!(local_branch_stands(&rig.repo, &u_branch));
+
+    // the json act face: acted true, a record per cleaned workspace,
+    // the unmerged row left with its reason
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", "--merged", "--yes"]);
+    assert!(ok, "the sweep act refused: {out}{err}");
+    let sweep = json_of(&out);
+    assert_eq!(sweep["acted"], json!(true), "{out}");
+    let rows = sweep["workspaces"].as_array().unwrap();
+    let row_of = |seq: usize| {
+        rows.iter()
+            .find(|r| r["id"] == json!(format!("w-{seq}")))
+            .unwrap_or_else(|| panic!("no row w-{seq}: {out}"))
+    };
+    assert_eq!(row_of(m1_seq)["outcome"], json!("cleaned"), "{out}");
+    assert_eq!(
+        row_of(m1_seq)["reason"],
+        json!("merged into main; worktree and branch removed"),
+        "{out}"
+    );
+    assert_eq!(row_of(m2_seq)["outcome"], json!("cleaned"), "{out}");
+    assert_eq!(row_of(u_seq)["outcome"], json!("left"), "{out}");
+    assert_eq!(row_of(u_seq)["reason"], json!("unmerged"), "{out}");
+    let m1_record = row_of(m1_seq)["record"].as_u64().unwrap();
+    let m2_record = row_of(m2_seq)["record"].as_u64().unwrap();
+    assert_ne!(m1_record, m2_record, "one clean per workspace: {out}");
+
+    // the world: each qualifying workspace cleaned through the door -
+    // worktree and branch gone, one Cleaned record each; the unmerged
+    // row untouched
+    assert!(!Path::new(&m1_path).exists(), "the first worktree went");
+    assert!(!Path::new(&m2_path).exists(), "the second worktree went");
+    assert!(!local_branch_stands(&rig.repo, &m1_branch));
+    assert!(!local_branch_stands(&rig.repo, &m2_branch));
+    assert!(Path::new(&u_path).exists());
+    assert!(local_branch_stands(&rig.repo, &u_branch));
+    let (ok, out, err) = rig.sac(&["--json", "log"]);
+    assert!(ok, "log refused: {out}{err}");
+    let log = json_of(&out);
+    let cleaned: Vec<&Value> = log["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "workspace_cleaned")
+        .collect();
+    assert_eq!(cleaned.len(), 2, "{out}");
+    assert_eq!(
+        cleaned
+            .iter()
+            .map(|r| r["payload"]["workspace"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![m1_seq as u64, m2_seq as u64],
+        "the unchanged birth-reference event, one per workspace"
+    );
+
+    // the named single clean, beside the sweep, acts exactly as today:
+    // the unmerged workspace cleans, its branch kept
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &u_path]);
+    assert!(ok, "the named clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {u_branch} kept (unmerged)")),
+        "{out}"
+    );
+    assert!(!Path::new(&u_path).exists());
+    assert!(local_branch_stands(&rig.repo, &u_branch));
+}
+
+/// The sweep survives a refusal mid-round and reports it: a workspace
+/// the list reads merged but whose branch git itself refuses to
+/// delete (its tip reached a rewrite branch, never HEAD) refuses the
+/// whole clean after the verified worktree removal - the round prints
+/// the refusal's own words as that row's outcome line and goes on to
+/// the remaining rows, ending clean.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
+    let (rig, _serve, _scratch) = clean_rig("ws-sweep-refusal").await;
+    let root = PathBuf::from(&rig.repo);
+
+    // the row before the refusal: merged into main, clean
+    let (a_seq, a_branch, a_path) = rig.provision("sweep-ref-into-main", None);
+    commit_in(Path::new(&a_path), "a.txt", "into main\n");
+    sh(&root, &["merge", "-q", "--ff-only", &a_branch]);
+
+    // the refusing row: its tip reached a rewrite branch, not main -
+    // the list reads merged into rewrite, git branch -d refuses
+    let (b_seq, b_branch, b_path) = rig.provision("sweep-ref-rewrite", None);
+    commit_in(Path::new(&b_path), "b.txt", "into rewrite\n");
+    sh(&root, &["branch", "rewrite", &b_branch]);
+
+    // the row after the refusal: unmerged, so the round must reach it
+    let (c_seq, c_branch, c_path) = rig.provision("sweep-ref-tail", None);
+    commit_in(Path::new(&c_path), "c.txt", "tail work\n");
+
+    // the act: the refusal rides as its row's outcome line, the round
+    // continues, and the command ends clean
+    let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged", "--yes"]);
+    assert!(ok, "the sweep must survive the refusal: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("cleaned w-{a_seq}  "))
+            && lines[0].contains("(merged into main; worktree and branch removed)"),
+        "{out}"
+    );
+    assert!(
+        lines[1].starts_with(&format!("refused w-{b_seq}  "))
+            && lines[1].contains("(git branch -d")
+            && lines[1].contains("not fully merged"),
+        "{out}"
+    );
+    assert!(
+        lines[2].starts_with(&format!("left    w-{c_seq}  ")) && lines[2].contains("(unmerged)"),
+        "{out}"
+    );
+
+    // the world: the row before the refusal cleaned; the refusing row
+    // stopped after the verified worktree removal - its branch stands
+    // and nothing recorded for it; the tail row untouched
+    assert!(!Path::new(&a_path).exists());
+    assert!(!local_branch_stands(&rig.repo, &a_branch));
+    assert!(
+        !Path::new(&b_path).exists(),
+        "the refused clean removed the checkout"
+    );
+    assert!(
+        local_branch_stands(&rig.repo, &b_branch),
+        "git's refusal keeps the branch"
+    );
+    assert!(Path::new(&c_path).exists());
+    assert!(local_branch_stands(&rig.repo, &c_branch));
+    let (ok, out, err) = rig.sac(&["--json", "log"]);
+    assert!(ok, "log refused: {out}{err}");
+    let cleaned: Vec<u64> = json_of(&out)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "workspace_cleaned")
+        .map(|r| r["payload"]["workspace"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        cleaned,
+        vec![a_seq as u64],
+        "the refusing row recorded nothing: {out}"
+    );
+
+    // the refused workspace still stands Available: the list reads it
+    // again, now with the worktree gone, and the sweep leaves it for
+    // the human
+    let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
+    assert!(ok, "the preview refused: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("left    w-{b_seq}  "))
+            && lines[0].contains("(worktree missing)"),
+        "{out}"
+    );
+    assert!(
+        lines[1].starts_with(&format!("left    w-{c_seq}  ")) && lines[1].contains("(unmerged)"),
+        "{out}"
+    );
+}

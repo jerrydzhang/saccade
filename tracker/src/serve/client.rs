@@ -15,7 +15,9 @@ use serde::Deserialize;
 pub use crate::serve::message_wire::{
     MailboxEndpoint, MessageFacts, SendMessageReply, SubmissionFacts,
 };
-pub use crate::serve::workspace_wire::{BranchKept, CleanReply, CreateReply, WorkspaceBirth};
+pub use crate::serve::workspace_wire::{
+    BranchKept, BranchOutcome, CleanReply, CreateReply, WorkspaceBirth,
+};
 
 #[derive(Debug)]
 pub enum ClientFail {

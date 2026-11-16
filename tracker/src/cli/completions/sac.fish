@@ -65,6 +65,12 @@ function __saccade_no_verb
     test (count $have) -eq 0
 end
 
+function __saccade_seen_flag
+    # the exact flag word already on the command line: the sweep's
+    # --merged takes no path, so the recorded-path candidates step aside
+    commandline -opc | grep -qx -- "$argv[1]"
+end
+
 function __saccade_prev
     set -l tokens (commandline -opc)
     test "$tokens[-1]" = "$argv[1]"
@@ -141,7 +147,7 @@ complete -c sac -n '__saccade_verb cancel; and test (__saccade_npos) = 1; and no
 complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-clean)'
+complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag; and not __saccade_seen_flag --merged' -a '(__saccade_candidates workspaces-clean)'
 
 # per-verb flag names, exactly as the CLI defines them: fish offers
 # option names only on dash-prefixed tokens, so these never leak into
@@ -179,6 +185,8 @@ complete -c sac -n '__saccade_verb launch' -l harness -r -f -d 'the harness a fr
 complete -c sac -n '__saccade_verb launch' -l name -r -f -d 'name the fresh incarnation'
 complete -c sac -n '__saccade_verb launch' -l here -d 'launch through the host, then attach it in this terminal'
 complete -c sac -n '__saccade_verb workspace new' -l base -r -f -d 'the Git base: a ref, defaulting to the primary HEAD'
+complete -c sac -n '__saccade_verb workspace clean' -l merged -d 'the sweep: preview every merged, clean workspace'
+complete -c sac -n '__saccade_verb workspace clean; and __saccade_seen_flag --merged' -l yes -s y -d 'act on the preview: one clean per qualifying workspace'
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'

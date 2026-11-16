@@ -321,14 +321,28 @@ enum WorkspaceVerb {
         base: Option<String>,
     },
     /// Clean an exact recorded workspace: terminal close, terminal
-    /// closure verified, git worktree removal with the branch
-    /// retained, checkout and host visible absence verified, then the
-    /// Cleaned record. Staged, unstaged, and untracked work refuses;
-    /// a recorded-cleaned workspace with resources present is a
-    /// mismatch, never an automatic deletion.
+    /// closure verified, git worktree removal (the branch going with
+    /// it when the merged rule says merged), checkout and host
+    /// visible absence verified, then the Cleaned record. Staged,
+    /// unstaged, and untracked work refuses; a recorded-cleaned
+    /// workspace with resources present is a mismatch, never an
+    /// automatic deletion. Or, with --merged, the sweep: every
+    /// standing workspace the merged rule names and no dirt guards,
+    /// printed as cleaned or left with the reason - a preview unless
+    /// --yes acts, one clean per workspace through this same door,
+    /// a refusal reported and the sweep continuing.
     Clean {
-        /// The workspace's exact recorded path
-        path: PathBuf,
+        /// The workspace's exact recorded path; omit for the sweep
+        path: Option<PathBuf>,
+        /// The sweep over every standing workspace the list reads as
+        /// merged and not dirty: a preview of what it would clean and
+        /// leave, never an act
+        #[arg(long, conflicts_with = "path")]
+        merged: bool,
+        /// Act on the sweep's preview: one clean per qualifying
+        /// workspace, a refused clean reported and the sweep continued
+        #[arg(long, short = 'y', requires = "merged")]
+        yes: bool,
     },
     /// The standing workspaces: one row per recorded workspace that
     /// is not cleaned - its branch, its merged status (into the first
@@ -639,7 +653,15 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "--base");
                 }
             }
-            WorkspaceVerb::Clean { .. } | WorkspaceVerb::List => {}
+            WorkspaceVerb::Clean { merged, yes, .. } => {
+                if *merged {
+                    push(&mut flags, "--merged");
+                }
+                if *yes {
+                    push(&mut flags, "--yes");
+                }
+            }
+            WorkspaceVerb::List => {}
         },
         Cmd::Board { verb } => match verb {
             BoardVerb::Edit { dir, .. } | BoardVerb::Update { dir, .. } => {
