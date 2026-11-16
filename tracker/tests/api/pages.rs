@@ -649,7 +649,7 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
 // on the command face.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
-    let (_scratch, _serve, url, inc_num, _inc_seq, _authored, _repo_root) =
+    let (_scratch, _serve, url, _inc_num, _inc_seq, _authored, _repo_root) =
         view_page_fixture("view-wakes");
 
     // the board-commit door: a parked task page wakes on the commit
@@ -766,29 +766,6 @@ async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
     assert!(
         json_of(&body)["seq"].as_u64().unwrap() > cursor,
         "the registration woke the parked root"
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
-
-    // the address door: the address assignment wakes the parked root
-    let (_, body) = get_json(&url, "/view/v1/");
-    let cursor = json_of(&body)["seq"].as_u64().unwrap();
-    let root_wait = {
-        let url = url.clone();
-        std::thread::spawn(move || get_json(&url, &format!("/view/v1/?after={cursor}&timeout=8")))
-    };
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/incarnations/address",
-        &json!({"incarnation": inc_num, "address": "wake-tty", "adopted": false}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let started = std::time::Instant::now();
-    let (status, body) = root_wait.join().unwrap();
-    assert_eq!(status, 200, "{body}");
-    assert!(
-        json_of(&body)["seq"].as_u64().unwrap() > cursor,
-        "the address assignment woke the parked root"
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

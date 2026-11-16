@@ -1,7 +1,7 @@
 //! The incarnation doors' wire: request and reply shapes for the
-//! native attach and the incarnation register and address doors, one
-//! definition shared by the server (serve/incarnation.rs) and the
-//! client half (serve/client.rs).
+//! native attach and the incarnation register doors, one definition
+//! shared by the server (serve/incarnation.rs) and the client half
+//! (serve/client.rs).
 
 use serde::{Deserialize, Serialize};
 
@@ -87,24 +87,4 @@ pub struct IncarnationRegisterReply {
     pub incarnation: usize,
     pub records: Vec<StoredRecord>,
     pub registered: bool,
-}
-
-/// The association's address moves with a relaunch: the same
-/// incarnation, another terminal.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct IncarnationAddressRequest {
-    pub incarnation: usize,
-    pub address: String,
-    #[serde(default)]
-    pub adopted: bool,
-    #[serde(default)]
-    pub client: Option<String>,
-}
-
-/// The address reply, the keys the address door answered inline
-/// until 2.4.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct IncarnationAddressReply {
-    pub assigned: bool,
-    pub records: Vec<StoredRecord>,
 }

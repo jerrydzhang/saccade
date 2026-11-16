@@ -762,36 +762,6 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
         String::from_utf8_lossy(&mailbox.stderr)
     );
 
-    // a relaunch moves the association's address through the assign
-    // door: the same incarnation, another terminal
-    let mut assign_response = ureq::post(&format!("{url}/api/v1/incarnations/address"))
-        .send_json(serde_json::json!({
-            "incarnation": id.0.0,
-            "address": "t9",
-            "client": "test",
-        }))
-        .unwrap();
-    let assign: Value = assign_response
-        .body_mut()
-        .read_to_string()
-        .unwrap()
-        .parse()
-        .expect("the assign face is json");
-    assert_eq!(assign["assigned"], true);
-    let conn = saccade::db::open_read(&db).unwrap();
-    let world = match saccade::db::load(&conn).unwrap().state {
-        saccade::db::LoadState::Full(world) => world,
-        _ => panic!("the log will not fold"),
-    };
-    assert_eq!(
-        world.incarnations[id]
-            .incarnation
-            .address()
-            .map(str::to_string),
-        Some("t9".to_string()),
-        "the address moved with the relaunch"
-    );
-
     std::fs::remove_dir_all(&dir).unwrap();
     let _ = serve.kill();
 }

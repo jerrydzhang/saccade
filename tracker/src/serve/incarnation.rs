@@ -9,8 +9,8 @@ use crate::store::{Context, RecordId, World};
 use super::door::{door, ready};
 use super::fail::{ApiFail, api_failure};
 use super::incarnation_wire::{
-    AttachReply, AttachRequest, IncarnationAddressReply, IncarnationAddressRequest,
-    IncarnationRegisterReply, IncarnationRegisterRequest, PresentedTerminal,
+    AttachReply, AttachRequest, IncarnationRegisterReply, IncarnationRegisterRequest,
+    PresentedTerminal,
 };
 use super::state::{AppState, Inner, ServerState};
 
@@ -276,36 +276,6 @@ fn register_or_recover(
             Ok((stored, birth, true))
         }
     }
-}
-
-pub(super) async fn incarnation_address(State(app): State<AppState>, body: Bytes) -> Response {
-    door(
-        &app,
-        body,
-        "incarnations/address",
-        |r: &IncarnationAddressRequest| r.client.clone(),
-        |_app, guard, request| {
-            let inner = ready(guard)?;
-            let command = Command::AssignHostAddress {
-                incarnation: crate::record::objects::incarnation::IncarnationId(RecordId(
-                    request.incarnation,
-                )),
-                address: Some(request.address),
-                adopted: request.adopted,
-            };
-            let (records, _) = db::record(
-                &mut inner.conn,
-                &Context::system(),
-                command,
-                db::now_epoch(),
-            )
-            .map_err(ApiFail::from)?;
-            Ok(IncarnationAddressReply {
-                assigned: true,
-                records,
-            })
-        },
-    )
 }
 
 pub(super) async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {

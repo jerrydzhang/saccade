@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.21.1"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.21.2"` - the
 lockfile is the version identity.
 
 ## Model law
