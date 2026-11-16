@@ -3,8 +3,7 @@ fmt:
     nixfmt flake.nix nix/*.nix
 
 lint:
-    cargo check
-    cargo clippy
+    cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings
 
 # the full suite: the cargo workspace, the app shell's own tests, then
 # the app frontend's vitest unit and browser projects (the native
