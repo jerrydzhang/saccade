@@ -1881,9 +1881,61 @@ async fn clean_rig(
     let hcs = fake_hc_spawn(&dir);
     let host_state = dir.join("host-terminals");
     std::fs::write(&host_state, b"").unwrap();
+    // a pass-through git ahead of the ambient PATH for the serve, the
+    // fake conventions' way: inert until a flag file stands, then the
+    // first compare-and-delete of the branch it names moves that
+    // branch onto the target before the real git runs - the
+    // concurrent move between the door's decision and its final act,
+    // deterministic at the compare half
+    let real_git = String::from_utf8(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .expect("git resolves on the ambient PATH")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let git_dir = dir.join("git-bin");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    let shim = git_dir.join("git");
+    std::fs::write(
+        &shim,
+        format!(
+            r#"#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+real={real_git}
+if [ "$1" = "-C" ] && [ "$3" = update-ref ] && [ "$4" = -d ] \
+   && [ -f "$here/move-branch" ]; then
+  read branch to < "$here/move-branch"
+  if [ "$5" = "refs/heads/$branch" ]; then
+    rm -f "$here/move-branch"
+    sha=$("$real" -C "$2" rev-parse --verify "$to")
+    "$real" -C "$2" update-ref "refs/heads/$branch" "$sha"
+  fi
+fi
+exec "$real" "$@"
+"#
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let serve_envs = [
         ("SACCADE_HERDR", hcs.display().to_string()),
         ("FAKE_HC_TERMINALS", host_state.display().to_string()),
+        (
+            "PATH",
+            format!(
+                "{}:{}",
+                git_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        ),
     ];
     let serve_envs: Vec<(&str, &str)> = serve_envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let (serve, url) = spawn_serve(
@@ -1936,9 +1988,8 @@ async fn a_clean_removes_a_merged_branch_and_the_record_stays_unchanged() {
     let (rig, _serve, _scratch) = clean_rig("ws-clean-merged").await;
     let root = PathBuf::from(&rig.repo);
 
-    // one merged workspace per face: one commit, ff-merged into main;
-    // each provision cuts at the primary HEAD, so the sequence keeps
-    // every branch an ancestor of main for git branch -d
+    // one merged workspace per face: one commit, ff-merged into main
+    // - the rule's candidate reads main either way
     let merged = |label: &str| -> (usize, String, String) {
         let (seq, branch, path) = rig.provision(label, None);
         commit_in(Path::new(&path), "a.txt", &format!("{label} work\n"));
@@ -2007,6 +2058,25 @@ async fn a_clean_removes_a_merged_branch_and_the_record_stays_unchanged() {
     );
     assert!(!out.contains("retained"), "{out}");
     assert!(!local_branch_stands(&rig.repo, &text_branch));
+
+    // the rewrite case, explicit: the branch merged into a non-HEAD
+    // branch, main never moved, the primary checkout sitting on main
+    // - git branch -d would refuse here; the compare-and-delete at
+    // the decided tip cleans fully, whatever is checked out
+    let (_rw_seq, rw_branch, rw_path) = rig.provision("clean-rewrite", None);
+    commit_in(Path::new(&rw_path), "r.txt", "rewrite work\n");
+    sh(&root, &["branch", "rewrite", &rw_branch]);
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &rw_path]);
+    assert!(ok, "the rewrite-merged clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {rw_branch} removed (merged into rewrite)")),
+        "{out}"
+    );
+    assert!(!Path::new(&rw_path).exists(), "the worktree went");
+    assert!(
+        !local_branch_stands(&rig.repo, &rw_branch),
+        "the branch went, whatever the checkout holds"
+    );
 
     // the re-clean: idempotent, and this call acted no branch - the
     // disposition is null on that face
@@ -2452,69 +2522,114 @@ async fn the_sweep_yes_cleans_each_qualifying_workspace_through_the_door() {
     assert!(local_branch_stands(&rig.repo, &u_branch));
 }
 
-/// The sweep survives a refusal mid-round and reports it: a workspace
-/// the list reads merged but whose branch git itself refuses to
-/// delete (its tip reached a rewrite branch, never HEAD) refuses the
-/// whole clean after the verified worktree removal - the round prints
-/// the refusal's own words as that row's outcome line and goes on to
-/// the remaining rows, ending clean.
+/// The sweep survives a refusal mid-round and reports it, and the
+/// rewrite case cleans fully: a workspace merged into a non-HEAD
+/// rewrite branch cleans from the main checkout - the compare-and-
+/// delete needs no HEAD's blessing - while a workspace whose branch
+/// moves between the door's decision and its final act refuses the
+/// compare half: the round prints the refusal's own words as that
+/// row's outcome line, goes on to the remaining rows, and ends
+/// clean, and the retry re-decides against the moved tip.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
     let (rig, _serve, _scratch) = clean_rig("ws-sweep-refusal").await;
     let root = PathBuf::from(&rig.repo);
 
-    // the row before the refusal: merged into main, clean
+    // the row before the rewrite: merged into main, clean
     let (a_seq, a_branch, a_path) = rig.provision("sweep-ref-into-main", None);
     commit_in(Path::new(&a_path), "a.txt", "into main\n");
     sh(&root, &["merge", "-q", "--ff-only", &a_branch]);
 
-    // the refusing row: its tip reached a rewrite branch, not main -
-    // the list reads merged into rewrite, git branch -d refuses
+    // the rewrite row: its tip reached a rewrite branch, never main -
+    // the list reads merged into rewrite, and the clean deletes
+    // against the decided tip whatever the checkout holds
     let (b_seq, b_branch, b_path) = rig.provision("sweep-ref-rewrite", None);
     commit_in(Path::new(&b_path), "b.txt", "into rewrite\n");
     sh(&root, &["branch", "rewrite", &b_branch]);
 
-    // the row after the refusal: unmerged, so the round must reach it
-    let (c_seq, c_branch, c_path) = rig.provision("sweep-ref-tail", None);
-    commit_in(Path::new(&c_path), "c.txt", "tail work\n");
+    // the refusing row: merged into main by a true merge commit, so
+    // main's tip differs from the branch's own - the move flag names
+    // it, and the fake git advances it onto main between the door's
+    // decision and its final act; the compare half refuses
+    let (c_seq, c_branch, c_path) = rig.provision("sweep-ref-moved", None);
+    commit_in(Path::new(&c_path), "c.txt", "moved work\n");
+    sh(
+        &root,
+        &["merge", "-q", "--no-ff", "-m", "take c in", &c_branch],
+    );
 
-    // the act: the refusal rides as its row's outcome line, the round
-    // continues, and the command ends clean
+    // the row after the refusal: unmerged, so the round must reach it
+    let (d_seq, d_branch, d_path) = rig.provision("sweep-ref-tail", None);
+    commit_in(Path::new(&d_path), "d.txt", "tail work\n");
+
+    // the move flag: one shot, the refusing branch named, the target
+    // main - the concurrent actor's answer
+    let flag = Path::new(&rig.db)
+        .parent()
+        .unwrap()
+        .join("git-bin")
+        .join("move-branch");
+    std::fs::write(&flag, format!("{c_branch} refs/heads/main\n")).unwrap();
+
+    // the act: the two merged rows cleaned - main and rewrite alike -
+    // the refusal riding as its row's outcome line, the round
+    // continuing, the command ending clean
     let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged", "--yes"]);
     assert!(ok, "the sweep must survive the refusal: {out}{err}");
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 3, "{out}");
+    assert_eq!(lines.len(), 4, "{out}");
     assert!(
         lines[0].starts_with(&format!("cleaned w-{a_seq}  "))
             && lines[0].contains("(merged into main; worktree and branch removed)"),
         "{out}"
     );
     assert!(
-        lines[1].starts_with(&format!("refused w-{b_seq}  "))
-            && lines[1].contains("(git branch -d")
-            && lines[1].contains("not fully merged"),
+        lines[1].starts_with(&format!("cleaned w-{b_seq}  "))
+            && lines[1].contains("(merged into rewrite; worktree and branch removed)"),
         "{out}"
     );
     assert!(
-        lines[2].starts_with(&format!("left    w-{c_seq}  ")) && lines[2].contains("(unmerged)"),
+        lines[2].starts_with(&format!("refused w-{c_seq}  "))
+            && lines[2].contains(&c_branch)
+            && lines[2].contains("no longer holds the tip the decision checked")
+            && lines[2].contains("retry clean to re-decide"),
+        "{out}"
+    );
+    assert!(
+        lines[3].starts_with(&format!("left    w-{d_seq}  ")) && lines[3].contains("(unmerged)"),
         "{out}"
     );
 
-    // the world: the row before the refusal cleaned; the refusing row
-    // stopped after the verified worktree removal - its branch stands
-    // and nothing recorded for it; the tail row untouched
+    // the world: the two merged rows cleaned - worktree and branch
+    // gone each; the refusing row stopped at the compare half, after
+    // the verified worktree removal: its worktree is gone, its branch
+    // stands at the concurrent move's answer, and nothing recorded
+    // for it; the tail row untouched
     assert!(!Path::new(&a_path).exists());
     assert!(!local_branch_stands(&rig.repo, &a_branch));
     assert!(
         !Path::new(&b_path).exists(),
+        "the rewrite row's worktree went"
+    );
+    assert!(
+        !local_branch_stands(&rig.repo, &b_branch),
+        "the rewrite row's branch went from the main checkout"
+    );
+    assert!(
+        !Path::new(&c_path).exists(),
         "the refused clean removed the checkout"
     );
     assert!(
-        local_branch_stands(&rig.repo, &b_branch),
-        "git's refusal keeps the branch"
+        local_branch_stands(&rig.repo, &c_branch),
+        "the compare refusal keeps the branch"
     );
-    assert!(Path::new(&c_path).exists());
-    assert!(local_branch_stands(&rig.repo, &c_branch));
+    assert_eq!(
+        sh(&root, &["rev-parse", &c_branch]),
+        sh(&root, &["rev-parse", "main"]),
+        "the branch stands at the concurrent move's answer"
+    );
+    assert!(Path::new(&d_path).exists());
+    assert!(local_branch_stands(&rig.repo, &d_branch));
     let (ok, out, err) = rig.sac(&["--json", "log"]);
     assert!(ok, "log refused: {out}{err}");
     let cleaned: Vec<u64> = json_of(&out)["records"]
@@ -2526,7 +2641,7 @@ async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
         .collect();
     assert_eq!(
         cleaned,
-        vec![a_seq as u64],
+        vec![a_seq as u64, b_seq as u64],
         "the refusing row recorded nothing: {out}"
     );
 
@@ -2538,12 +2653,26 @@ async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
     assert!(
-        lines[0].starts_with(&format!("left    w-{b_seq}  "))
+        lines[0].starts_with(&format!("left    w-{c_seq}  "))
             && lines[0].contains("(worktree missing)"),
         "{out}"
     );
     assert!(
-        lines[1].starts_with(&format!("left    w-{c_seq}  ")) && lines[1].contains("(unmerged)"),
+        lines[1].starts_with(&format!("left    w-{d_seq}  ")) && lines[1].contains("(unmerged)"),
         "{out}"
+    );
+
+    // the retry re-decides: the named clean reads the branch's moved
+    // tip, the rule names main, and the compare-and-delete at the
+    // new tip deletes - the refused clean's recovery path
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &c_path]);
+    assert!(ok, "the retry clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {c_branch} removed (merged into main)")),
+        "{out}"
+    );
+    assert!(
+        !local_branch_stands(&rig.repo, &c_branch),
+        "the moved branch went at its new tip"
     );
 }

@@ -89,10 +89,12 @@ pub(super) async fn workspace_create(State(app): State<AppState>, body: Bytes) -
 
 // -- the workspace lifecycle controller ---------------------------------
 // Clean: the ordered
-// clean contract runs can-clean checks, terminal close, terminal
-// verification, git worktree remove (branch retained), checkout and
-// worktree absence verification, and the host's visible absence,
-// and only then lands the Cleaned fact.
+// clean contract runs can-clean checks, the branch decision first
+// among the acts (the fate rule a settles, tip and all), terminal
+// close, terminal verification, git worktree remove, checkout and
+// worktree absence verification, then the branch's compare-and-
+// delete against the decided tip as the last act, and only then
+// lands the Cleaned fact.
 
 /// The world fold plus the canonical target resolution every lifecycle
 /// door shares: exact recorded workspace births at this path, primary
@@ -304,15 +306,18 @@ fn clean_operation(
     }
 
     // the branch decision, read off the pre-clean fold before any
-    // effect: the merged rule over the standing recorded branches as
-    // the exclusion set - this workspace is itself recorded-uncleaned
-    // until its own Cleaned fact lands, and the rule's not-the-branch-
-    // itself exclusion keeps its own branch from excluding it - so a
-    // cleaned workspace's retained branch counts as a candidate and a
-    // stacked workspace's standing parent never does
-    let branch_outcome = match workspace::branch_tip(&repo_root, &facts.branch)
-        .map_err(ApiFail::Workspace)?
-    {
+    // effect - first among the acts, ahead of the terminal closes and
+    // every git mutation: the merged rule over the standing recorded
+    // branches as the exclusion set - this workspace is itself
+    // recorded-uncleaned until its own Cleaned fact lands, and the
+    // rule's not-the-branch-itself exclusion keeps its own branch
+    // from excluding it - so a cleaned workspace's retained branch
+    // counts as a candidate and a stacked workspace's standing parent
+    // never does. The tip the rule checked rides the decision: the
+    // final act deletes against exactly it.
+    let decided_tip =
+        workspace::branch_tip(&repo_root, &facts.branch).map_err(ApiFail::Workspace)?;
+    let branch_outcome = match decided_tip.as_ref() {
         None => BranchOutcome::kept_missing(),
         Some(_) => {
             let recorded = workspace::recorded_workspace_branches(&world);
@@ -435,12 +440,19 @@ fn clean_operation(
     }
     verified.push("verified: the checkout is gone and git registers no worktree there".into());
 
-    // the branch itself, after the verified removal: deleted when the
-    // merged rule said merged, through git branch -d - git's own
-    // refusal (not fully merged, checked out elsewhere) refuses the
-    // whole clean, never a force; kept otherwise, named so in the reply
+    // the branch itself, the LAST act, after the verified removal:
+    // compare-and-delete against the tip the decision checked - the
+    // ref goes only while it still points exactly there, so no
+    // failure behind the worktree can leave the branch in doubt, and
+    // a concurrent move refuses with the branch standing, the retry
+    // re-deciding. The decision, not git's HEAD or checkout reads,
+    // is the judge: a branch merged into a rewrite branch cleans
+    // from a main checkout. Never a force, never -D.
     if branch_outcome.deleted {
-        workspace::delete_branch(&repo_root, &facts.branch).map_err(ApiFail::Workspace)?;
+        let tip = decided_tip
+            .as_ref()
+            .expect("a deleted branch holds a decided tip");
+        workspace::delete_branch(&repo_root, &facts.branch, tip).map_err(ApiFail::Workspace)?;
         verified.push(format!(
             "removed the branch {} (merged into {})",
             facts.branch.as_str(),

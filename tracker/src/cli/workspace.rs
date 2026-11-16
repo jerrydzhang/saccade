@@ -911,7 +911,7 @@ mod test {
                 None,
             ),
             "workspace_effect",
-            "git branch -d t60-phase3b refused: error: the branch 't60-phase3b' is not\nfully merged.",
+            "the branch t60-phase3b no longer holds the tip the decision checked \n(2f1e33a); the compare-and-delete refuses and the branch stands - retry clean to re-decide: error: cannot lock ref 'refs/heads/t60-phase3b': is at 8c4d21b but expected 2f1e33a",
         );
         assert_eq!(refused.word, "refused");
         assert_eq!(refused.code.as_deref(), Some("workspace_effect"));
@@ -921,7 +921,7 @@ mod test {
                 "id": "w-52",
                 "branch": "t60-phase3b",
                 "outcome": "refused",
-                "reason": "git branch -d t60-phase3b refused: error: the branch 't60-phase3b' is not fully merged.",
+                "reason": "the branch t60-phase3b no longer holds the tip the decision checked (2f1e33a); the compare-and-delete refuses and the branch stands - retry clean to re-decide: error: cannot lock ref 'refs/heads/t60-phase3b': is at 8c4d21b but expected 2f1e33a",
                 "code": "workspace_effect",
             })
         );
@@ -931,7 +931,7 @@ mod test {
         let refused_line = grid.lines().last().unwrap();
         assert!(refused_line.starts_with("refused w-52  "), "{refused_line}");
         assert!(refused_line.ends_with(
-            "(git branch -d t60-phase3b refused: error: the branch 't60-phase3b' is not fully merged.)"
+            "(the branch t60-phase3b no longer holds the tip the decision checked (2f1e33a); the compare-and-delete refuses and the branch stands - retry clean to re-decide: error: cannot lock ref 'refs/heads/t60-phase3b': is at 8c4d21b but expected 2f1e33a)"
         ), "{refused_line}");
 
         // the wire carries the detail JSON-encoded: a string detail

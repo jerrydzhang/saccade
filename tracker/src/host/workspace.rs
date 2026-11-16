@@ -433,21 +433,32 @@ pub fn preserved_work(path: &Path) -> Result<Option<String>, WorkspaceFail> {
     Ok(if out.is_empty() { None } else { Some(out) })
 }
 
-/// Delete the branch with git's own protections: `git branch -d` -
-/// never a force - refuses when the branch is not fully merged per
-/// git's own check (HEAD, or its upstream when one is set) or stands
-/// checked out in any worktree. git's refusal is the door's refusal.
-pub fn delete_branch(root: &Path, branch: &GitBranch) -> Result<(), WorkspaceFail> {
+/// Delete a branch the merged rule decided merged, against the tip
+/// the decision checked: `git update-ref -d refs/heads/<branch>
+/// <tip>` - the compare-and-delete form. The ref goes only while it
+/// still holds exactly that tip, atomic against concurrent moves;
+/// git branch -d's own checks (HEAD, upstream, checkout positions)
+/// play no part - the decision is the judge, the compare is the
+/// guard, and no force exists here. A refusal names the moved
+/// branch: it stands, and the retry re-decides.
+pub fn delete_branch(
+    root: &Path,
+    branch: &GitBranch,
+    tip: &GitCommit,
+) -> Result<(), WorkspaceFail> {
+    let reference = format!("refs/heads/{}", branch.as_str());
     let out = crate::boards::git_command()
         .arg("-C")
         .arg(root)
-        .args(["branch", "-d", branch.as_str()])
+        .args(["update-ref", "-d", &reference, tip.as_str()])
         .output()
-        .map_err(|e| WorkspaceFail::Git(format!("git branch -d: {e}")))?;
+        .map_err(|e| WorkspaceFail::Git(format!("git update-ref -d: {e}")))?;
     if !out.status.success() {
         return Err(WorkspaceFail::Git(format!(
-            "git branch -d {} refused: {}",
+            "the branch {} no longer holds the tip the decision checked ({}); \
+             the compare-and-delete refuses and the branch stands - retry clean to re-decide: {}",
             branch.as_str(),
+            tip.as_str(),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
@@ -1066,37 +1077,66 @@ mod test {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// The branch deletion keeps git's own protections: a branch
-    /// merged into HEAD deletes, an unmerged branch refuses and
-    /// stands, a branch checked out in any worktree refuses - no
-    /// force anywhere.
+    /// The branch deletion compares against the tip the decision
+    /// checked: `update-ref -d` at the decided tip deletes whatever
+    /// HEAD or a checkout holds - the rewrite case cleans from a
+    /// main checkout - while a moved tip refuses the compare half,
+    /// names the branch, and leaves it standing for the retry to
+    /// re-decide. No force, no -D, and no mergedness of git's own:
+    /// the decision is the judge, the compare is the guard.
     #[test]
-    fn the_branch_deletion_keeps_gits_own_protections() {
+    fn the_branch_deletion_compares_against_the_decided_tip() {
         let root = scratch_with_main("delete-branch");
-        // merged: the branch's work is in main, HEAD is main
-        let merged = branch("merged-line");
-        git(&root, &["checkout", "-qb", merged.as_str()]).unwrap();
-        commit(&root, "f.txt", "work\n", "merged work");
-        git(&root, &["checkout", "-q", "main"]).unwrap();
-        git(&root, &["merge", "-q", "--ff-only", merged.as_str()]).unwrap();
-        delete_branch(&root, &merged).unwrap();
-        assert_eq!(branch_tip(&root, &merged).unwrap(), None);
 
-        // unmerged: git's own refusal, the branch stands, and the
-        // refusal names the branch
-        let unmerged = branch("unmerged-line");
-        git(&root, &["checkout", "-qb", unmerged.as_str()]).unwrap();
-        commit(&root, "g.txt", "kept\n", "unmerged work");
+        // the rewrite case: the branch's work reached a non-HEAD
+        // branch, main never moved, HEAD sits on main - git branch -d
+        // would refuse here, the compare-and-delete at the decided
+        // tip deletes
+        let rewrite_child = branch("rewrite-child");
+        git(&root, &["checkout", "-qb", rewrite_child.as_str()]).unwrap();
+        let tip = commit(&root, "f.txt", "work\n", "rewrite work");
         git(&root, &["checkout", "-q", "main"]).unwrap();
-        let refused = delete_branch(&root, &unmerged);
-        assert!(matches!(refused, Err(WorkspaceFail::Git(_))), "{refused:?}");
-        assert!(refused.unwrap_err().detail().contains(unmerged.as_str()));
-        assert!(branch_tip(&root, &unmerged).unwrap().is_some());
+        git(&root, &["branch", "rewrite", rewrite_child.as_str()]).unwrap();
+        delete_branch(&root, &rewrite_child, &tip).unwrap();
+        assert_eq!(branch_tip(&root, &rewrite_child).unwrap(), None);
 
-        // checked out at the primary: git refuses a checked-out branch
-        let refused = delete_branch(&root, &branch("main"));
+        // a moved branch refuses the compare half: deleting against
+        // the stale tip names the branch and the decision, and the
+        // branch stands at git's own answer
+        let moved = branch("moved-line");
+        git(&root, &["checkout", "-qb", moved.as_str()]).unwrap();
+        let decided = commit(&root, "g.txt", "decided\n", "decided work");
+        // the concurrent move: the branch advances past the decision
+        let moved_tip = commit(&root, "g.txt", "moved\n", "moved work");
+        let refused = delete_branch(&root, &moved, &decided);
         assert!(matches!(refused, Err(WorkspaceFail::Git(_))), "{refused:?}");
-        assert!(branch_tip(&root, &branch("main")).unwrap().is_some());
+        let detail = refused.unwrap_err().detail();
+        assert!(detail.contains(moved.as_str()), "{detail}");
+        assert!(detail.contains(decided.as_str()), "{detail}");
+        assert_eq!(branch_tip(&root, &moved).unwrap(), Some(moved_tip));
+
+        // whatever is checked out holds no veto: the branch stands
+        // checked out in another worktree, and the compare-and-delete
+        // at its true tip still deletes
+        let held = branch("held-line");
+        let home = root.join("worktrees");
+        std::fs::create_dir_all(&home).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                held.as_str(),
+                &home.join("held").display().to_string(),
+                "main",
+            ],
+        )
+        .unwrap();
+        let held_tip = branch_tip(&root, &held).unwrap().unwrap();
+        delete_branch(&root, &held, &held_tip).unwrap();
+        assert_eq!(branch_tip(&root, &held).unwrap(), None);
 
         std::fs::remove_dir_all(&root).unwrap();
     }

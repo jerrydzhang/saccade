@@ -77,8 +77,8 @@ pub struct BranchOutcome {
 }
 
 impl BranchOutcome {
-    /// The branch went: git branch -d accepted it after the verified
-    /// checkout removal.
+    /// The branch went: the compare-and-delete accepted it after the
+    /// verified checkout removal.
     pub(crate) fn deleted(merged_into: Vec<String>) -> Self {
         BranchOutcome {
             deleted: true,
