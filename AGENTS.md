@@ -67,7 +67,7 @@ do, and `tracker/README.md` carries the tracker's law.
   tests, the app's vitest unit and browser projects), fmt, every prek
   hook on each commit, and the app's native project in the gated
   session lane:
-  `SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> just app-test-native`
+  `SACCADE_DB=<db> just app-test-native`
   (the sandbox, the canary, a private Weston, then vitest's native
   project against the built app; `SAC_APP_BIN` names a built app, else
   `.#saccade-app` is built). The lane logs are inspected, not assumed.

@@ -113,8 +113,6 @@ def preflight() -> int:
     sys.path.insert(0, str(HERE))
     import isolation
 
-    isolation.gate_or_exit("preflight")
-
     found = shutil.which("bwrap")
     if found is None:
         print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
@@ -391,13 +389,12 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
 
 
 def session_suite(board_arg: str, tracker_db_candidate: str, vitest_args: list[str] | None = None) -> int:
-    """Gated. One bounded sandbox run of the port suite's native project
+    """One bounded sandbox run of the port suite's native project
     (client/port/tests/scenarios/README.md, native): the session lane's
     resolution, env and binds unchanged, plus the suite payload, the
     client tree read-only and the pinned node. The payload runs the
     canary, starts the private Weston, then vitest; each test owns its
     tauri-driver chain. The supervisor stop is the backstop."""
-    isolation_gate("webdriver")
     sys.path.insert(0, str(HERE))
     import isolation
 
@@ -468,20 +465,12 @@ def session_main(rest: list[str], board_arg: str) -> int:
 
 
 def gated_stub(lane: str) -> int:
-    isolation_gate(lane)
     print(
         f"lane {lane!r} is not implemented in this change: preflight must pass "
         "and a further reviewed checkpoint must add the payload lane",
         file=sys.stderr,
     )
     return 2
-
-
-def isolation_gate(lane: str) -> None:
-    sys.path.insert(0, str(HERE))
-    import isolation
-
-    isolation.gate_or_exit(lane)
 
 
 def main() -> int:

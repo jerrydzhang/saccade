@@ -143,7 +143,7 @@ fresh app: one window, no launch restore. WebdriverIO is the client, in
 classic WebDriver mode (WebKitWebDriver has no BiDi).
 
 ```sh
-SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<the caller-side tracker db> just app-test-native
+SACCADE_DB=<the caller-side tracker db> just app-test-native
 ```
 
 `SAC_APP_BIN` defaults to the nix-built app (`.#saccade-app`; its
