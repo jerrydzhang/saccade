@@ -180,6 +180,10 @@ record's sequence, and never watch the host - tracker logic does not
 depend on Herdr. `/api/v1` stays `sac`'s own API and changes freely;
 nothing writes through `/view/v1`.
 
+The HTTP API allows read access to the whole tracker. A read route
+needs no named reader - it is what an experiment at the edge reads
+through. A write door with no caller is a retirement candidate.
+
 - **A page belongs to a location, not an endpoint.** The location
   grammar v1 serves: `` (the root, naming the tracker, the host facts
   a consumer needs to prove hub identity per t-24@r14 and t-24@r16 -
