@@ -165,14 +165,37 @@ let
         mkdir -p $out/bin
         ${pkgs.coreutils}/bin/install -m 0555 ${substituted} $out/bin/saccade-cc-attach
       '';
+  # the worktree hooks of the composed Claude Code harness: one
+  # script, the mode (create or remove) as its first argument, read
+  # from the same template the shellchecked packaged copy ships
+  # from - no placeholder rides it, so the composition is the
+  # packaging: shellcheck, a bash parse, then the install
+  mkWorktreeHook =
+    { pkgs }:
+    let
+      substituted = pkgs.replaceVars ../tracker/native/claude-code/saccade-cc-worktree.template { };
+    in
+    pkgs.runCommand "saccade-cc-worktree"
+      {
+        nativeBuildInputs = [ pkgs.shellcheck ];
+      }
+      ''
+        set -o errexit
+        ${pkgs.shellcheck}/bin/shellcheck ${substituted}
+        ${pkgs.bash}/bin/bash -n ${substituted}
+        mkdir -p $out/bin
+        ${pkgs.coreutils}/bin/install -m 0555 ${substituted} $out/bin/saccade-cc-worktree
+      '';
   mkCCSettings =
     {
       pkgs,
       attachHook,
+      worktreeHook,
     }:
     pkgs.runCommand "saccade-claude-code-settings.json" { } ''
       set -o errexit
       export attachHook="${attachHook}"
+      export worktreeHook="${worktreeHook}"
       substituteAll ${../tracker/native/claude-code/settings.json.template} $out
       # the packaged file must parse as settings: a template that no
       # longer carries the hook wire refuses the build here
@@ -186,9 +209,12 @@ let
       pkgs,
       claude,
       attachHook,
+      worktreeHook,
     }:
     let
-      settings = mkCCSettings { inherit pkgs attachHook; };
+      settings = mkCCSettings {
+        inherit pkgs attachHook worktreeHook;
+      };
       wrapper = pkgs.replaceVars ../tracker/native/claude-code/saccade-claude-code.template {
         inherit claude settings;
         jq = pkgs.jq;
@@ -226,6 +252,7 @@ let
         inherit pkgs;
         claude = "${claude}/bin/claude";
         attachHook = "${mkAttachHook { inherit pkgs; }}/bin/saccade-cc-attach";
+        worktreeHook = "${mkWorktreeHook { inherit pkgs; }}/bin/saccade-cc-worktree";
       };
   # the native integration the composed harness loads
   saccadePiExtensions = [ "tracker/native/saccade.ts" ];

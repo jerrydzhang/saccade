@@ -53,6 +53,77 @@ pub struct CreateRequest {
     pub client: Option<String>,
 }
 
+/// Why a kept branch stands after a clean that acted: the merged
+/// rule named no candidate containing its tip, the workspace added
+/// no commits (ahead 0 - the branch is the base's, often shared, so
+/// its fate is kept however the ancestry reads), or git holds no
+/// local branch under the recorded name at all. snake_case keeps the
+/// single words spelled as the lowercase rename did; NoCommits rides
+/// as "no_commits".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchKept {
+    Unmerged,
+    NoCommits,
+    Missing,
+}
+
+/// The recorded branch's disposition at a clean that acted: whether
+/// this clean deleted it, every local branch the merged rule named
+/// (the first renders in the text face), and why it stands when
+/// kept. Additive wire: the Cleaned event is untouched - the record's
+/// story already names the branch and base.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchOutcome {
+    pub deleted: bool,
+    pub merged_into: Vec<String>,
+    /// Why the branch stands: unmerged, no commits, or missing;
+    /// absent when deleted
+    pub kept: Option<BranchKept>,
+}
+
+impl BranchOutcome {
+    /// The branch went: the compare-and-delete accepted it after the
+    /// verified checkout removal.
+    pub(crate) fn deleted(merged_into: Vec<String>) -> Self {
+        BranchOutcome {
+            deleted: true,
+            merged_into,
+            kept: None,
+        }
+    }
+
+    /// The branch stands: no candidate contained its tip.
+    pub(crate) fn kept_unmerged() -> Self {
+        BranchOutcome {
+            deleted: false,
+            merged_into: Vec::new(),
+            kept: Some(BranchKept::Unmerged),
+        }
+    }
+
+    /// The branch stands: the workspace added no commits, its tip is
+    /// the base's - the branch fate is kept before the merged rule is
+    /// even asked, so `merged_into` stays empty and the reason names
+    /// why.
+    pub(crate) fn kept_no_commits() -> Self {
+        BranchOutcome {
+            deleted: false,
+            merged_into: Vec::new(),
+            kept: Some(BranchKept::NoCommits),
+        }
+    }
+
+    /// Nothing to act on: git holds no local branch under the name.
+    pub(crate) fn kept_missing() -> Self {
+        BranchOutcome {
+            deleted: false,
+            merged_into: Vec::new(),
+            kept: Some(BranchKept::Missing),
+        }
+    }
+}
+
 /// The lifecycle controller's reply: clean names the exact recorded
 /// workspace path; the server runs the ordered effects and lands the
 /// completed facts itself.
@@ -64,6 +135,10 @@ pub struct CleanReply {
     /// idempotent success, no duplicate transition
     pub already_cleaned: bool,
     pub workspace: WorkspaceBirth,
+    /// The branch disposition of a clean that acted; null on the
+    /// already-cleaned face, where this call acted no branch
+    #[serde(default)]
+    pub branch: Option<BranchOutcome>,
     /// The honest step list: what the door asked, what it verified,
     /// and any host ask that failed before the list confirmed closure
     pub verified: Vec<String>,

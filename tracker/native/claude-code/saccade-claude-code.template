@@ -3,6 +3,16 @@
 # per-launch settings injected ahead of the caller's argv, which passes
 # through untouched. Nothing here reads or writes Claude config; the
 # subscription login stays in the user's own home, outside the closure.
+# At launch sac names the current repository's workspace root - the
+# worktrees home beside the tracker's db, the directory its own
+# worktree hooks provision into - and claude receives it as --add-dir,
+# so the grant is asked of the tracker instead of baked into the
+# package (a per-machine path no package can carry). Outside a tracked
+# repository, or wherever the small read fails, no --add-dir is added
+# at all and the launch proceeds: the grant is additive, so a failure
+# stays silent - and the state directory itself is never named, only
+# the worktrees home beneath it. sac resolves from the session PATH
+# exactly as this harness's hooks resolve their tools.
 
 set -o errexit
 set -o pipefail
@@ -20,4 +30,12 @@ done
 # jq and curl ride first so the SessionStart hook keeps its tools in
 # every launch environment, whatever PATH the caller had
 export PATH="@jq@/bin:@curl@/bin:$PATH"
+
+# the workspace-root ask: the list's json face carries the field, and
+# any failure of the pipeline (sac missing, no repository, no root)
+# lands as an empty root - no flag, no noise
+root="$(sac workspace list --json 2>/dev/null | jq -r '.root // empty' 2>/dev/null || true)"
+if [ -n "$root" ]; then
+	exec @claude@ --settings @settings@ --add-dir "$root" "$@"
+fi
 exec @claude@ --settings @settings@ "$@"

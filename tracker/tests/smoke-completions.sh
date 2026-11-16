@@ -132,6 +132,9 @@ fish -i -c '
   report send_to "sac send --to "
   report send_task "sac send --task "
   report clean "sac workspace clean "
+  report clean_flag "sac workspace clean --me"
+  report clean_yes_flag "sac workspace clean --merged --y"
+  report clean_merged_no_paths "sac workspace clean --merged "
   report board_static "sac board "
   report offer_tasks "sac offer "
   report create_static "sac create "
@@ -172,6 +175,13 @@ section send_task | grep -Fq "t-0${TAB}smoke the completions door" || { section 
 # clean: recorded paths only, no filesystem fallback
 section clean | grep -Fq "$WS" || { section clean; fail "clean misses the recorded path"; }
 section clean | grep -q "realdir" && fail "clean leaked the filesystem fallback"
+
+# clean's sweep flags, exactly as the CLI defines them, no cross-verb
+# or cross-flag leaks, and no path candidates under --merged
+section clean_flag | grep -Fqe "--merged" || { section clean_flag; fail "clean misses --merged"; }
+section clean_flag | grep -qe "--yes" && fail "--yes leaked without --merged"
+section clean_yes_flag | grep -Fqe "--yes" || { section clean_yes_flag; fail "the sweep misses --yes"; }
+[ -z "$(section clean_merged_no_paths)" ] || { section clean_merged_no_paths; fail "path candidates leaked under --merged"; }
 
 # the board controller's verbs complete statically; the decision verbs
 # name their tasks

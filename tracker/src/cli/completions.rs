@@ -350,4 +350,34 @@ mod test {
             );
         }
     }
+
+    /// The sweep's flags complete exactly as the CLI defines them, on
+    /// the clean verb only: --merged previews, --yes/-y acts on the
+    /// preview, and the recorded-path candidates step aside once
+    /// --merged is on the line - a path beside --merged is a parser
+    /// refusal, never a completion.
+    #[test]
+    fn the_clean_sweep_flags_complete_on_the_clean_verb_only() {
+        assert!(
+            FISH.contains("__saccade_verb workspace clean' -l merged"),
+            "--merged rides the clean verb: {FISH}"
+        );
+        let yes_line = FISH
+            .lines()
+            .find(|line| line.contains("-l yes -s y"))
+            .unwrap_or_else(|| panic!("--yes/-y complete: {FISH}"));
+        assert!(
+            yes_line.contains("__saccade_verb workspace clean")
+                && yes_line.contains("__saccade_seen_flag --merged"),
+            "--yes acts only on the sweep, beside --merged: {yes_line}"
+        );
+        let paths_line = FISH
+            .lines()
+            .find(|line| line.contains("__saccade_candidates workspaces-clean"))
+            .unwrap_or_else(|| panic!("the recorded-path candidates complete: {FISH}"));
+        assert!(
+            paths_line.contains("not __saccade_seen_flag --merged"),
+            "the path candidates step aside under --merged: {paths_line}"
+        );
+    }
 }

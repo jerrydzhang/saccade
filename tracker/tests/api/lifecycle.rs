@@ -168,6 +168,12 @@ async fn clean_runs_the_ordered_contract_and_the_branch_stands() {
     let rig = lifecycle_rig("clean");
     let (seq, branch, ws) = rig_provision(&rig, "sweep");
     rig_open_terminal(&rig, "term_idle_1", &ws);
+    // one commit of its own: an unmerged branch, the case whose
+    // retention the ordered contract guarantees
+    let wt = std::path::Path::new(&ws);
+    std::fs::write(wt.join("sweep.txt"), "sweep work\n").unwrap();
+    sh(wt, &["add", "sweep.txt"]);
+    sh(wt, &["commit", "-qm", "sweep work"]);
     let worktree_rows = |rig: &LifecycleRig| sh(&rig.root, &["worktree", "list", "--porcelain"]);
 
     // the clean runs the whole ordered contract over a real checkout
@@ -188,9 +194,9 @@ async fn clean_runs_the_ordered_contract_and_the_branch_stands() {
         rig_unregistered(&rig, &ws),
         "git registers no worktree after the removal"
     );
-    // the branch and its tip stand: retained, never deleted
+    // the branch and its tip stand: unmerged, retained, never deleted
     let tip = rig_tip(&rig, &branch);
-    assert_eq!(tip, sh(&rig.root, &["rev-parse", "HEAD"]).trim());
+    assert!(!tip.is_empty(), "the branch stands: {tip}");
     // the close ran at the terminal's own address, one kill per row
     let kills = std::fs::read_to_string(rig.dir.join("hcs-bin/argv-kill.log")).unwrap_or_default();
     assert!(kills.contains("term_idle_1"), "{kills}");
@@ -276,6 +282,12 @@ async fn clean_refuses_dirt_missing_branch_and_unexpected_bytes() {
 async fn clean_stops_on_open_terminals_then_retry_completes() {
     let rig = lifecycle_rig("terminals");
     let (_, branch, ws) = rig_provision(&rig, "occupied");
+    // one commit of its own: an unmerged branch, so the retry's
+    // completion keeps the branch the contract keeps
+    let wt = std::path::Path::new(&ws);
+    std::fs::write(wt.join("occupied.txt"), "occupied work\n").unwrap();
+    sh(wt, &["add", "occupied.txt"]);
+    sh(wt, &["commit", "-qm", "occupied work"]);
     rig_open_terminal(&rig, "term_live_9", &ws);
     // exactly one close ask fails, then the fake host behaves
     std::fs::write(&rig.close_fail, b"refuse once\n").unwrap();
@@ -310,9 +322,9 @@ async fn clean_stops_on_open_terminals_then_retry_completes() {
     let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
     assert!(ok, "the retry clean refuses: {out}{err}");
     assert!(!std::path::Path::new(&ws).exists());
-    assert_eq!(
-        rig_tip(&rig, &branch),
-        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    assert!(
+        !rig_tip(&rig, &branch).is_empty(),
+        "the unmerged branch stands through the retry"
     );
 
     // the recorded-Cleaned idempotence verifies the host too: a
@@ -370,6 +382,12 @@ async fn clean_refuses_an_unreadable_terminal_table() {
 async fn the_cleaned_stage_guards_launch() {
     let rig = lifecycle_rig("guards");
     let (_, _branch, ws) = rig_provision(&rig, "guarded-lifecycle");
+    // one commit of its own: an unmerged branch, so the clean retains
+    // it and the guard's re-created checkout has a branch to stand on
+    let wt = std::path::Path::new(&ws);
+    std::fs::write(wt.join("guarded.txt"), "guarded work\n").unwrap();
+    sh(wt, &["add", "guarded.txt"]);
+    sh(wt, &["commit", "-qm", "guarded work"]);
     let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
     assert!(ok, "the setup clean refuses: {err}");
 
@@ -445,6 +463,11 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
             "HEAD",
         ],
     );
+    // one commit on the hand-made branch: unmerged, so the clean
+    // retains it and the guard's re-created checkout stands
+    std::fs::write(real.join("alias.txt"), "alias work\n").unwrap();
+    sh(&real, &["add", "alias.txt"]);
+    sh(&real, &["commit", "-qm", "alias work"]);
     let birth = |at: u64, branch: &str, worktree: &str| {
         let mut conn = saccade::db::open(&rig.dir.join("saccade.db")).unwrap();
         saccade::db::record(
@@ -470,9 +493,9 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
         "the recorded string does not address its birth: {out}{err}"
     );
     assert!(!real.exists(), "the real checkout is gone");
-    assert_eq!(
-        rig_tip(&rig, "saccade/t-9"),
-        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    assert!(
+        !rig_tip(&rig, "saccade/t-9").is_empty(),
+        "the branch stands: the clean retained it"
     );
 
     // the Cleaned stage blocks ordinary use at BOTH spellings once the

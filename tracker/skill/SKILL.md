@@ -202,6 +202,15 @@ The reviewed object is the board revision, so review is a real judgment:
 Reject for a claim that is wrong or unsupported, or for a narrowing the
 board does not state; not for procedure the history already holds.
 
+## Workspaces
+
+Worktrees are made with `sac workspace new <name>` or by subagent
+isolation, never `git worktree add` - an unrecorded worktree is a
+branch the record cannot see. `sac workspace list` shows every
+standing workspace: its branch, merged or not, dirty or not. After a
+merge, run `sac workspace clean --merged`; it previews, and `--yes`
+acts.
+
 ## Names
 
 An incarnation may carry a name, so the human tells sessions apart by
