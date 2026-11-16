@@ -10,7 +10,7 @@ use saccade::store::RecordId;
 
 use crate::common::{
     bind_next_ask, bounded_sac, fake_hc, fake_hc_spawn, fake_host, get_json, hc_argv, json_of,
-    post_json, pty_stdio, scratch_db, scratch_repo, scrubbed, spawn_serve,
+    post_json, pty_stdio, scratch_db, scratch_repo, scrubbed, sh, spawn_serve,
     spawn_serving_subprocess, stub_pi, suite_state,
 };
 
@@ -1579,4 +1579,287 @@ fn command_label(program: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap()
+}
+
+/// A list rig: the CLI face pointed at a real serving subprocess, so
+/// the door reads the fold through the server and git at the repo
+/// root exactly where it runs in production.
+struct ListRig {
+    bin: &'static str,
+    url: String,
+    repo: String,
+    db: String,
+}
+
+impl ListRig {
+    fn sac(&self, args: &[&str]) -> (bool, String, String) {
+        let mut full = vec![
+            "--server".to_string(),
+            self.url.clone(),
+            "--repo".to_string(),
+            self.repo.clone(),
+        ];
+        full.extend(args.iter().map(|s| s.to_string()));
+        let envs = [("SACCADE_ACTOR".to_string(), "list-bot".to_string())];
+        let env_refs: Vec<(&str, String)> =
+            envs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let (ok, out, err, timed_out) = bounded_sac(self.bin, &full, &env_refs);
+        assert!(!timed_out, "sac {args:?} ran past its bound: {out}{err}");
+        (ok, out, err)
+    }
+
+    /// Provision through the new door; the birth's recorded facts
+    /// come back.
+    fn provision(&self, label: &str, base: Option<&str>) -> (usize, String, String) {
+        let (ok, out, err) = match base {
+            Some(base) => self.sac(&["--json", "workspace", "new", label, "--base", base]),
+            None => self.sac(&["--json", "workspace", "new", label]),
+        };
+        assert!(ok, "workspace new refused: {out}{err}");
+        let birth = &json_of(&out)["workspace"];
+        (
+            birth["seq"].as_u64().unwrap() as usize,
+            birth["branch"].as_str().unwrap().to_string(),
+            birth["path"].as_str().unwrap().to_string(),
+        )
+    }
+}
+
+/// The list door through the CLI face: a scratch repo served for
+/// real, its workspaces pushed into every state the sketch names -
+/// merged, unmerged dirty, stacked on a recorded branch, fresh,
+/// worktree gone, branch gone, one cleaned and omitted - the rows
+/// read through the server and the local db alike.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("ws-list");
+    let dir = db.parent().unwrap().to_path_buf();
+    let (root, first, _head) = scratch_repo(&dir);
+    let hcs = fake_hc_spawn(&dir);
+    let host_state = dir.join("host-terminals");
+    std::fs::write(&host_state, b"").unwrap();
+    let host_envs = [
+        ("SACCADE_HERDR", hcs.display().to_string()),
+        ("FAKE_HC_TERMINALS", host_state.display().to_string()),
+    ];
+    let serve_envs: Vec<(&str, &str)> = host_envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let (_serve, url) = spawn_serve(
+        bin,
+        &db,
+        &["--repo", &root.display().to_string()],
+        &serve_envs,
+    );
+
+    /// One file's content committed inside the worktree.
+    fn commit_in(worktree: &Path, name: &str, content: &str) {
+        std::fs::write(worktree.join(name), content).unwrap();
+        sh(worktree, &["add", name]);
+        sh(worktree, &["commit", "-qm", "list work"]);
+    }
+
+    let rig = ListRig {
+        bin,
+        url,
+        repo: root.display().to_string(),
+        db: db.display().to_string(),
+    };
+
+    // the merged workspace: one commit, ff-merged into main, the
+    // worktree directory since removed by hand
+    let (merged_seq, merged_branch, merged_path) = rig.provision("list-merged", None);
+    commit_in(Path::new(&merged_path), "a.txt", "one line\n");
+    sh(&root, &["merge", "-q", "--ff-only", &merged_branch]);
+    std::fs::remove_dir_all(&merged_path).unwrap();
+
+    // the dirty workspace: one commit, plus untracked work
+    let (dirty_seq, dirty_branch, dirty_path) = rig.provision("list-dirty", None);
+    commit_in(Path::new(&dirty_path), "b.txt", "one\ntwo\n");
+    std::fs::write(Path::new(&dirty_path).join("untracked.txt"), "kept\n").unwrap();
+
+    // the stacked workspace sits on the dirty workspace's branch
+    let (stacked_seq, stacked_branch, stacked_path) =
+        rig.provision("list-stacked", Some(&dirty_branch));
+    commit_in(Path::new(&stacked_path), "c.txt", "one\ntwo\nthree\n");
+
+    // fresh: cut at the primary HEAD, no commits, clean checkout
+    let (fresh_seq, fresh_branch, _fresh_path) = rig.provision("list-fresh", None);
+
+    // the gone worktree: its work committed, then the directory removed
+    let (gone_seq, gone_branch, gone_path) = rig.provision("list-gone", None);
+    commit_in(Path::new(&gone_path), "g.txt", "gone\n");
+    std::fs::remove_dir_all(&gone_path).unwrap();
+
+    // the lost branch: the checkout detaches, then the branch goes
+    let (lost_seq, lost_branch, lost_path) = rig.provision("list-lost", None);
+    sh(Path::new(&lost_path), &["checkout", "-q", "--detach"]);
+    sh(&root, &["branch", "-D", &lost_branch]);
+
+    // the swept workspace: cut at the repo's first commit, cleaned
+    // through the real door, its row omitted - cut behind the others
+    // so its retained branch contains no other row's tip
+    let (swept_seq, swept_branch, swept_path) = rig.provision("list-swept", Some(&first));
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &swept_path]);
+    assert!(ok, "clean refused: {out}{err}");
+
+    // --json: the standing workspaces in birth order, the cleaned one
+    // and its retained branch absent
+    let (ok, out, err) = rig.sac(&["workspace", "list", "--json"]);
+    assert!(ok, "list refused: {out}{err}");
+    let listing = json_of(&out);
+    let rows = listing["workspaces"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            merged_seq,
+            dirty_seq,
+            stacked_seq,
+            fresh_seq,
+            gone_seq,
+            lost_seq
+        ]
+        .iter()
+        .map(|seq| format!("w-{seq}"))
+        .collect::<Vec<_>>(),
+        "{out}"
+    );
+    assert!(!out.contains(&format!("w-{swept_seq}")), "{out}");
+    assert!(!out.contains(&swept_branch), "{out}");
+    assert!(
+        listing["cursor"].as_u64().unwrap() >= swept_seq as u64,
+        "{out}"
+    );
+
+    let row_of = |branch: &str| {
+        rows.iter()
+            .find(|r| r["branch"].as_str() == Some(branch))
+            .unwrap_or_else(|| panic!("no row for {branch}: {out}"))
+    };
+
+    // merged: into the first candidate by name, every figure alive
+    // even with the worktree gone - the missing piece rides beside
+    let merged = row_of(&merged_branch);
+    assert_eq!(merged["status"]["merged_into"], json!(["main"]), "{out}");
+    assert_eq!(merged["status"]["dirty"], json!(false));
+    assert_eq!(merged["status"]["missing"], json!("worktree"), "{out}");
+    assert_eq!(
+        merged["change"],
+        json!({"files": 1, "insertions": 1, "deletions": 0})
+    );
+    assert_eq!(merged["ahead"], json!(1));
+    let touched = merged["touched"].as_u64().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(
+        now > touched && now - touched < 600,
+        "the touched time is the commit's: {touched}"
+    );
+
+    // dirty: untracked work reads dirty, no candidate holds the tip
+    let dirty = row_of(&dirty_branch);
+    assert_eq!(dirty["status"]["merged_into"], json!([]), "{out}");
+    assert_eq!(dirty["status"]["dirty"], json!(true));
+    assert_eq!(
+        dirty["change"],
+        json!({"files": 1, "insertions": 2, "deletions": 0})
+    );
+    assert_eq!(dirty["ahead"], json!(1));
+
+    // the stack stays unmerged: its parent's recorded branch excludes
+    // itself as a candidate
+    let stacked = row_of(&stacked_branch);
+    assert_eq!(stacked["status"]["merged_into"], json!([]), "{out}");
+    assert_eq!(stacked["ahead"], json!(1));
+
+    // fresh: the zero diff is facts, ahead zero
+    let fresh = row_of(&fresh_branch);
+    assert_eq!(
+        fresh["change"],
+        json!({"files": 0, "insertions": 0, "deletions": 0})
+    );
+    assert_eq!(fresh["ahead"], json!(0));
+
+    // the gone worktree: a status of its own, the branch answers on
+    let gone = row_of(&gone_branch);
+    assert_eq!(gone["status"]["missing"], json!("worktree"), "{out}");
+    assert_eq!(gone["status"]["dirty"], json!(false));
+    assert_eq!(
+        gone["change"],
+        json!({"files": 1, "insertions": 1, "deletions": 0})
+    );
+
+    // the lost branch: no numbers anywhere
+    let lost = row_of(&lost_branch);
+    assert_eq!(lost["status"]["missing"], json!("branch"), "{out}");
+    assert_eq!(lost["status"]["merged_into"], json!([]));
+    assert_eq!(lost["change"], Value::Null);
+    assert_eq!(lost["ahead"], Value::Null);
+    assert_eq!(lost["touched"], Value::Null);
+
+    // the text face: the header row and the sketch's columns
+    let (ok, out, err) = rig.sac(&["workspace", "list"]);
+    assert!(ok, "list refused: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(
+        lines[0].starts_with("WORKSPACE  BRANCH") && lines[0].contains("TOUCHED"),
+        "{out}"
+    );
+    let line_of = |needle: &str| {
+        lines
+            .iter()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no line for {needle}: {out}"))
+    };
+    let merged_line = line_of(&merged_branch);
+    assert!(
+        merged_line.contains("worktree missing") && merged_line.contains("1f +1 -0"),
+        "{out}"
+    );
+    let dirty_line = line_of(&dirty_branch);
+    assert!(dirty_line.contains("unmerged, dirty"), "{out}");
+    let stacked_line = line_of(&stacked_branch);
+    assert!(
+        stacked_line.contains("unmerged") && !stacked_line.contains("dirty"),
+        "{out}"
+    );
+    let fresh_line = line_of(&fresh_branch);
+    assert!(fresh_line.contains("merged into main"), "{out}");
+    assert!(fresh_line.contains("0f +0 -0"), "{out}");
+    let fresh_tail: Vec<&str> = fresh_line.split_whitespace().rev().take(2).collect();
+    assert_eq!(fresh_tail[1], "0", "{out}");
+    assert!(fresh_tail[0].ends_with('m'), "{out}");
+    let lost_line = line_of(&lost_branch);
+    assert!(lost_line.contains("branch missing"), "{out}");
+    let lost_tail: Vec<&str> = lost_line.split_whitespace().rev().take(3).collect();
+    assert!(lost_tail.iter().all(|c| *c == "-"), "{out}");
+    assert!(!out.contains(&swept_branch), "{out}");
+
+    // the local db shape resolves the same rows: one fold, either face
+    let (ok, local_out, err) = {
+        let full = vec![
+            "--db".to_string(),
+            rig.db.clone(),
+            "--repo".to_string(),
+            rig.repo.clone(),
+            "workspace".to_string(),
+            "list".to_string(),
+            "--json".to_string(),
+        ];
+        let envs = [("SACCADE_ACTOR".to_string(), "list-bot".to_string())];
+        let env_refs: Vec<(&str, String)> =
+            envs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let (ok, out, err, timed_out) = bounded_sac(bin, &full, &env_refs);
+        assert!(!timed_out, "the local list ran past its bound: {out}{err}");
+        (ok, out, err)
+    };
+    assert!(ok, "the local list refused: {local_out}{err}");
+    assert_eq!(
+        json_of(&local_out),
+        json_of(&serde_json::to_string(&listing).unwrap()),
+        "the local db face reads the same rows"
+    );
 }

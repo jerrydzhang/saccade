@@ -298,6 +298,7 @@ pub enum LifecycleAddress {
     Unrecorded,
 }
 
+use crate::objects::workspace::WorkspaceStage;
 use crate::store::{RecordId, World};
 
 /// Resolve one caller path to its recorded workspace birth, for every
@@ -541,9 +542,189 @@ pub fn branch_is_ancestor(
     }
 }
 
+// -- the standing list ----------------------------------------------------
+// One read joining the fold's recorded workspaces with git's own
+// answers, so the list door reports facts, never guesses. A missing
+// worktree or a missing branch is a status of its own: the row still
+// answers, the numbers it cannot have stay empty. Any other git
+// plumbing failure refuses the listing - a face that lies is worse
+// than one that declines.
+
+/// The recorded address a workspace is missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingPiece {
+    /// The recorded worktree path holds no directory
+    Worktree,
+    /// Git holds no local branch under the recorded name
+    Branch,
+}
+
+/// A row's status half: what is missing, the local branches the
+/// workspace branch's tip is merged into (the merged rule's full
+/// answer, first by name renders), and whether the checkout holds
+/// preserved work. A missing worktree cannot be dirty; a missing
+/// branch carries no numbers at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowStatus {
+    pub missing: Option<MissingPiece>,
+    pub merged_into: Vec<GitBranch>,
+    pub dirty: bool,
+}
+
+/// One standing workspace's row: the fold's recorded facts joined
+/// with git's own answers at the repository root.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListRow {
+    pub birth: RecordId,
+    pub base: GitCommit,
+    pub branch: GitBranch,
+    pub worktree: WorktreePath,
+    pub status: RowStatus,
+    /// Files, insertions, deletions between the recorded base and the
+    /// branch tip; None only when the branch is gone
+    pub change: Option<(u64, u64, u64)>,
+    /// Commits the branch tip carries beyond the recorded base
+    pub ahead: Option<u64>,
+    /// The branch tip's last commit time, epoch seconds
+    pub touched: Option<u64>,
+}
+
+/// The repository's local branches, by name: the merged rule's
+/// candidate order, so the first candidate is the first by name.
+pub fn local_branches(root: &Path) -> Result<Vec<GitBranch>, WorkspaceFail> {
+    let out = git(
+        root,
+        &["for-each-ref", "refs/heads", "--format=%(refname:short)"],
+    )?;
+    out.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            GitBranch::new(line.to_string())
+                .map_err(|e| WorkspaceFail::Git(format!("git named no branch {line:?}: {e:?}")))
+        })
+        .collect()
+}
+
+/// The shortstat reduction between two commits: files, insertions,
+/// deletions - the row's "16f +33 -256". An empty diff is zeros.
+pub fn shortstat(
+    root: &Path,
+    from: &GitCommit,
+    to: &GitCommit,
+) -> Result<(u64, u64, u64), WorkspaceFail> {
+    let range = format!("{}..{}", from.as_str(), to.as_str());
+    let out = git(root, &["diff", "--shortstat", &range])?;
+    Ok(parse_shortstat(&out))
+}
+
+/// The shortstat line's reduction: each comma section names a count
+/// and its noun; sections git omits read zero.
+fn parse_shortstat(out: &str) -> (u64, u64, u64) {
+    let mut figures = (0u64, 0u64, 0u64);
+    for section in out.split(',') {
+        let section = section.trim();
+        let Some(count) = section
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        if section.contains("file") {
+            figures.0 = count;
+        } else if section.contains("insertion") {
+            figures.1 = count;
+        } else if section.contains("deletion") {
+            figures.2 = count;
+        }
+    }
+    figures
+}
+
+/// Commits the tip carries beyond the base: the row's ahead count.
+pub fn commits_ahead(root: &Path, base: &GitCommit, tip: &GitCommit) -> Result<u64, WorkspaceFail> {
+    let range = format!("{}..{}", base.as_str(), tip.as_str());
+    let out = git(root, &["rev-list", "--count", &range])?;
+    out.parse()
+        .map_err(|e| WorkspaceFail::Git(format!("git rev-list gave no count: {e:?}")))
+}
+
+/// The tip's last commit time, epoch seconds: the age renders from it.
+pub fn last_commit_time(root: &Path, tip: &GitCommit) -> Result<u64, WorkspaceFail> {
+    let out = git(root, &["show", "-s", "--format=%ct", tip.as_str()])?;
+    out.trim()
+        .parse()
+        .map_err(|e| WorkspaceFail::Git(format!("git show gave no time: {e:?}")))
+}
+
+/// Every recorded workspace that is not cleaned, in birth order, each
+/// row the fold's facts joined with git's answers at `root`. The
+/// merged rule reads every uncleaned recorded branch as its
+/// exclusion, so a stacked workspace never reads its parent as
+/// merged; a cleaned workspace's retained branch still counts as a
+/// candidate, exactly the rule's contract.
+pub fn workspace_list(world: &World, root: &Path) -> Result<Vec<ListRow>, WorkspaceFail> {
+    let local = local_branches(root)?;
+    let standing: Vec<_> = world
+        .workspace_births()
+        .into_iter()
+        .filter_map(|birth| world.workspace_facts(birth))
+        .filter(|facts| facts.stage != WorkspaceStage::Cleaned)
+        .collect();
+    let recorded: Vec<GitBranch> = standing.iter().map(|f| f.branch.clone()).collect();
+    let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(root, work, target);
+    let mut rows = Vec::new();
+    for facts in &standing {
+        let (status, change, ahead, touched) = match branch_tip(root, &facts.branch)? {
+            // no branch, no tip, no numbers: the row still answers
+            None => (
+                RowStatus {
+                    missing: Some(MissingPiece::Branch),
+                    merged_into: Vec::new(),
+                    dirty: false,
+                },
+                None,
+                None,
+                None,
+            ),
+            Some(tip) => {
+                let merged_into = merged_branches(&facts.branch, &recorded, &local, live)?;
+                let missing =
+                    (!facts.worktree.as_path().is_dir()).then_some(MissingPiece::Worktree);
+                let dirty =
+                    missing.is_none() && preserved_work(facts.worktree.as_path())?.is_some();
+                (
+                    RowStatus {
+                        missing,
+                        merged_into,
+                        dirty,
+                    },
+                    Some(shortstat(root, &facts.base, &tip)?),
+                    Some(commits_ahead(root, &facts.base, &tip)?),
+                    Some(last_commit_time(root, &tip)?),
+                )
+            }
+        };
+        rows.push(ListRow {
+            birth: facts.birth,
+            base: facts.base.clone(),
+            branch: facts.branch.clone(),
+            worktree: facts.worktree.clone(),
+            status,
+            change,
+            ahead,
+            touched,
+        });
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::events::Event;
+    use crate::store::{Context, Record, Tier};
+    use crate::types::actor::ActorName;
 
     /// A scratch repo with one commit; returns its root.
     fn scratch_repo(tag: &str) -> PathBuf {
@@ -1095,5 +1276,220 @@ mod test {
             merged_branches(&work, &recorded, &local, fake).unwrap(),
             branches(&["main", "backup", "later-ws"])
         );
+    }
+
+    /// The shortstat reduction: each noun's count, sections git omits
+    /// reading zero, the empty diff zeros.
+    #[test]
+    fn the_shortstat_reduction_reads_each_section_git_names() {
+        assert_eq!(parse_shortstat(""), (0, 0, 0));
+        assert_eq!(
+            parse_shortstat(" 1 file changed, 1 insertion(+)"),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            parse_shortstat(" 2 files changed, 3 insertions(+)"),
+            (2, 3, 0)
+        );
+        assert_eq!(parse_shortstat(" 1 file changed, 1 deletion(-)"), (1, 0, 1));
+        assert_eq!(
+            parse_shortstat(" 16 files changed, 33 insertions(+), 256 deletions(-)"),
+            (16, 33, 256)
+        );
+    }
+
+    /// One workspace birth record for the list's world: the facts the
+    /// creation door would have recorded.
+    fn birth_record(seq: usize, base: &str, branch: &str, worktree: &Path) -> Record {
+        Record {
+            id: RecordId(seq),
+            timestamp: seq as u64,
+            context: Context {
+                actor: ActorName::new("pi".into()).unwrap(),
+                tier: Tier::Agent,
+                scope: None,
+            },
+            event: Event::WorkspaceCreated {
+                base: GitCommit::new(base.to_string()).unwrap(),
+                branch: GitBranch::new(branch.to_string()).unwrap(),
+                worktree: WorktreePath::new(worktree.to_path_buf()).unwrap(),
+            },
+        }
+    }
+
+    /// The list join over a live repo: six recorded workspaces stand
+    /// in every state the sketch names - merged (its worktree since
+    /// removed), unmerged dirty, stacked on a recorded branch, fresh
+    /// with no commits, branch deleted - and one cleaned workspace is
+    /// omitted. Missing pieces are statuses, never crashes; the
+    /// numbers only die with the branch.
+    #[test]
+    fn the_list_joins_the_fold_with_gits_answers_and_names_its_missing_pieces() {
+        let root = scratch_with_main("list");
+        let base = GitCommit::new(git(&root, &["rev-parse", "HEAD"]).unwrap()).unwrap();
+        let home = root.join("worktrees");
+        std::fs::create_dir_all(&home).unwrap();
+        let cut = |branch: &str, name: &str, at: &str| {
+            git(
+                &root,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    branch,
+                    &home.join(name).display().to_string(),
+                    at,
+                ],
+            )
+            .unwrap();
+            home.join(name)
+        };
+
+        // every workspace cuts at the base before any merge moves main:
+        // the merged workspace merges into main; its worktree goes
+        // away afterwards - the branch keeps every number alive
+        let merged_wt = cut("list-merged", "list-merged", "HEAD");
+        commit(&merged_wt, "a.txt", "one line\n", "merged work");
+
+        // the dirty workspace: one commit, plus untracked work
+        let dirty_wt = cut("list-dirty", "list-dirty", "HEAD");
+        commit(&dirty_wt, "b.txt", "one\ntwo\n", "dirty work");
+        std::fs::write(dirty_wt.join("untracked.txt"), "kept\n").unwrap();
+
+        // the stacked workspace sits on the dirty workspace's branch
+        let stacked_wt = cut("list-stacked", "list-stacked", "list-dirty");
+        commit(&stacked_wt, "c.txt", "one\ntwo\nthree\n", "stacked work");
+
+        // fresh: no commits, clean checkout
+        cut("list-fresh", "list-fresh", "HEAD");
+
+        // the lost branch: its checkout detaches, then the branch goes
+        let lost_wt = cut("list-lost", "list-lost", "HEAD");
+        git(&lost_wt, &["checkout", "-q", "--detach"]).unwrap();
+        git(&root, &["branch", "-D", "list-lost"]).unwrap();
+
+        // the cleaned workspace's branch stands, the fold moved on
+        cut("list-swept", "list-swept", "HEAD");
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", "list-merged"]).unwrap();
+        std::fs::remove_dir_all(&merged_wt).unwrap();
+        let dirty_base = GitCommit::new(git(&root, &["rev-parse", "list-dirty"]).unwrap()).unwrap();
+        let mut world = World::new();
+        let story = [
+            birth_record(1, base.as_str(), "list-merged", &merged_wt),
+            birth_record(2, base.as_str(), "list-dirty", &dirty_wt),
+            birth_record(3, dirty_base.as_str(), "list-stacked", &stacked_wt),
+            birth_record(4, base.as_str(), "list-fresh", &home.join("list-fresh")),
+            birth_record(5, base.as_str(), "list-lost", &lost_wt),
+            birth_record(6, base.as_str(), "list-swept", &home.join("list-swept")),
+        ];
+        for record in story {
+            world = world.apply(record).unwrap();
+        }
+        world = world
+            .apply(Record {
+                id: RecordId(7),
+                timestamp: 7,
+                context: Context {
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    tier: Tier::Agent,
+                    scope: None,
+                },
+                event: Event::WorkspaceCleaned {
+                    workspace: RecordId(6),
+                },
+            })
+            .unwrap();
+
+        // the candidate order is the branch-name order the doors read
+        assert_eq!(
+            local_branches(&root).unwrap(),
+            branches(&[
+                "list-dirty",
+                "list-fresh",
+                "list-merged",
+                "list-stacked",
+                "list-swept",
+                "main"
+            ])
+        );
+
+        let rows = workspace_list(&world, &root).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.birth.0).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "birth order, the cleaned workspace omitted"
+        );
+
+        // merged, worktree gone: the status of its own rides beside a
+        // full row - the branch still answers every number
+        assert_eq!(
+            rows[0].status,
+            RowStatus {
+                missing: Some(MissingPiece::Worktree),
+                merged_into: branches(&["main"]),
+                dirty: false,
+            }
+        );
+        assert_eq!(rows[0].change, Some((1, 1, 0)));
+        assert_eq!(rows[0].ahead, Some(1));
+        assert!(rows[0].touched.is_some());
+
+        // unmerged and dirty: the untracked work reads dirty, no
+        // candidate contains the tip
+        assert_eq!(
+            rows[1].status,
+            RowStatus {
+                missing: None,
+                merged_into: Vec::new(),
+                dirty: true,
+            }
+        );
+        assert_eq!(rows[1].change, Some((1, 2, 0)));
+        assert_eq!(rows[1].ahead, Some(1));
+
+        // the stack stays unmerged: its parent's recorded branch is
+        // excluded even though it contains the tip
+        assert_eq!(
+            rows[2].status,
+            RowStatus {
+                missing: None,
+                merged_into: Vec::new(),
+                dirty: false,
+            }
+        );
+        assert_eq!(rows[2].change, Some((1, 3, 0)));
+        assert_eq!(rows[2].ahead, Some(1));
+
+        // fresh: the zero diff renders as facts, ahead zero; its tip
+        // is contained by main and by the cleaned workspace's retained
+        // branch - cleaned branches are not excluded, so both count,
+        // and the first by name renders
+        assert_eq!(rows[3].change, Some((0, 0, 0)));
+        assert_eq!(rows[3].ahead, Some(0));
+        assert_eq!(
+            rows[3].status,
+            RowStatus {
+                missing: None,
+                merged_into: branches(&["list-swept", "main"]),
+                dirty: false,
+            }
+        );
+
+        // the lost branch: a status of its own, no numbers at all
+        assert_eq!(
+            rows[4].status,
+            RowStatus {
+                missing: Some(MissingPiece::Branch),
+                merged_into: Vec::new(),
+                dirty: false,
+            }
+        );
+        assert_eq!(rows[4].change, None);
+        assert_eq!(rows[4].ahead, None);
+        assert_eq!(rows[4].touched, None);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -330,6 +330,13 @@ enum WorkspaceVerb {
         /// The workspace's exact recorded path
         path: PathBuf,
     },
+    /// The standing workspaces: one row per recorded workspace that
+    /// is not cleaned - its branch, its merged status (into the first
+    /// local branch that contains its tip, by name), dirty or not,
+    /// the shortstat figures against its recorded base, commits
+    /// ahead, the last commit's age. A read: the fold and git only;
+    /// a missing worktree or branch is a status of its own
+    List,
 }
 
 #[derive(Clone, Copy, Subcommand)]
@@ -497,6 +504,7 @@ fn verb_name(verb: &WorkspaceVerb) -> &'static str {
     match verb {
         WorkspaceVerb::New { .. } => "new",
         WorkspaceVerb::Clean { .. } => "clean",
+        WorkspaceVerb::List => "list",
     }
 }
 
@@ -631,7 +639,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "--base");
                 }
             }
-            WorkspaceVerb::Clean { .. } => {}
+            WorkspaceVerb::Clean { .. } | WorkspaceVerb::List => {}
         },
         Cmd::Board { verb } => match verb {
             BoardVerb::Edit { dir, .. } | BoardVerb::Update { dir, .. } => {

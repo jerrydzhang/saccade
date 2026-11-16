@@ -119,6 +119,7 @@ end
 function __saccade_workspace_verbs
     printf 'new\tProvision a NEW workspace through Git effects\n'
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
+    printf 'list\tList the standing workspaces: branch, merged status, change\n'
 end
 
 complete -c sac -n '__saccade_no_verb; and not __saccade_prev_value_flag' -a '(__saccade_verbs)'
