@@ -240,3 +240,26 @@ test("m-547: refs in prose are targets of their own, in document order; code and
     ],
   );
 });
+
+test("t-62: every math expression in a block is a math target of its own, in document order, its TeX riding the target", () => {
+  const board = {
+    content: [
+      {
+        kind: "text",
+        markdown: "Inline $(\\mathbb{Z}_2)^p$ and $\\mathcal{F}_S$.\n\n$$\nE = mc^2\n$$",
+        pos: { start: { line: 1 }, end: { line: 6 } },
+      },
+      { kind: "text", markdown: "no math here", pos: { start: { line: 7 }, end: { line: 7 } } },
+    ],
+  } as unknown as Board;
+  assert.deepEqual(
+    boardTargetsOf(board).map((t) => [t.part, t.kind, t.tex]),
+    [
+      ["/content/0", "text", undefined],
+      ["/content/0/math/0", "math", "(\\mathbb{Z}_2)^p"],
+      ["/content/0/math/1", "math", "\\mathcal{F}_S"],
+      ["/content/0/math/2", "math", "E = mc^2"],
+      ["/content/1", "text", undefined],
+    ],
+  );
+});

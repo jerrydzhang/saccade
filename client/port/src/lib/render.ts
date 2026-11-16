@@ -17,7 +17,7 @@ import type { Root, RootContent, PhrasingContent } from "mdast";
 import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice, displayDelimited } from "./markdown.ts";
 import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
-import { diagramPart } from "./board/targets.ts";
+import { diagramPart, mathPart } from "./board/targets.ts";
 import { refPart, splitRefs } from "./board/refs.ts";
 import { highlightCode } from "./highlight.ts";
 
@@ -99,6 +99,21 @@ function renderText(value: string, hooks: RenderHooks, blockId: string, lineAttr
 
 /** Per render (one hooks object), the diagrams seen in each block. */
 const diagramCounts = new WeakMap<RenderHooks, Map<string, number>>();
+
+/** Per render (one hooks object), the math expressions seen in each
+ * block. */
+const mathCounts = new WeakMap<RenderHooks, Map<string, number>>();
+
+/** The math span's part attributes: <block>/math/<n> in document order
+ * - the same order lib/board/targets.ts walks the parse (t-62), so the
+ * DOM mirror matches the model's math targets. */
+function mathPartAttrs(hooks: RenderHooks, blockId: string): Attrs {
+  const seen = mathCounts.get(hooks) ?? new Map<string, number>();
+  mathCounts.set(hooks, seen);
+  const ordinal = seen.get(blockId) ?? 0;
+  seen.set(blockId, ordinal + 1);
+  return { "data-port-part": mathPart(blockId, ordinal), "data-port-kind": "math" };
+}
 
 
 
@@ -373,6 +388,7 @@ function renderDisplayMath(
     "span",
     {
       class: "math-display",
+      ...mathPartAttrs(hooks, blockId),
       "data-copy-unit": "math",
       "data-unit-display": "true",
       ...(id ? { "data-unit-id": id } : {}),
@@ -590,6 +606,7 @@ function renderMathBlock(
     "span",
     {
       class: "math-display",
+      ...mathPartAttrs(hooks, blockId),
       "data-copy-unit": "math",
       "data-unit-display": "true",
       ...(id ? { "data-unit-id": id } : {}),
@@ -685,6 +702,7 @@ export function renderPhrasing(
         "span",
         {
           class: display ? "math-display" : "math-inline",
+          ...mathPartAttrs(hooks, blockId),
           "data-copy-unit": "math",
           "data-unit-display": String(display),
           ...(id ? { "data-unit-id": id } : {}),

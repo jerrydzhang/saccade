@@ -392,3 +392,35 @@ test("a figure's acts: x enlarge first (the primary a plain click runs), then y 
     [],
   );
 });
+
+test("t-62: a math expression's menu is one act, y copy LaTeX; the payload is the TeX, never the authored form", () => {
+  const copied: string[] = [];
+  const deps = {
+    isFolded: () => false,
+    toggleFold: () => {},
+    referenceOf: () => null,
+    referencePorts: () => ({ open: () => {}, copy: (payload: string) => { copied.push(payload); } }),
+    referenceMachine: () => null,
+    partCitation: () => null,
+    mathTex: (part: string) => (part === "/content/0/math/0" ? "(\\mathbb{Z}_2)^p" : "E = mc^2"),
+  };
+  const acts = actsFor({ kind: "math", label: "math", part: "/content/0/math/0" }, deps);
+  assert.deepEqual(
+    acts.map((act) => act.key),
+    ["y"],
+  );
+  // y is the copy key every kind shares; the label says what a copy
+  // carries
+  assert.equal(acts[0]?.action.id, "math.copy-latex");
+  assert.equal(acts[0]?.action.label, "copy LaTeX");
+  acts[0]?.action.run();
+  assert.deepEqual(copied, ["(\\mathbb{Z}_2)^p"]);
+  // a second expression copies its OWN TeX
+  actsFor({ kind: "math", label: "math", part: "/content/0/math/1" }, deps)[0]?.action.run();
+  assert.deepEqual(copied, ["(\\mathbb{Z}_2)^p", "E = mc^2"]);
+  // no TeX for the part, or no window ports: the honest absence
+  const texless = { ...deps, mathTex: () => null };
+  assert.deepEqual(actsFor({ kind: "math", label: "math", part: "/content/0/math/0" }, texless), []);
+  const portless = { ...deps, referencePorts: () => null };
+  assert.deepEqual(actsFor({ kind: "math", label: "math", part: "/content/0/math/0" }, portless), []);
+});
