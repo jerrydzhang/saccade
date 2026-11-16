@@ -236,10 +236,16 @@ class SeedServer:
             raise SeedRefused("git must be on PATH: sac serve drives the seed repo through git")
         log = open(self.log_path, "wb")
         try:
+            # the state root is the run's own: `sac serve` opens the
+            # seeded repo's board store under XDG_STATE_HOME, so the pin
+            # keeps it out of the caller's real state directory (inside
+            # the lane the sandbox HOME already scopes the fallback)
+            env = {**os.environ, "XDG_STATE_HOME": str(self.root / "state")}
             self.process = subprocess.Popen(
                 [self.sac_bin, "serve", "--db", str(self.db), "--repo", str(self.repo),
                  "--bind", "127.0.0.1", "--port", str(self.port)],
                 stdout=log, stderr=log,
+                env=env,
             )
         finally:
             log.close()
