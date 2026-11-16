@@ -4,10 +4,11 @@
  * Light is warm paper; dark is the human's Mountain (Boosted) base16
  * scheme, its meaning colours raised in chroma with their hues kept so
  * states and the diff stay apart. The accent is pale teal (base0C),
- * the one hue no state uses. */
+ * the one hue no state uses. The tools are set in Inter, a board in the
+ * serif; green is done and concluded, blue working and in flight (t-63). */
 
 :root {
-  --port-font-ui: "Source Serif 4", Georgia, serif;
+  --port-font-ui: "Inter", system-ui, sans-serif;
   --port-font-text: "Source Serif 4", Georgia, serif;
   --port-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
@@ -22,6 +23,7 @@
   --port-color-selection: #e2d5c0;
   --port-color-error: #b0283a;
 
+  --port-edge-highlight: rgba(255, 255, 255, 0.55);
   --port-color-paper: #fbf8f3;
   --port-color-paper-ink: #25201b;
   --port-paper-shadow: 0 1px 3px rgba(60, 40, 20, 0.08);
@@ -34,9 +36,9 @@
   --port-label-background: #25201b;
   --port-label-ink: #fbf8f3;
 
-  --port-state-working: #3f8a3a;
+  --port-state-working: #4a6aa8;
   --port-state-blocked: #c0641c;
-  --port-state-done: #4a6aa8;
+  --port-state-done: #3f8a3a;
   --port-state-idle: #9a9084;
   --port-state-error: #b0283a;
 
@@ -61,7 +63,6 @@
   --port-diff-removed: #9a2420;
   --port-diff-removed-background: rgba(190, 50, 40, 0.13);
 
-  --port-space-strip: 0.4rem 1.4rem;
   --port-space-block: 0.85rem 0;
   --port-measure: 36em;
   --port-world-leading: 1.62;
@@ -85,6 +86,7 @@
   --port-color-selection: #3a3431;
   --port-color-error: #f08a94;
 
+  --port-edge-highlight: rgba(255, 255, 255, 0.05);
   --port-color-paper: #1b1918;
   --port-color-paper-ink: #e8e2dd;
   --port-paper-shadow: none;
@@ -97,9 +99,9 @@
   --port-label-background: #a2c3c4;
   --port-label-ink: #100f0e;
 
-  --port-state-working: #7fcf8a;
+  --port-state-working: #9db4e8;
   --port-state-blocked: #e9b56a;
-  --port-state-done: #9db4e8;
+  --port-state-done: #7fcf8a;
   --port-state-idle: #8a817c;
   --port-state-error: #f08a94;
 

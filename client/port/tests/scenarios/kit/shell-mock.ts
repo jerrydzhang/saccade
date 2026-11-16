@@ -33,6 +33,9 @@ export type ShellWorld = {
   /** Whether SACCADE_KEY_TRACE is set for this shell (off unless a
    * scenario asks). */
   keyTrace?: boolean;
+  /** Herdr's words feed as the shell holds it (words.rs WordsSnapshot,
+   * its wire names); absent, the feed is connected and holds none. */
+  words?: { generation: number; words: Record<string, Record<string, unknown>>; connected: boolean };
 };
 
 export const SHELL_WORLD_KEY = "__portSuiteShell";
@@ -141,6 +144,14 @@ export function installShell(world: ShellWorld): void {
       // the crate/decoder admission parity is pinned by the unit tests (lib/board/validate.ts)
       case "validate_board":
         return { verdict: "ok" };
+      // words.rs words_wait(since: u64, timeout: Option<u64>) -> WordsSnapshot:
+      // a newer generation answers at once; otherwise the hold ends with
+      // the same snapshot (held one second here, never the full timeout)
+      case "words_wait": {
+        const words = world.words ?? { generation: 0, words: {}, connected: true };
+        if (Number(args.since) < words.generation) return words;
+        return new Promise((resolve) => setTimeout(() => resolve(world.words ?? words), 1000));
+      }
       default:
         throw `the shell mock does not carry ${cmd} (kit/shell-mock.ts)`;
     }
