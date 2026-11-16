@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# The worktree hooks of the composed Claude Code harness: create runs
+# `sac workspace new` with the name the event carries and answers with
+# the one thing Claude Code reads from a WorktreeCreate command hook -
+# the created worktree's path, the last stdout line (the contract the
+# t-60 phase-4 trials verified against the pinned binary); remove runs
+# `sac workspace clean` on the path the event carries and exits with
+# sac's own code, so a refused clean - unmerged, dirty, unrecorded -
+# fails the removal instead of erasing a recorded workspace blind. The
+# remove hook fires for session worktrees only, never for subagents',
+# so cleanup stays the sweep's job. Like the SessionStart hook this
+# script is fail-closed on its own terms: every failure of its own
+# exits 2 with the reason on stderr. sac resolves from the session
+# PATH exactly as this harness's other hooks resolve their tools - the
+# launch equips the workspace's own environment, where the tracker's
+# binary rides - and the routing is inherited, never set by hand: the
+# launch door's environment names the tracker, and sac's own
+# compatibility rule refuses a server line it cannot bind.
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+fail() {
+	printf 'saccade: %s\n' "$1" >&2
+	if [ "$#" -gt 1 ]; then
+		printf 'saccade: %s\n' "$2" >&2
+	fi
+	exit 2
+}
+
+case "${1:-}" in
+	create | remove) mode="$1" ;;
+	*)
+		fail "the first argument names the mode: create or remove"
+		;;
+esac
+
+command -v jq >/dev/null 2>&1 ||
+	fail "jq is missing from PATH; the worktree hook cannot read its input"
+command -v sac >/dev/null 2>&1 ||
+	fail "sac is missing from PATH; the worktree hook cannot reach the tracker"
+
+# a tty on stdin is misuse, not a hook invocation: refuse instead of
+# blocking on a terminal that will never close
+if [ -t 0 ]; then
+	fail "no hook input on stdin; run as a Claude Code hook, not from a terminal"
+fi
+
+input="$(cat)"
+
+field() {
+	printf '%s' "$input" | jq -r --arg k "$1" '.[$k] | if type == "string" then . else "" end'
+}
+
+if [ "$mode" = create ]; then
+	if ! printf '%s' "$input" | jq -e 'has("name")' >/dev/null 2>&1; then
+		fail "the WorktreeCreate input is not a hook payload; no worktree is provisioned"
+	fi
+	name="$(field name)"
+	[ -n "$name" ] ||
+		fail "the WorktreeCreate input carries no worktree name; no worktree is provisioned"
+
+	err="$(mktemp)"
+	trap 'rm -f "$err"' EXIT
+	if ! payload="$(sac workspace new "$name" --json 2>"$err")"; then
+		fail "sac workspace new refused the name $name; no worktree is provisioned" "$(cat "$err")"
+	fi
+	path="$(printf '%s' "$payload" | jq -er '.workspace.path | strings' 2>/dev/null)" ||
+		fail "sac workspace new answered without a workspace path" "$(cat "$err")"
+	# the whole stdout answer: the created path, one line, the last line
+	printf '%s\n' "$path"
+	exit 0
+fi
+
+if ! printf '%s' "$input" | jq -e 'has("worktree_path")' >/dev/null 2>&1; then
+	fail "the WorktreeRemove input is not a hook payload; no workspace is cleaned"
+fi
+path="$(field worktree_path)"
+[ -n "$path" ] ||
+	fail "the WorktreeRemove input carries no worktree_path; no workspace is cleaned"
+
+# sac's verdict is the answer: its words go through, its code rides
+status=0
+sac workspace clean "$path" || status=$?
+exit "$status"

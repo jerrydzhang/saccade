@@ -13,6 +13,33 @@
           }
         ]
       }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@worktreeHook@",
+            "args": ["create"],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@worktreeHook@",
+            "args": ["remove"],
+            "timeout": 30
+          }
+        ]
+      }
     ]
+  },
+  "permissions": {
+    "additionalDirectories": ["@workspaceRoot@"]
   }
 }

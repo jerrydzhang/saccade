@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import {
 	chmodSync,
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -31,6 +32,10 @@ const wrapperTemplate = readFileSync(
 );
 const settingsTemplate = readFileSync(
 	join(here, "settings.json.template"),
+	"utf8",
+);
+const worktreeTemplate = readFileSync(
+	join(here, "saccade-cc-worktree.template"),
 	"utf8",
 );
 
@@ -148,10 +153,13 @@ test("the hook presents the host-injected terminal pair with session-scoped prov
 });
 
 // spawn, never spawnSync: the fake tracker answers on this same
-// event loop, which a synchronous wait would block forever
-function runHook(hook, input, env) {
+// event loop, which a synchronous wait would block forever. The
+// worktree hooks take their mode as argv; the SessionStart hook
+// takes none.
+function runHook(hook, input, env, args = []) {
+	const argv = typeof args === "string" ? [args] : args;
 	return new Promise((resolve) => {
-		const child = spawn(hook, {
+		const child = spawn(hook, argv, {
 			env: { ...process.env, ...env },
 		});
 		let stdout = "";
@@ -584,7 +592,11 @@ test("the wrapper refuses the --settings= form too", () => {
 test("the packaged settings wire the hook on every SessionStart source", () => {
 	const hookPath = "/nix/store/fake-hook/bin/saccade-cc-attach";
 	const settings = JSON.parse(
-		substitute(settingsTemplate, { attachHook: hookPath }),
+		substitute(settingsTemplate, {
+			attachHook: hookPath,
+			worktreeHook: "/nix/store/fake-hook/bin/saccade-cc-worktree",
+			workspaceRoot: "/home/someone/state/saccade/saccade-f1f3b490/worktrees",
+		}),
 	);
 	const groups = settings.hooks.SessionStart;
 	assert.equal(groups.length, 1);
@@ -597,6 +609,220 @@ test("the packaged settings wire the hook on every SessionStart source", () => {
 	assert.equal(entry.onFailure, "block");
 });
 
+test("the substituted settings wire the worktree hooks and pre-authorize the workspace root", () => {
+	const worktreePath = "/nix/store/fake-hook/bin/saccade-cc-worktree";
+	const root = "/home/someone/state/saccade/saccade-f1f3b490/worktrees";
+	const settings = JSON.parse(
+		substitute(settingsTemplate, {
+			attachHook: "/nix/store/fake-hook/bin/saccade-cc-attach",
+			worktreeHook: worktreePath,
+			workspaceRoot: root,
+		}),
+	);
+	// both worktree events: one group each, no matcher (the events
+	// filter nothing), the packaged script carrying the mode as argv
+	for (const [event, mode] of [
+		["WorktreeCreate", "create"],
+		["WorktreeRemove", "remove"],
+	]) {
+		const groups = settings.hooks[event];
+		assert.equal(groups.length, 1);
+		assert.equal(groups[0].matcher, undefined);
+		const entry = groups[0].hooks[0];
+		assert.equal(entry.type, "command");
+		assert.equal(entry.command, worktreePath);
+		assert.deepEqual(entry.args, [mode]);
+		assert.equal(entry.timeout, 30);
+	}
+	// the workspace root the composer resolves: the tracker's worktrees
+	// directory, pre-authorized as an additional working directory so a
+	// plain subagent reads a workspace in any mode and edits under
+	// acceptEdits or stronger (the trial result)
+	assert.deepEqual(settings.permissions.additionalDirectories, [root]);
+});
+
+// -- the worktree hooks ----------------------------------------------
+
+const worktreeCreateInput = {
+	session_id: "a1b2c3d4-1111-4222-8333-444455556666",
+	transcript_path: "/home/someone/.claude/projects/p/a1b2c3d4.jsonl",
+	cwd: "/home/someone/ws",
+	hook_event_name: "WorktreeCreate",
+	name: "trial-name",
+};
+
+const worktreeRemoveInput = {
+	session_id: "a1b2c3d4-1111-4222-8333-444455556666",
+	transcript_path: "/home/someone/.claude/projects/p/a1b2c3d4.jsonl",
+	cwd: "/home/someone/ws",
+	hook_event_name: "WorktreeRemove",
+	worktree_path: "/home/someone/state/saccade/saccade-f1f3b490/worktrees/ws-a1b2c3",
+};
+
+// the same placeholder substitution, applied to the worktree script:
+// the template carries no packaging-time placeholder, so the
+// substituted copy is the template byte for byte
+function buildWorktreeHook(dir) {
+	const path = join(dir, "saccade-cc-worktree");
+	writeFileSync(path, substitute(worktreeTemplate, {}));
+	chmodSync(path, 0o755);
+	return path;
+}
+
+// a fake sac on a PATH the hook resolves first: records its argv,
+// answers what the scripted run demands - the json face the door
+// prints on create, a code on clean
+function fakeSac(dir, script) {
+	const bin = join(dir, "bin");
+	mkdirSync(bin, { recursive: true });
+	const sac = join(bin, "sac");
+	writeFileSync(sac, `#!/usr/bin/env bash\n${script}\n`);
+	chmodSync(sac, 0o755);
+	return bin;
+}
+
+function sacPathEnv(bin) {
+	return { PATH: `${bin}:${process.env.PATH}` };
+}
+
+test("the create hook provisions through sac and prints the path as the only stdout line", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const argvFile = join(dir, "argv");
+	const created = join(
+		"/home/someone/state/saccade/saccade-f1f3b490/worktrees",
+		"ws-a1b2c3",
+	);
+	const bin = fakeSac(
+		dir,
+		`printf '%s\\n' "$@" > "$RECORD"\nprintf '%s\\n' '{"created":true,"workspace":{"path":"${created}"}}'`,
+	);
+	const run = await runHook(hook, worktreeCreateInput, {
+		...sacPathEnv(bin),
+		RECORD: argvFile,
+	}, "create");
+	assert.equal(run.status, 0, run.stderr);
+	// the door the trial verified: workspace new with the event's name,
+	// the json face asked for, nothing else
+	assert.deepEqual(readFileSync(argvFile, "utf8").split("\n"), [
+		"workspace",
+		"new",
+		"trial-name",
+		"--json",
+		"",
+	]);
+	assert.equal(run.stdout, `${created}\n`);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a refused creation fails closed with sac's words and no path on stdout", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const bin = fakeSac(dir, `echo 'workspace label refused' >&2; exit 9`);
+	const run = await runHook(hook, worktreeCreateInput, sacPathEnv(bin), "create");
+	assert.equal(run.status, 2);
+	assert.match(run.stderr, /workspace label refused/);
+	assert.match(run.stderr, /no worktree is provisioned/);
+	assert.equal(run.stdout, "");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a create payload without a name fails closed before sac runs", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const argvFile = join(dir, "argv");
+	const bin = fakeSac(
+		dir,
+		`printf '%s\\n' "$@" > "$RECORD"\nexit 0`,
+	);
+	const run = await runHook(
+		hook,
+		{ ...worktreeCreateInput, name: "" },
+		{
+			...sacPathEnv(bin),
+			RECORD: argvFile,
+		},
+		"create",
+	);
+	assert.equal(run.status, 2);
+	assert.match(run.stderr, /carries no worktree name/);
+	assert.equal(run.stdout, "");
+	assert.equal(existsSync(argvFile), false, "sac never ran");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a malformed create payload fails closed with no provisioning", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const bin = fakeSac(dir, "exit 0");
+	const run = await runHook(hook, "definitely not json", sacPathEnv(bin), "create");
+	assert.equal(run.status, 2);
+	assert.match(run.stderr, /not a hook payload/);
+	assert.equal(run.stdout, "");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the remove hook cleans through sac and rides its exit code", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const argvFile = join(dir, "argv");
+	const bin = fakeSac(
+		dir,
+		`printf '%s\\n' "$@" > "$RECORD"\necho 'workspace w-9 cleaned'\nexit 0`,
+	);
+	const run = await runHook(
+		hook,
+		worktreeRemoveInput,
+		{
+			...sacPathEnv(bin),
+			RECORD: argvFile,
+		},
+		"remove",
+	);
+	assert.equal(run.status, 0, run.stderr);
+	assert.deepEqual(readFileSync(argvFile, "utf8").split("\n"), [
+		"workspace",
+		"clean",
+		worktreeRemoveInput.worktree_path,
+		"",
+	]);
+	assert.match(run.stdout, /workspace w-9 cleaned/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a refused clean rides sac's own code with its words on stderr", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const bin = fakeSac(dir, `echo 'workspace_work_present' >&2; exit 6`);
+	const run = await runHook(hook, worktreeRemoveInput, sacPathEnv(bin), "remove");
+	assert.equal(run.status, 6);
+	assert.match(run.stderr, /workspace_work_present/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a remove payload without a worktree_path fails closed before sac runs", async () => {
+	const dir = scratch();
+	const hook = buildWorktreeHook(dir);
+	const argvFile = join(dir, "argv");
+	const bin = fakeSac(
+		dir,
+		`printf '%s\\n' "$@" > "$RECORD"\nexit 0`,
+	);
+	const run = await runHook(
+		hook,
+		{ ...worktreeRemoveInput, worktree_path: "" },
+		{
+			...sacPathEnv(bin),
+			RECORD: argvFile,
+		},
+		"remove",
+	);
+	assert.equal(run.status, 2);
+	assert.match(run.stderr, /carries no worktree_path/);
+	assert.equal(existsSync(argvFile), false, "sac never ran");
+	rmSync(dir, { recursive: true, force: true });
+});
+
 test("the substituted hook script parses as bash and leaves no placeholders", async () => {
 	const dir = scratch();
 	const hook = buildHook(dir);
@@ -604,5 +830,12 @@ test("the substituted hook script parses as bash and leaves no placeholders", as
 	assert.equal(/@[a-zA-Z]+@/.test(text), false);
 	const probe = spawnSync("bash", ["-n", hook], { encoding: "utf8" });
 	assert.equal(probe.status, 0, probe.stderr);
+	const worktree = buildWorktreeHook(dir);
+	const worktreeText = readFileSync(worktree, "utf8");
+	assert.equal(/@[a-zA-Z]+@/.test(worktreeText), false);
+	const worktreeProbe = spawnSync("bash", ["-n", worktree], {
+		encoding: "utf8",
+	});
+	assert.equal(worktreeProbe.status, 0, worktreeProbe.stderr);
 	rmSync(dir, { recursive: true, force: true });
 });
