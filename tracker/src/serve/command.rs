@@ -29,6 +29,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                 .ok()
                 .and_then(|s| s.rows.last().map(|r| r.seq));
             app.attempts.append(
+                "command",
                 None,
                 None,
                 0,
@@ -77,7 +78,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
             .map(|(stored, _)| stored)
             .map_err(ApiFail::from)
         })();
-        integration_outcome(&app, &guard, None, &received, started, &outcome);
+        integration_outcome(&app, &guard, "command", None, &received, started, &outcome);
         drop(guard);
         if outcome.is_ok() {
             app.wake_landing();
@@ -102,7 +103,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         let send_context = context.clone();
         let send_command = command.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            send_operation(&send_app, &send_context, send_command, received)
+            send_operation(&send_app, "command", &send_context, send_command, received)
         })
         .await
         .expect("the send operation does not panic");
@@ -118,7 +119,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
             Err(e) => execute_failure_response(&app, e, &command),
         };
     }
-    match app.execute(&context, command.clone(), envelope.at, received) {
+    match app.execute("command", &context, command.clone(), envelope.at, received) {
         Ok(stored) => {
             let mut reply = json!({"records": &stored});
             // a create reply names what was born: the id resolved from

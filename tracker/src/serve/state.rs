@@ -242,10 +242,12 @@ impl AppState {
 
     /// The judging seam: one write attempt, one line in the attempts
     /// log, appended while the writer lock is held so the file's order
-    /// is the judgment order. Duration includes the lock wait - the
-    /// queueing a request met is part of what the diagnoser wants.
+    /// is the judgment order. The line names the door that judged
+    /// (`door`); duration includes the lock wait - the queueing a
+    /// request met is part of what the diagnoser wants.
     pub fn execute(
         &self,
+        door: &str,
         context: &Context,
         command: Command,
         at: Option<u64>,
@@ -283,6 +285,7 @@ impl AppState {
                 // landing is the wake, never a timer
                 self.wake_landing();
                 self.attempts.append(
+                    door,
                     Some(context.actor.as_str()),
                     received.client.as_deref(),
                     duration_ms,
@@ -292,6 +295,7 @@ impl AppState {
                 );
             }
             Err(_) => self.attempts.append(
+                door,
                 Some(context.actor.as_str()),
                 received.client.as_deref(),
                 duration_ms,

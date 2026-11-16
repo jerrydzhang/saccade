@@ -26,12 +26,12 @@ pub(super) fn ready(guard: &mut ServerState) -> Result<&mut Inner, ApiFail> {
 /// Malformed, read the caller's client off the parsed request, start
 /// the clock, take the writer lock, run the operation, log the
 /// attempt, fire the landing wake exactly when the write landed, and
-/// answer 200 with the reply or the failure. `_name` is the door's
-/// name; the attempts log names its door in t-60 2.5.
+/// answer 200 with the reply or the failure. `name` is the door's
+/// name, and the attempts line carries it in its `door` field.
 pub(super) fn door<Request, Reply, Client, Operation>(
     app: &AppState,
     body: Bytes,
-    _name: &'static str,
+    name: &'static str,
     client_of: Client,
     operation: Operation,
 ) -> Response
@@ -53,7 +53,7 @@ where
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = operation(app, &mut guard, request);
-    integration_outcome(app, &guard, None, &received, started, &outcome);
+    integration_outcome(app, &guard, name, None, &received, started, &outcome);
     if outcome.is_ok() {
         app.wake_landing();
     }
@@ -74,7 +74,7 @@ where
 pub(super) fn door_limited<Request, Reply, Client, Operation>(
     app: &AppState,
     body: Result<Bytes, BytesRejection>,
-    _name: &'static str,
+    name: &'static str,
     client_of: Client,
     operation: Operation,
 ) -> Response
@@ -85,7 +85,7 @@ where
     Operation: FnOnce(&AppState, &mut ServerState, Request) -> Result<Reply, ApiFail>,
 {
     match board_body(body) {
-        Ok(body) => door(app, body, _name, client_of, operation),
+        Ok(body) => door(app, body, name, client_of, operation),
         Err(fail) => api_failure(fail),
     }
 }
@@ -95,6 +95,7 @@ where
 pub(super) fn integration_outcome<T>(
     app: &AppState,
     guard: &ServerState,
+    door: &str,
     actor: Option<String>,
     received: &AsReceived,
     started: std::time::Instant,
@@ -108,6 +109,7 @@ pub(super) fn integration_outcome<T>(
                 ServerState::Degraded(..) => None,
             };
             app.attempts.append(
+                door,
                 actor.as_deref(),
                 received.client.as_deref(),
                 duration_ms,
@@ -132,6 +134,7 @@ pub(super) fn integration_outcome<T>(
                 ServerState::Degraded(..) => None,
             };
             app.attempts.append(
+                door,
                 actor.as_deref(),
                 received.client.as_deref(),
                 duration_ms,

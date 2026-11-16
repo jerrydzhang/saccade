@@ -1076,3 +1076,38 @@ async fn a_refused_writes_line_replays_against_a_cursor_clone() {
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+/// The attempts log names its door: a landed and a refused attempt
+/// each carry the door that judged them.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_attempts_line_names_its_door() {
+    let db = scratch_db("doorline");
+    let base_url = spawn_server(&db).await;
+
+    // a landed write through a helper door: the line names the route
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "doorline001", "address": "tp", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // a refused write through the command door names that door
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"claim_task": {"id": 9, "incarnation": null}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_task_id");
+
+    let lines = attempts_lines(&db);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["door"], "incarnations/register");
+    assert_eq!(lines[1]["door"], "command");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}

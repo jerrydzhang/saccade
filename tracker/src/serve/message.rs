@@ -94,6 +94,7 @@ fn wire_envelope(world: &World, id: MessageId) -> Option<String> {
 
 pub(super) fn send_operation(
     app: &AppState,
+    door: &str,
     context: &Context,
     command: Command,
     received: AsReceived,
@@ -115,7 +116,7 @@ pub(super) fn send_operation(
     // the guard, not the Arc: the serialization is the lock itself,
     // held across the record and the submit
     let _serialized = lock.lock().expect("the submit lock holds");
-    let stored = app.execute(context, command, None, received)?;
+    let stored = app.execute(door, context, command, None, received)?;
     let sent = stored.first().expect("a message lands its one record").seq;
     // the freshest facts under the lock: the snapshot that resolves
     // the address holds the just-landed message, so its numbers are
@@ -313,7 +314,13 @@ pub(super) async fn message_send(State(app): State<AppState>, body: Bytes) -> Re
     let send_context = context.clone();
     let send_command = command.clone();
     let outcome = tokio::task::spawn_blocking(move || {
-        send_operation(&send_app, &send_context, send_command, received)
+        send_operation(
+            &send_app,
+            "messages/send",
+            &send_context,
+            send_command,
+            received,
+        )
     })
     .await
     .expect("the send operation does not panic");
