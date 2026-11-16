@@ -4,7 +4,12 @@
 // dynamic ranges (\mathbb, \mathcal, ...) on first use, which the
 // synchronous tex2svg cannot wait for ("MathJax retry"). Glyphs
 // inherit surrounding text color via currentColor; sizes stay natural
-// (no shrinking) per the ratified direction.
+// (no shrinking) per the ratified direction. MathJax 4's a11y suite
+// (explorer, speech, braille) boots on by default and is disabled at
+// configure time through the menu settings' enrich switch (t-61):
+// rendered math carries no tabindex, so a click cannot steal focus and
+// an ordinary keystroke cannot drive the explorer's help dialog with
+// its docs.mathjax.org link; no overlays, no SRE worker lane.
 
 import type { MathNode } from "./markdown.ts";
 
@@ -58,6 +63,20 @@ function configureBeforeLoad(): void {
     },
     options: {
       enableMenu: false,
+      // MathJax 4's a11y suite is governed by the contextual menu
+      // settings, not by the top-level options: the document
+      // constructor derives enableSpeech, enableBraille,
+      // enableComplexity and enableExplorer from
+      // menuOptions.settings.enrich at boot, overwriting any
+      // top-level enableExplorer, so enrich: false is the only path
+      // that lands (the 4.1 docs call disabling enrichment the way to
+      // turn the accessibility tools off at once). enableMenu: false
+      // still governs the context menu itself.
+      menuOptions: {
+        settings: {
+          enrich: false,
+        },
+      },
     },
     startup: {
       typeset: false,
