@@ -23,7 +23,8 @@ export type TargetKind =
   | "project"
   | "agent"
   | "ref"
-  | "reference";
+  | "reference"
+  | "math";
 
 /** Whether a target carries prose (text and annotations). */
 export function isTextKind(kind: TargetKind): boolean {

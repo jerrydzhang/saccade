@@ -13,6 +13,12 @@ export function diagramPart(blockPart: string, ordinal: number): string {
   return `${blockPart}/diagram/${ordinal}`;
 }
 
+/** A math expression's part path: its block's part plus its ordinal
+ * there (the renderer stamps the same path on the rendered span). */
+export function mathPart(blockPart: string, ordinal: number): string {
+  return `${blockPart}/math/${ordinal}`;
+}
+
 export type BoardTargetKind = "text" | "annotation" | "figure" | "group" | "incorporation" | "unknown";
 
 export type BoardTarget = Readonly<{
@@ -26,6 +32,9 @@ export type BoardTarget = Readonly<{
   /** The incorporation's model-authored citation source, for
    * reference targets (t-36@r90); absent for every other kind. */
   source?: Readonly<{ task: string; revision: number; select: readonly string[] }>;
+  /** The expression's LaTeX source, the math copy act's payload
+   * (t-62); present only on math targets. */
+  tex?: string;
 }>;
 
 /** The model-derived targets of a decoded board: every content part,
@@ -81,8 +90,16 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       // every rendered diagram in a block's markdown is a target of its
       // own (the prototype's mermaid figure kind, inst16.html:224)
       if (block.kind === "text" || block.kind === "annotation") {
-        parseMarkdown(block.markdown, 0, 1).mermaidFences.forEach((_, ordinal) => {
+        const parsed = parseMarkdown(block.markdown, 0, 1);
+        parsed.mermaidFences.forEach((_, ordinal) => {
           out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram" });
+        });
+        // every math expression in the block's markdown is a target of
+        // its own (t-62), in document order - the same order the
+        // renderer walks the parse when it stamps the spans; the TeX
+        // rides the target (the copy act's payload)
+        parsed.mathNodes.forEach((node, ordinal) => {
+          out.push({ part: mathPart(part, ordinal), kind: "math", text: "math", tex: node.value });
         });
         // every ref in the prose is a target of its own (the prototype's
         // linkify, inst16.html:197); its text is the ref itself

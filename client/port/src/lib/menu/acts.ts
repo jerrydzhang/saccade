@@ -67,6 +67,9 @@ export interface BoardMenuDeps {
   partCitation(part: string): string | null;
   /** A prose ref target's ref text (t-3@r14, i-2 ...), or null. */
   refOf?(part: string): string | null;
+  /** A math expression's TeX source, the copy act's payload (t-62),
+   * or null when the part names no rendered math. */
+  mathTex?(part: string): string | null;
   /** Capture input while open. Lease release returns to the CURRENT
    * base; a menu never reinstalls its own saved reading context. */
   capture(context: InputContext): { release(): void };
@@ -91,10 +94,10 @@ export function createBoardMenu(deps: BoardMenuDeps): BoardMenu {
 }
 
 /** The per-kind act declarations. Groups fold/unfold (chunk C);
- * incorporations expand/collapse (t-58); a
- * citation's reference target follows here first (so a plain click
- * follows) and copies its payload (t-36@r90). Every other kind
- * carries no acts yet. */
+ * incorporations expand/collapse (t-58); math copies its LaTeX
+ * (t-62); a citation's reference target follows here first (so a
+ * plain click follows) and copies its payload (t-36@r90). Every other
+ * kind carries no acts yet. */
 export function actsFor(
   target: MenuTarget,
   deps: Pick<
@@ -108,6 +111,7 @@ export function actsFor(
     | "referenceMachine"
     | "partCitation"
     | "refOf"
+    | "mathTex"
   >,
 ): readonly MenuAct[] {
   if (target.kind === "group" && target.part !== null) {
@@ -190,6 +194,26 @@ export function actsFor(
       });
     }
     return acts;
+  }
+  if (target.kind === "math" && target.part !== null) {
+    // t-62: the expression's LaTeX source is the whole menu - y copies
+    // it, through the menu's own paths (right-click, a select label,
+    // Enter while the menu is open). A click on the expression acts
+    // nothing: math wires no click primary (the human's ruling), the
+    // only kind whose first act is menu-only. The payload is the TeX,
+    // not the authored $...$ form: what pasting into notes wants is
+    // the source; the delimiters are a display convention whoever
+    // pastes re-adds in their own notation. A copy carries the exact
+    // stored value, never rendered markup.
+    const tex = deps.mathTex?.(target.part) ?? null;
+    const ports = deps.referencePorts();
+    if (tex === null || ports === null) return [];
+    return [
+      {
+        key: "y",
+        action: { id: "math.copy-latex", label: "copy LaTeX", run: () => ports.copy(tex) },
+      },
+    ];
   }
   if (target.kind === "figure" && target.part !== null) {
     // the prototype's figure kind (inst16 :47): 'x' Enlarge FIRST -

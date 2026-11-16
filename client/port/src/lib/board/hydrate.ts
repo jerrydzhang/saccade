@@ -283,6 +283,11 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   const line = span.dataset.line ? Number(span.dataset.line) : undefined;
   const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, authored: span.dataset.unitSource ?? "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
   if (!result.ok) {
+    // the error span is not a math part (t-62): no math menu, no copy
+    // act on an expression that never rendered - the authored source
+    // stands here as inspectable, selectable text of the block
+    span.removeAttribute("data-port-part");
+    span.removeAttribute("data-port-kind");
     span.classList.add("math-error");
     span.title = `math conversion failed: ${result.message}`;
     span.textContent = span.dataset.unitSource ?? `$${tex}$`;
@@ -291,6 +296,12 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   }
   span.textContent = "";
   span.append(result.container);
+  // a click on math acts nothing (t-62, the human's ruling): math
+  // wires no click primary - the expression's act is the menu's, open
+  // by right-click or a select label, and no stray click copies. The
+  // span still carries its part path, so the generic contextmenu path
+  // and the select labels resolve it, and the open menu paints the
+  // part's selection mark.
   outcomes.push({ kind: "math", status: "ok", message: "", line });
 }
 

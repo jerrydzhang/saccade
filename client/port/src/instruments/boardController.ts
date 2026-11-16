@@ -1171,6 +1171,10 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     referencePorts: () => referencePorts,
     referenceMachine: () => scope.frame().resolved?.machine ?? null,
+    mathTex: (part) => {
+      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "math");
+      return target === undefined ? null : target.tex ?? null;
+    },
     refOf: (part) => {
       const target = scope.frame().targets.find((entry) => entry.part === part);
       return target !== undefined && target.kind === "ref" ? target.text : null;
