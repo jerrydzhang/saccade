@@ -91,7 +91,11 @@ pub(super) fn workspace_list_door(cli: &Cli, destination: &Destination) -> Resul
 /// One row's json face: the same fields the text row carries, the
 /// merged rule's full answer riding `status.merged_into` (the text
 /// names only the first), the missing piece named when it is there,
-/// and `null` figures where the branch is gone.
+/// and `null` figures where the branch is gone. The json shape needs
+/// no new field for the no-commits row: `ahead: 0` is it - a merged
+/// row is ahead 1 or more, so a reader tells "no commits" from
+/// "merged" by `ahead` alone - while `merged_into` stays the rule's
+/// computed answer, however pointless the ancestry of a shared tip.
 fn list_row_value(row: &ListRow) -> serde_json::Value {
     let mut status = serde_json::json!({
         "merged_into": row
@@ -155,15 +159,22 @@ fn render_list_table(rows: &[ListRow]) -> String {
 
 /// One row's six cells: the id the fold numbers workspaces by (the
 /// birth record's position), the status of its own where a piece is
-/// missing, and "-" where no number exists.
+/// missing or the branch added no commits (ahead zero - its tip is
+/// the base's, so the merged rule's ancestry reads merged there, a
+/// rule consequence no row should show), and "-" where no number
+/// exists.
 fn list_cells(row: &ListRow, now: u64) -> [String; 6] {
     let status = match row.status.missing {
         Some(MissingPiece::Worktree) => "worktree missing".to_string(),
         Some(MissingPiece::Branch) => "branch missing".to_string(),
         None => {
-            let merged = match row.status.merged_into.first() {
-                Some(first) => format!("merged into {}", first.as_str()),
-                None => "unmerged".to_string(),
+            let merged = if row.ahead == Some(0) {
+                "no commits".to_string()
+            } else {
+                match row.status.merged_into.first() {
+                    Some(first) => format!("merged into {}", first.as_str()),
+                    None => "unmerged".to_string(),
+                }
             };
             if row.status.dirty {
                 format!("{merged}, dirty")
@@ -267,6 +278,9 @@ pub(super) fn workspace_clean_door(
             (false, Some(client::BranchKept::Unmerged)) => {
                 format!("branch {name} kept (unmerged)")
             }
+            (false, Some(client::BranchKept::NoCommits)) => {
+                format!("branch {name} kept (no commits)")
+            }
             (false, Some(client::BranchKept::Missing)) => format!("branch {name} already absent"),
             (false, None) => format!("branch {name} kept"),
         }
@@ -320,9 +334,10 @@ struct SweepLine {
 }
 
 impl SweepLine {
-    /// A row the sweep leaves: the missing piece named, or the
-    /// unmerged truth, or the dirt beside the merge - always the
-    /// operator's reason, never an act.
+    /// A row the sweep leaves: the missing piece named, the no-commits
+    /// truth, the unmerged truth, or the dirt beside whichever merge
+    /// verdict the row earned - always the operator's reason, never an
+    /// act.
     fn left(row: &ListRow) -> Self {
         SweepLine {
             word: "left",
@@ -427,14 +442,18 @@ fn refusal_words(detail: &str) -> String {
 /// Why the sweep leaves a row alone, read off the row's own faces: a
 /// missing piece is the human's inspection (the door's answer cannot
 /// be read off it - a lost worktree may still be git's stale
-/// registration, and the sweep never guesses), the dirt names itself
-/// beside the merge, and an unmerged branch says so plainly.
+/// registration, and the sweep never guesses), a no-commits row says
+/// so - ahead zero, whatever the ancestry of its shared tip reads -
+/// the dirt names itself beside the merge, and an unmerged branch
+/// says so plainly.
 fn left_reason(row: &ListRow) -> String {
     match row.status.missing {
         Some(MissingPiece::Worktree) => "worktree missing".into(),
         Some(MissingPiece::Branch) => "branch missing".into(),
         None => {
-            let merged = if row.status.merged_into.is_empty() {
+            let merged = if row.ahead == Some(0) {
+                "no commits".to_string()
+            } else if row.status.merged_into.is_empty() {
                 "unmerged".to_string()
             } else {
                 format!("merged into {}", first_into(row))
@@ -448,13 +467,17 @@ fn left_reason(row: &ListRow) -> String {
     }
 }
 
-/// The sweep's qualifying rule: merged per the rule and no preserved
-/// work. The dirty refusal would fire at the door anyway, so the row
-/// shows as left with its reason before any --yes; a row with a
-/// missing piece never qualifies, for its face cannot promise what
-/// the door will answer.
+/// The sweep's qualifying rule: merged per the rule, ahead of its
+/// base - a no-commits row never qualifies, for it added nothing to
+/// clean a branch over - and no preserved work. The dirty refusal
+/// would fire at the door anyway, so the row shows as left with its
+/// reason before any --yes; a row with a missing piece never
+/// qualifies, for its face cannot promise what the door will answer.
 fn qualifies(row: &ListRow) -> bool {
-    row.status.missing.is_none() && !row.status.dirty && !row.status.merged_into.is_empty()
+    row.status.missing.is_none()
+        && !row.status.dirty
+        && row.ahead.is_some_and(|ahead| ahead > 0)
+        && !row.status.merged_into.is_empty()
 }
 
 /// The reason a reply names for a cleaned workspace: the branch's
@@ -475,6 +498,9 @@ fn cleaned_reason(reply: &CleanReply) -> String {
             ),
             Some(outcome) if outcome.kept == Some(client::BranchKept::Unmerged) => {
                 format!("worktree removed; branch {name} kept (unmerged)")
+            }
+            Some(outcome) if outcome.kept == Some(client::BranchKept::NoCommits) => {
+                format!("worktree removed; branch {name} kept (no commits)")
             }
             Some(outcome) if outcome.kept == Some(client::BranchKept::Missing) => {
                 format!("worktree removed; branch {name} already absent")
@@ -690,6 +716,48 @@ mod test {
             serde_json::json!({"merged_into": [], "dirty": false})
         );
 
+        // the no-commits row: ahead zero reads "no commits", never
+        // merged or unmerged, whatever the ancestry of its shared tip
+        // - and the dirty word rides it; the json keeps the rule's
+        // computed merged_into beside ahead 0, the reader's
+        // discriminator
+        let fresh = row(
+            45,
+            "fresh-cut",
+            status(None, &["main"], false),
+            Some((0, 0, 0)),
+            Some(0),
+            Some(now),
+        );
+        let cells = list_cells(&fresh, now);
+        assert_eq!(cells[2], "no commits");
+        assert_eq!(cells[3], "0f +0 -0");
+        assert_eq!(cells[4], "0");
+        assert_eq!(
+            list_row_value(&fresh)["status"],
+            serde_json::json!({"merged_into": ["main"], "dirty": false})
+        );
+        let fresh_dirty = row(
+            46,
+            "fresh-dirty",
+            status(None, &["main"], true),
+            Some((0, 0, 0)),
+            Some(0),
+            Some(now),
+        );
+        assert_eq!(list_cells(&fresh_dirty, now)[2], "no commits, dirty");
+        // an ahead-zero row the rule named no candidate for still
+        // reads no commits - the no-commits truth outranks unmerged
+        let orphan = row(
+            47,
+            "orphan-cut",
+            status(None, &[], false),
+            Some((0, 0, 0)),
+            Some(0),
+            Some(now),
+        );
+        assert_eq!(list_cells(&orphan, now)[2], "no commits");
+
         // a missing worktree: the status of its own, numbers alive
         let gone = row(
             43,
@@ -777,8 +845,10 @@ mod test {
 
     /// The sweep's verdict reads the row's own faces: merged and clean
     /// qualifies, the dirt names itself beside the merge, an unmerged
-    /// branch says so, and a missing piece is the human's inspection -
-    /// the door's answer cannot be read off that face, so the sweep
+    /// branch says so, a no-commits row is left with its own truth
+    /// (ahead zero: the workspace added nothing to clean a branch
+    /// over), and a missing piece is the human's inspection, for the
+    /// door's answer cannot be read off that face, so the sweep
     /// never guesses it.
     #[test]
     fn the_sweep_qualifies_merged_and_clean_and_leaves_the_rest_with_reasons() {
@@ -787,7 +857,7 @@ mod test {
             "t60-phase3b",
             status(None, &["main"], false),
             None,
-            None,
+            Some(1),
             None,
         );
         assert!(qualifies(&merged));
@@ -804,7 +874,7 @@ mod test {
             "errors",
             status(None, &["main"], true),
             None,
-            None,
+            Some(1),
             None,
         );
         assert!(!qualifies(&merged_dirty));
@@ -812,7 +882,7 @@ mod test {
             SweepLine::left(&merged_dirty).reason,
             "merged into main; dirty"
         );
-        let unmerged_dirty = row(48, "errors", status(None, &[], true), None, None, None);
+        let unmerged_dirty = row(48, "errors", status(None, &[], true), None, Some(1), None);
         assert_eq!(SweepLine::left(&unmerged_dirty).reason, "unmerged; dirty");
 
         // an unmerged branch is left plainly
@@ -821,11 +891,35 @@ mod test {
             "rewrite-lexer",
             status(None, &[], false),
             None,
-            None,
+            Some(1),
             None,
         );
         assert!(!qualifies(&unmerged));
         assert_eq!(SweepLine::left(&unmerged).reason, "unmerged");
+
+        // a no-commits row is left, its own reason: ahead zero reads
+        // "no commits" however the ancestry of its shared tip reads,
+        // and the dirt rides it
+        let fresh = row(
+            49,
+            "fresh-cut",
+            status(None, &["main"], false),
+            Some((0, 0, 0)),
+            Some(0),
+            None,
+        );
+        assert!(!qualifies(&fresh), "ahead zero never qualifies");
+        assert_eq!(SweepLine::left(&fresh).reason, "no commits");
+        let fresh_dirty = row(
+            50,
+            "fresh-dirty",
+            status(None, &["main"], true),
+            Some((0, 0, 0)),
+            Some(0),
+            None,
+        );
+        assert!(!qualifies(&fresh_dirty));
+        assert_eq!(SweepLine::left(&fresh_dirty).reason, "no commits; dirty");
 
         // a missing piece never qualifies: the sweep cannot promise
         // what the door will answer, so the human inspects first
@@ -834,7 +928,7 @@ mod test {
             "gone",
             status(Some(MissingPiece::Worktree), &["main"], false),
             None,
-            None,
+            Some(1),
             None,
         );
         assert!(!qualifies(&gone_wt));
@@ -863,7 +957,7 @@ mod test {
                 "t60-phase3b",
                 status(None, &["main"], false),
                 None,
-                None,
+                Some(1),
                 None,
             )),
             SweepLine::planned(&row(
@@ -871,7 +965,7 @@ mod test {
                 "rewrite-parser-split",
                 status(None, &["rewrite"], false),
                 None,
-                None,
+                Some(1),
                 None,
             )),
             SweepLine::left(&row(
@@ -879,7 +973,7 @@ mod test {
                 "rewrite-lexer",
                 status(None, &[], false),
                 None,
-                None,
+                Some(1),
                 None,
             )),
             SweepLine::left(&row(
@@ -887,7 +981,15 @@ mod test {
                 "rewrite-lexer-errors",
                 status(None, &[], true),
                 None,
+                Some(1),
                 None,
+            )),
+            SweepLine::left(&row(
+                49,
+                "fresh-cut",
+                status(None, &["main"], false),
+                Some((0, 0, 0)),
+                Some(0),
                 None,
             )),
         ];
@@ -896,7 +998,8 @@ mod test {
             "cleaned w-41  t60-phase3b           (merged into main; worktree and branch removed)\n\
              cleaned w-44  rewrite-parser-split  (merged into rewrite; worktree and branch removed)\n\
              left    w-47  rewrite-lexer         (unmerged)\n\
-             left    w-48  rewrite-lexer-errors  (unmerged; dirty)"
+             left    w-48  rewrite-lexer-errors  (unmerged; dirty)\n\
+             left    w-49  fresh-cut             (no commits)"
         );
 
         // a refused clean prints as its outcome line with the
@@ -1018,7 +1121,8 @@ mod test {
         );
 
         // drift: the rule named no candidate at the door - the words
-        // follow the reply, never the plan
+        // follow the reply, never the plan; a no-commits keep names
+        // its own why
         let kept = reply(
             Some(client::BranchOutcome {
                 deleted: false,
@@ -1030,6 +1134,18 @@ mod test {
         assert_eq!(
             SweepLine::cleaned(&row, &kept).reason,
             "worktree removed; branch t60-phase3b kept (unmerged)"
+        );
+        let kept_fresh = reply(
+            Some(client::BranchOutcome {
+                deleted: false,
+                merged_into: Vec::new(),
+                kept: Some(client::BranchKept::NoCommits),
+            }),
+            true,
+        );
+        assert_eq!(
+            SweepLine::cleaned(&row, &kept_fresh).reason,
+            "worktree removed; branch t60-phase3b kept (no commits)"
         );
 
         // the concurrent Cleaned: no duplicate record, the branch act

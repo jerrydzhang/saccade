@@ -54,12 +54,17 @@ pub struct CreateRequest {
 }
 
 /// Why a kept branch stands after a clean that acted: the merged
-/// rule named no candidate containing its tip, or git holds no local
-/// branch under the recorded name at all.
+/// rule named no candidate containing its tip, the workspace added
+/// no commits (ahead 0 - the branch is the base's, often shared, so
+/// its fate is kept however the ancestry reads), or git holds no
+/// local branch under the recorded name at all. snake_case keeps the
+/// single words spelled as the lowercase rename did; NoCommits rides
+/// as "no_commits".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum BranchKept {
     Unmerged,
+    NoCommits,
     Missing,
 }
 
@@ -72,7 +77,8 @@ pub enum BranchKept {
 pub struct BranchOutcome {
     pub deleted: bool,
     pub merged_into: Vec<String>,
-    /// Why the branch stands: unmerged or missing; absent when deleted
+    /// Why the branch stands: unmerged, no commits, or missing;
+    /// absent when deleted
     pub kept: Option<BranchKept>,
 }
 
@@ -93,6 +99,18 @@ impl BranchOutcome {
             deleted: false,
             merged_into: Vec::new(),
             kept: Some(BranchKept::Unmerged),
+        }
+    }
+
+    /// The branch stands: the workspace added no commits, its tip is
+    /// the base's - the branch fate is kept before the merged rule is
+    /// even asked, so `merged_into` stays empty and the reason names
+    /// why.
+    pub(crate) fn kept_no_commits() -> Self {
+        BranchOutcome {
+            deleted: false,
+            merged_into: Vec::new(),
+            kept: Some(BranchKept::NoCommits),
         }
     }
 

@@ -1775,13 +1775,17 @@ async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
     assert_eq!(stacked["status"]["merged_into"], json!([]), "{out}");
     assert_eq!(stacked["ahead"], json!(1));
 
-    // fresh: the zero diff is facts, ahead zero
+    // fresh: the zero diff is facts, ahead zero - the no-commits row
+    // reads by ahead alone: ahead 0 tells it from merged (the merged
+    // row is ahead 1) while merged_into stays the rule's computed
+    // answer, truthful even where the ancestry is only the shared tip
     let fresh = row_of(&fresh_branch);
     assert_eq!(
         fresh["change"],
         json!({"files": 0, "insertions": 0, "deletions": 0})
     );
     assert_eq!(fresh["ahead"], json!(0));
+    assert_eq!(fresh["status"]["merged_into"], json!(["main"]), "{out}");
 
     // the gone worktree: a status of its own, the branch answers on
     let gone = row_of(&gone_branch);
@@ -1827,7 +1831,8 @@ async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
         "{out}"
     );
     let fresh_line = line_of(&fresh_branch);
-    assert!(fresh_line.contains("merged into main"), "{out}");
+    assert!(fresh_line.contains("no commits"), "{out}");
+    assert!(!fresh_line.contains("merged into main"), "{out}");
     assert!(fresh_line.contains("0f +0 -0"), "{out}");
     let fresh_tail: Vec<&str> = fresh_line.split_whitespace().rev().take(2).collect();
     assert_eq!(fresh_tail[1], "0", "{out}");
@@ -2144,6 +2149,127 @@ async fn a_clean_keeps_an_unmerged_branch_and_the_output_says_so() {
         "{out}"
     );
     assert!(local_branch_stands(&rig.repo, &branch), "the branch stands");
+}
+
+/// A workspace with no commits is not merged: cut at the primary
+/// HEAD, its tip is the base's, so the merged rule's ancestry would
+/// read merged - a rule consequence no face shows. The sweep leaves
+/// the row ("no commits") in preview and under --yes alike, acting on
+/// nothing; a named clean still cleans it - the worktree goes and the
+/// Cleaned record lands unchanged - keeping the branch, for the
+/// workspace added nothing: the reply names kept (no commits), the
+/// text face says so, and the branch stands after.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sweep_leaves_a_no_commits_workspace_and_a_named_clean_keeps_its_branch() {
+    let (rig, _serve, _scratch) = clean_rig("ws-clean-fresh").await;
+
+    // zero commits, clean checkout: rule a would call the branch
+    // merged into main; ahead 0 says the workspace added nothing
+    let (seq, branch, path) = rig.provision("clean-fresh", None);
+    assert!(Path::new(&path).exists());
+    assert!(local_branch_stands(&rig.repo, &branch));
+
+    // the preview: left, the reason its own, the json riding the same
+    // words - never a cleaned line, never a merged verdict
+    let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
+    assert!(ok, "the sweep preview refused: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("left    w-{seq}  "))
+            && lines[0].contains(&branch)
+            && lines[0].contains("(no commits)"),
+        "{out}"
+    );
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", "--merged"]);
+    assert!(ok, "the sweep preview refused: {out}{err}");
+    let sweep = json_of(&out);
+    assert_eq!(sweep["acted"], json!(false), "{out}");
+    let rows = sweep["workspaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{out}");
+    assert_eq!(rows[0]["id"], json!(format!("w-{seq}")), "{out}");
+    assert_eq!(rows[0]["outcome"], json!("left"), "{out}");
+    assert_eq!(rows[0]["reason"], json!("no commits"), "{out}");
+
+    // the act leaves it too: --yes cleans nothing, nothing records,
+    // every resource stands
+    let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged", "--yes"]);
+    assert!(ok, "the sweep act refused: {out}{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("left    w-{seq}  ")) && lines[0].contains("(no commits)"),
+        "{out}"
+    );
+    assert!(Path::new(&path).exists(), "the act removed the worktree");
+    assert!(
+        local_branch_stands(&rig.repo, &branch),
+        "the act took the branch"
+    );
+    let (ok, out, err) = rig.sac(&["--json", "log"]);
+    assert!(ok, "log refused: {out}{err}");
+    assert!(
+        !json_of(&out)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "workspace_cleaned"),
+        "the act recorded"
+    );
+
+    // the named clean still cleans it: the worktree goes, the Cleaned
+    // record lands unchanged, and the branch is kept - the reply
+    // carries the kept reason, the verified list names retention and
+    // no branch removal
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &path]);
+    assert!(ok, "the named clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(reply["cleaned"], json!(true), "{out}");
+    assert_eq!(reply["already_cleaned"], json!(false));
+    assert_eq!(
+        reply["branch"],
+        json!({"deleted": false, "merged_into": [], "kept": "no_commits"}),
+        "{out}"
+    );
+    assert_eq!(reply["records"][0]["kind"], json!("workspace_cleaned"));
+    assert_eq!(
+        reply["records"][0]["payload"],
+        json!({"workspace": seq}),
+        "the event is unchanged: the birth reference and nothing else"
+    );
+    let verified: Vec<String> = reply["verified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        verified.iter().any(|s| s
+            == &format!("removed the checkout with git worktree remove; branch {branch} retained")),
+        "{verified:?}"
+    );
+    assert!(
+        !verified.iter().any(|s| s.contains("removed the branch")),
+        "a kept branch is never called removed: {verified:?}"
+    );
+    assert!(!Path::new(&path).exists(), "the worktree went");
+    assert!(
+        local_branch_stands(&rig.repo, &branch),
+        "the branch stands: the workspace added nothing"
+    );
+
+    // the text face names the keep and its why
+    let (_second, second_branch, second_path) = rig.provision("clean-fresh-2", None);
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &second_path]);
+    assert!(ok, "clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {second_branch} kept (no commits)")),
+        "{out}"
+    );
+    assert!(
+        local_branch_stands(&rig.repo, &second_branch),
+        "the branch stands"
+    );
 }
 
 /// The self-exclusion subtlety at the clean door: a cleaned

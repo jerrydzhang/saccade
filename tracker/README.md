@@ -112,8 +112,11 @@ them.
   incarnation numbering.
 - Workspace cleanup is eviction: preserve identity, saved sessions,
   and recorded work. The branch goes with the worktree when merged
-  and stands when not. Available becomes Cleaned only through
-  verified completed effects; a path recorded Cleaned is not reused.
+  and stands when not; a workspace that added no commits keeps its
+  branch, for its tip is the recorded base's and it contributed
+  nothing to delete a shared tip over. Available becomes Cleaned only
+  through verified completed effects; a path recorded Cleaned is not
+  reused.
 - Messages are durable communication, never board content. Agent
   messages carry machine-supplied sender, message, and reply
   references; known contacts come from creation, contact, or explicit

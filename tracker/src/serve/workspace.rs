@@ -90,11 +90,12 @@ pub(super) async fn workspace_create(State(app): State<AppState>, body: Bytes) -
 // -- the workspace lifecycle controller ---------------------------------
 // Clean: the ordered
 // clean contract runs can-clean checks, the branch decision first
-// among the acts (the fate rule a settles, tip and all), terminal
-// close, terminal verification, git worktree remove, checkout and
-// worktree absence verification, then the branch's compare-and-
-// delete against the decided tip as the last act, and only then
-// lands the Cleaned fact.
+// among the acts (the fate settles ahead of rule a when the
+// workspace added no commits; otherwise rule a settles it, tip and
+// all), terminal close, terminal verification, git worktree remove,
+// checkout and worktree absence verification, then the branch's
+// compare-and-delete against the decided tip as the last act, and
+// only then lands the Cleaned fact.
 
 /// The world fold plus the canonical target resolution every lifecycle
 /// door shares: exact recorded workspace births at this path, primary
@@ -307,32 +308,45 @@ fn clean_operation(
 
     // the branch decision, read off the pre-clean fold before any
     // effect - first among the acts, ahead of the terminal closes and
-    // every git mutation: the merged rule over the standing recorded
-    // branches as the exclusion set - this workspace is itself
-    // recorded-uncleaned until its own Cleaned fact lands, and the
-    // rule's not-the-branch-itself exclusion keeps its own branch
-    // from excluding it - so a cleaned workspace's retained branch
-    // counts as a candidate and a stacked workspace's standing parent
-    // never does. The tip the rule checked rides the decision: the
-    // final act deletes against exactly it.
+    // every git mutation. A workspace that added no commits keeps its
+    // branch: ahead 0 means the tip is the recorded base's, often
+    // main's own, and rule a's ancestry would read merged there - a
+    // rule consequence, never a fate - so the branch fate is kept and
+    // named as such (the workspace contributed nothing to delete a
+    // shared tip over). The base is a recorded claim, and a
+    // hand-written log may hold one git cannot resolve: an unreadable
+    // ahead never establishes the no-commits fate, and rule a judges
+    // as it always did, over the standing recorded branches as the
+    // exclusion set - this workspace is itself recorded-uncleaned
+    // until its own Cleaned fact lands, and the rule's
+    // not-the-branch-itself exclusion keeps its own branch from
+    // excluding it - so a cleaned workspace's retained branch counts
+    // as a candidate and a stacked workspace's standing parent never
+    // does. The tip the rule checked rides the decision: the final
+    // act deletes against exactly it.
     let decided_tip =
         workspace::branch_tip(&repo_root, &facts.branch).map_err(ApiFail::Workspace)?;
     let branch_outcome = match decided_tip.as_ref() {
         None => BranchOutcome::kept_missing(),
-        Some(_) => {
-            let recorded = workspace::recorded_workspace_branches(&world);
-            let local = workspace::local_branches(&repo_root).map_err(ApiFail::Workspace)?;
-            let merged_into =
-                workspace::merged_branches(&facts.branch, &recorded, &local, |work, target| {
-                    workspace::branch_is_ancestor(&repo_root, work, target)
-                })
-                .map_err(ApiFail::Workspace)?;
-            if merged_into.is_empty() {
-                BranchOutcome::kept_unmerged()
-            } else {
-                BranchOutcome::deleted(merged_into.iter().map(|b| b.as_str().to_string()).collect())
+        Some(tip) => match workspace::commits_ahead(&repo_root, &facts.base, tip) {
+            Ok(0) => BranchOutcome::kept_no_commits(),
+            _ => {
+                let recorded = workspace::recorded_workspace_branches(&world);
+                let local = workspace::local_branches(&repo_root).map_err(ApiFail::Workspace)?;
+                let merged_into =
+                    workspace::merged_branches(&facts.branch, &recorded, &local, |work, target| {
+                        workspace::branch_is_ancestor(&repo_root, work, target)
+                    })
+                    .map_err(ApiFail::Workspace)?;
+                if merged_into.is_empty() {
+                    BranchOutcome::kept_unmerged()
+                } else {
+                    BranchOutcome::deleted(
+                        merged_into.iter().map(|b| b.as_str().to_string()).collect(),
+                    )
+                }
             }
-        }
+        },
     };
 
     // the host stage: enumerate by exact path over one read, close
