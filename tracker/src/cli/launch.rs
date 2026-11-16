@@ -545,12 +545,13 @@ pub(super) fn ask_run(
     let newborn = world
         .incarnations
         .iter()
-        .find(|(_, ctx)| match &ctx.incarnation {
-            saccade::Incarnation::Native {
+        .find(|(_, ctx)| {
+            let saccade::Incarnation {
                 native_id,
                 harness,
                 ..
-            } => native_id.as_str() == fresh.native_id && *harness == fresh.harness,
+            } = &ctx.incarnation;
+            native_id.as_str() == fresh.native_id && *harness == fresh.harness
         })
         .map(|(id, _)| *id)
         .ok_or_else(|| {

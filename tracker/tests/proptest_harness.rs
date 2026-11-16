@@ -191,7 +191,7 @@ fn native_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
     let born: Vec<saccade::IncarnationId> = world
         .incarnations
         .iter()
-        .filter(|(_, ctx)| matches!(ctx.incarnation, saccade::Incarnation::Native { .. }))
+        .filter(|(_, ctx)| matches!(ctx.incarnation, saccade::Incarnation { .. }))
         .map(|(id, _)| *id)
         .collect();
     let slot = n as usize % (born.len() + 1);

@@ -623,7 +623,7 @@ impl World {
                 self.incarnations.insert(
                     IncarnationId(record.id),
                     IncarnationContext {
-                        incarnation: Incarnation::Native {
+                        incarnation: Incarnation {
                             native_id: native_id.clone(),
                             saved_session: saved_session.clone(),
                             address: address.clone(),
@@ -645,7 +645,7 @@ impl World {
                     .incarnations
                     .get_mut(&incarnation)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                let Incarnation::Native {
+                let Incarnation {
                     saved_session: bound,
                     ..
                 } = &mut ctx.incarnation;
@@ -672,7 +672,7 @@ impl World {
                     .incarnations
                     .get_mut(&incarnation)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                let Incarnation::Native {
+                let Incarnation {
                     address: carried,
                     adopted: carried_kind,
                     ..
@@ -1713,7 +1713,7 @@ mod test {
         assert_eq!(world.provenance[&birth], None);
         assert_eq!(
             world.incarnations[&IncarnationId(birth)].incarnation,
-            Incarnation::Native {
+            Incarnation {
                 native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
                 saved_session: Some(
                     SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap()
@@ -1764,7 +1764,7 @@ mod test {
         .unwrap();
         assert_eq!(
             log.world().incarnations[&IncarnationId(RecordId(2))].incarnation,
-            Incarnation::Native {
+            Incarnation {
                 native_id: NativeSessionId::new("door-dddd".into()).unwrap(),
                 saved_session: None,
                 address: Some("/tty5".into()),

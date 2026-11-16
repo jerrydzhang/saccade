@@ -1013,7 +1013,7 @@ mod test {
         // answers by reference and the submission reads submitted
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(9))].incarnation,
-            crate::Incarnation::Native {
+            crate::Incarnation {
                 native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
                 saved_session: Some(
                     crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
@@ -1026,7 +1026,7 @@ mod test {
         // the door-birth's locator binds once and the address moves
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(10))].incarnation,
-            crate::Incarnation::Native {
+            crate::Incarnation {
                 native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
                 saved_session: Some(
                     crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into()).unwrap(),

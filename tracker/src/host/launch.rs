@@ -184,7 +184,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                 .incarnations
                 .get(&id)
                 .expect("the fold just resolved this incarnation");
-            let Incarnation::Native {
+            let Incarnation {
                 native_id,
                 saved_session,
                 address,

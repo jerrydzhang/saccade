@@ -716,7 +716,7 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
         .iter()
         .find(|(_, ctx)| ctx.incarnation.address() == Some("t1"))
         .expect("the door birth carries the host address");
-    let saccade::Incarnation::Native {
+    let saccade::Incarnation {
         native_id,
         saved_session,
         ..
