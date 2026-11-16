@@ -109,9 +109,10 @@ export interface AppDriver {
    * status is "" while the view is simply loaded (the strip shows it
    * only when loading or failed). */
   strip(): Promise<{ location: string; status: string; link: string }>;
-  /** The select labels painted now (after s): each chip's text and
-   * the part it marks. */
-  labels(): Promise<{ label: string; part: string }[]>;
+  /** The select labels painted now (after s): each chip's text, the
+   * part it marks, and whether it is drawn nested (t-63: its target
+   * sits inside another labelled one). */
+  labels(): Promise<{ label: string; part: string; nested: boolean }[]>;
   /** Whether an act menu is open now. */
   menuOpen(): Promise<boolean>;
   /** The open act menu's label as rendered (its target named in full),

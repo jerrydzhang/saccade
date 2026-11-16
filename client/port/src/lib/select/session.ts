@@ -13,11 +13,21 @@ export type SelectableTarget = Readonly<{
   part: string;
   kind: TargetKind;
   text: string;
+  /** The part of the target this one sits inside (a group's block, a
+   * project's agent, a ref in its paragraph), declared by the
+   * instrument that knows its structure; absent at the top level. */
+  within?: string;
 }>;
+
+/** One painted label. `nested` (t-63): its target sits inside another
+ * target labelled at the same time - the chip is drawn outlined, a
+ * top-level one solid. Two looks only, whatever the depth; with one
+ * level on screen every chip is solid. */
+export type SelectLabel = Readonly<{ part: string; label: string; nested: boolean }>;
 
 export type SelectSessionView = Readonly<{
   active: true;
-  labels: readonly { part: string; label: string }[];
+  labels: readonly SelectLabel[];
   /** The label keystrokes typed so far (the chips show it). */
   pendingLabel: string;
 }>;
@@ -75,7 +85,12 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
     if (visible.length === 0) return;
     const kinds: TargetKind[] = visible.map((target) => target.kind);
     const labels = assignLabels(kinds);
-    const byLabel = visible.map((target, index) => ({ part: target.part, label: labels[index] ?? "" }));
+    const labelled = new Set(visible.map((target) => target.part));
+    const byLabel: SelectLabel[] = visible.map((target, index) => ({
+      part: target.part,
+      label: labels[index] ?? "",
+      nested: target.within !== undefined && labelled.has(target.within),
+    }));
     let narrow: NarrowState = startNarrow(visible.length);
 
     const session: InputContext = {

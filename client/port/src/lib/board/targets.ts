@@ -35,6 +35,10 @@ export type BoardTarget = Readonly<{
   /** The expression's LaTeX source, the math copy act's payload
    * (t-62); present only on math targets. */
   tex?: string;
+  /** The part this target sits inside: a nested block's group or
+   * incorporation, a diagram's, math's or ref's block, a citation's
+   * incorporation; absent at the board's top level (t-63). */
+  within?: string;
 }>;
 
 /** The model-derived targets of a decoded board: every content part,
@@ -81,7 +85,7 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       else if (block.kind === "figure") text = block.caption;
       // an incorporation reads as its source line (its menu head)
       else if (block.kind === "incorporation") text = `incorporates ${block.source.task}@r${block.source.revision}`;
-      const base = { part, kind: block.kind as BoardTargetKind, text };
+      const base = prefix === "" ? { part, kind: block.kind as BoardTargetKind, text } : { part, kind: block.kind as BoardTargetKind, text, within: prefix };
       out.push(
         block.kind === "incorporation"
           ? { ...base, source: { task: block.source.task, revision: block.source.revision, select: block.source.select } }
@@ -92,19 +96,19 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
       if (block.kind === "text" || block.kind === "annotation") {
         const parsed = parseMarkdown(block.markdown, 0, 1);
         parsed.mermaidFences.forEach((_, ordinal) => {
-          out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram" });
+          out.push({ part: diagramPart(part, ordinal), kind: "diagram", text: "diagram", within: part });
         });
         // every math expression in the block's markdown is a target of
         // its own (t-62), in document order - the same order the
         // renderer walks the parse when it stamps the spans; the TeX
         // rides the target (the copy act's payload)
         parsed.mathNodes.forEach((node, ordinal) => {
-          out.push({ part: mathPart(part, ordinal), kind: "math", text: "math", tex: node.value });
+          out.push({ part: mathPart(part, ordinal), kind: "math", text: "math", tex: node.value, within: part });
         });
         // every ref in the prose is a target of its own (the prototype's
         // linkify, inst16.html:197); its text is the ref itself
         refsIn(block.markdown).forEach((ref, ordinal) => {
-          out.push({ part: refPart(part, ordinal), kind: "ref", text: ref });
+          out.push({ part: refPart(part, ordinal), kind: "ref", text: ref, within: part });
         });
       }
       // an incorporation's citation is a target of its own (the
@@ -115,6 +119,7 @@ export function boardTargetsOf(board: Board): readonly BoardTarget[] {
           kind: "reference",
           text: `${block.source.task}@r${block.source.revision}`,
           source: { task: block.source.task, revision: block.source.revision, select: block.source.select },
+          within: part,
         });
       }
       if (block.kind === "group" || block.kind === "incorporation") {

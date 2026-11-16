@@ -115,6 +115,7 @@ async function launch(src: string): Promise<{ app: AppDriver; close: () => void 
       return [...portWindow().document.querySelectorAll("[data-port-label]")].map((element) => ({
         label: element.getAttribute("data-port-label") ?? "",
         part: element.getAttribute("data-port-part") ?? "",
+        nested: element.hasAttribute("data-port-label-nested"),
       }));
     },
     async strip() {
@@ -225,6 +226,8 @@ export type BridgedOptions = {
   others?: string[];
   /** The shell's SACCADE_KEY_TRACE (the D1 diagnostic), off by default. */
   keyTrace?: boolean;
+  /** Herdr's words feed (kit/shell-mock.ts ShellWorld.words). */
+  words?: ShellWorld["words"];
 };
 
 export const test = base.extend<{
@@ -258,7 +261,7 @@ export const test = base.extend<{
         await tracker.attachedWindow(stateId, device);
         windows.push({ label, stateId });
       }
-      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [], keyTrace: options.keyTrace === true };
+      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
       const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);

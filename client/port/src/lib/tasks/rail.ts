@@ -362,6 +362,9 @@ export type RailTarget = Readonly<{
   part: string;
   kind: "project" | "agent";
   text: string;
+  /** An agent's project's part (its label is nested, t-63); absent on
+   * a project and on the foot group's agents. */
+  within?: string;
   /** The project the entry sits under; null in the foot group. */
   project: string | null;
   /** The agent's first task; null on a project, or an agent with none. */
@@ -412,6 +415,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
           part: railAgentPart(project.name, agent),
           kind: "agent",
           text: railAgentText(agent),
+          within: projectPart(project.name),
           project: project.name,
           task: agent.tasks[0] ?? null,
           address: agent.address,

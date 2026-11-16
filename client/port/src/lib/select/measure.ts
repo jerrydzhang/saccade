@@ -147,9 +147,14 @@ export function reserveInlineRoom(
     const clip = scrollerOf(element)?.getBoundingClientRect().left ?? 0;
     if (element.getBoundingClientRect().left - clip < CHIP_MARGIN_ROOM) {
       const padding = parseFloat(getComputedStyle(element).paddingLeft || "0");
-      indents.push([element, padding, padding + stampWidth(root, chip.label) + CHIP_GAP]);
+      indents.push([element, padding, stampWidth(root, chip.label)]);
     }
   }
+  // every indented block makes the SAME room - the widest stamp's - so
+  // rows that shared a column keep sharing it (t-63: each row indented
+  // by its own stamp moved the rail's rows unevenly)
+  const room = Math.max(0, ...indents.map(([, , width]) => width)) + CHIP_GAP;
+  for (const entry of indents) entry[2] = entry[1] + room;
   if (rooms.length === 0 && indents.length === 0) return () => {};
   const previous = new Map<HTMLElement, string>();
   keepReadingPlace(root, () => {

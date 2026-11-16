@@ -1,17 +1,42 @@
-/* The plane's rail: projects, and the current project's agents by word.
- * A block's stylesheet reads tokens only (tests/theme.test.ts). */
+/* The plane's rail: projects, and each project's agents in importance
+ * order, each row leading with its state's glyph (t-63).
+ * A block's stylesheet reads tokens only (tests/theme.test.ts).
+ *
+ * The grid (t-63): one unit (8px); one left text edge (24px) shared by
+ * the strip, the rail and the task list; 32px rows; highlights bleed
+ * outward so text never moves. In the rail: projects on the 24px edge;
+ * an agent one 16px column in, that column holding its glyph; the id
+ * and the name on fixed columns. */
 
-/* the control plane (t-48): the rail of projects and their running
- * agents beside the list; on a narrow window the rail sits above it */
+/* the control plane (t-48): the rail - one quiet panel, full height,
+ * the native sidebar's way (t-63) - beside the list; on a narrow
+ * window the rail sits above it */
 .port-plane {
   display: grid;
-  grid-template-columns: 16rem minmax(0, 1fr);
-  gap: 1.5rem;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  column-gap: 32px;
   align-items: start;
+  padding-right: 24px;
 }
+/* stacked, the rail is a band across the top - its own height, a
+ * hairline beneath, never a panel holding the window - and the list
+ * keeps the window's 24px edges */
 @media (max-width: 40rem) {
   .port-plane {
     grid-template-columns: minmax(0, 1fr);
+    padding-right: 0;
+  }
+
+  .port-plane .port-plane-rail {
+    position: static;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--port-color-line);
+  }
+
+  .port-plane > .port-tasks-view {
+    padding-left: 24px;
+    padding-right: 24px;
   }
 }
 .port-plane-rail {
@@ -19,9 +44,13 @@
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 24px;
   min-width: 0;
-  padding: 0.75rem 0;
+  min-height: calc(100vh - var(--port-strip-height) - 1px);
+  box-sizing: border-box;
+  padding: 16px 24px;
+  background: var(--port-color-paper);
+  border-right: 1px solid var(--port-color-line);
   /* nothing in the rail ever reaches the task list: every line clips or
    * wraps inside its own box, and the rail itself clips as the floor */
   overflow: hidden;
@@ -31,127 +60,145 @@
   flex-direction: column;
   min-width: 0;
 }
+/* the shown project as a group: its name and its agents on one faint
+ * fill (t-63), the selection's colour, never a hue */
+.port-plane-project[data-port-current] {
+  margin: 0 -12px;
+  padding: 0 12px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--port-color-selection) 70%, transparent);
+}
 
-/* a state's shape (t-59): circle working, triangle blocked, square
- * done, ring idle, diamond error, each in its state's hue; any other
- * word carries none. Shared by the rail's word headings and the
- * pipeline's agents. */
+/* a state's glyph (t-63): drawn masks on a 12px canvas, one stroke
+ * weight, in the state's hue - a check done, pause bars blocked, a
+ * cross error, a ring idle, a turning arc working; a word Saccade does
+ * not know a neutral dot, no word a faint dash. Shared by the rail's
+ * rows and the pipeline's agents. */
 .port-state-mark {
-  display: none;
+  display: inline-block;
   flex: none;
-  width: 0.5em;
-  height: 0.5em;
-  margin-right: 0.4em;
-  vertical-align: 0.1em;
-  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+  background: var(--port-color-muted);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='2.2' fill='black'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='2.2' fill='black'/></svg>") center / contain no-repeat;
 }
-.port-state-mark[data-port-word="working"] {
-  display: inline-block;
-  border-radius: 50%;
-  background: var(--port-state-working);
-}
-.port-state-mark[data-port-word="blocked"] {
-  display: inline-block;
-  width: 0.6em;
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  background: var(--port-state-blocked);
+.port-state-mark[data-port-word=""] {
+  background: var(--port-color-faint);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3.4 6 H8.6' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3.4 6 H8.6' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/></svg>");
 }
 .port-state-mark[data-port-word="done"] {
-  display: inline-block;
   background: var(--port-state-done);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.6 6.4 L5 8.7 L9.4 3.6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.6 6.4 L5 8.7 L9.4 3.6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
 }
-.port-state-mark[data-port-word="idle"] {
-  display: inline-block;
-  border-radius: 50%;
-  border: 0.12em solid var(--port-state-idle);
+.port-state-mark[data-port-word="blocked"] {
+  background: var(--port-state-blocked);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><rect x='3' y='2.6' width='2.1' height='6.8' rx='1' fill='black'/><rect x='6.9' y='2.6' width='2.1' height='6.8' rx='1' fill='black'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><rect x='3' y='2.6' width='2.1' height='6.8' rx='1' fill='black'/><rect x='6.9' y='2.6' width='2.1' height='6.8' rx='1' fill='black'/></svg>");
 }
 .port-state-mark[data-port-word="error"] {
-  display: inline-block;
-  width: 0.6em;
-  height: 0.6em;
-  vertical-align: 0.05em;
-  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
   background: var(--port-state-error);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3.2 3.2 L8.8 8.8 M8.8 3.2 L3.2 8.8' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3.2 3.2 L8.8 8.8 M8.8 3.2 L3.2 8.8' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/></svg>");
+}
+.port-state-mark[data-port-word="idle"] {
+  background: var(--port-state-idle);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='3.7' fill='none' stroke='black' stroke-width='1.6'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='3.7' fill='none' stroke='black' stroke-width='1.6'/></svg>");
+}
+.port-state-mark[data-port-word="working"] {
+  background: var(--port-state-working);
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='3.7' fill='none' stroke='black' stroke-width='1.6' stroke-dasharray='15 8' stroke-linecap='round'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><circle cx='6' cy='6' r='3.7' fill='none' stroke='black' stroke-width='1.6' stroke-dasharray='15 8' stroke-linecap='round'/></svg>");
+  /* the throbber: active work turns, at a calm pace */
+  animation: port-throb 0.9s linear infinite;
+}
+@keyframes port-throb {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .port-state-mark[data-port-word="working"] {
+    animation: none;
+  }
 }
 
-/* a project: muted; the shown one in ink, heavier and a little larger */
+/* a project: an item, the heaviest text in the rail - a step larger,
+ * semibold, full ink (the shown one strongest); the row bleeds 8px so
+ * its highlight never moves the text */
 .port-plane-name,
 .port-plane-agent {
   font: inherit;
   color: inherit;
   background: none;
   border: 0;
-  border-radius: var(--port-radius);
-  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
   text-align: left;
   cursor: pointer;
   min-width: 0;
+  margin: 0 -8px;
 }
 .port-plane-name {
-  color: var(--port-color-muted);
+  height: 32px;
+  line-height: 32px;
+  padding: 0 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--port-color-ink);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 .port-plane-name[aria-current] {
   color: var(--port-color-ink-strong);
-  font-weight: 600;
-  font-size: 1.125em;
 }
 /* the foot group's heading names the group; it is no target */
 .port-plane-group {
   cursor: default;
 }
 
-/* a word heading: its shape, then the word */
-.port-plane-word {
-  padding: 0.5rem 0.5rem 0.125rem;
-  color: var(--port-color-ink);
-  font-size: var(--port-size-small);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* an agent: incarnation (muted), name, every claimed task at the
- * right; Herdr's status line beneath, one line */
+/* an agent: the glyph's column, the id and the name on fixed columns,
+ * every claimed task at the right; Herdr's status line beneath, one
+ * line - a 32px row, 48px with the status line */
 .port-plane-agent {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) fit-content(45%);
-  column-gap: 0.75rem;
-  padding-left: 1.25rem;
+  grid-template-columns: 16px minmax(0, 1fr) fit-content(45%);
+  column-gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  line-height: 24px;
+  font-size: 0.875rem;
 }
 .port-plane-who {
   display: flex;
-  gap: 0.5rem;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
 }
 .port-plane-incarnation {
   flex: none;
-  color: var(--port-color-muted);
-}
-/* an unregistered agent's label stands where the id does: it may be
- * long, so it is the part that gives way */
-.port-plane-agent[data-port-unregistered] .port-plane-incarnation {
-  flex: 0 1 auto;
-  min-width: 0;
+  width: 3.75em;
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-faint);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .port-plane-agent-name {
-  color: var(--port-color-ink-strong);
-  font-weight: 600;
+  min-width: 0;
+  color: var(--port-color-ink);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .port-plane-tasks {
   font-family: var(--port-font-mono);
-  font-size: var(--port-size-small);
+  font-size: 0.75rem;
   color: var(--port-color-muted);
   white-space: nowrap;
-  align-self: baseline;
   /* a long list never pushes the agent out or bleeds past the rail:
    * it keeps under half the row and ends in an ellipsis (the full
    * list rides the row's title) */
@@ -166,10 +213,11 @@
   font-style: italic;
 }
 .port-plane-msg {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
+  line-height: 16px;
   color: var(--port-color-muted);
   font-style: italic;
-  font-size: var(--port-size-small);
+  font-size: 0.75rem;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -184,7 +232,6 @@
 }
 
 .port-plane-note {
-  padding: 0 0.5rem;
   color: var(--port-color-muted);
   font-size: var(--port-size-small);
   overflow-wrap: anywhere;
@@ -192,8 +239,7 @@
 .port-plane-add {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0 0.5rem;
+  gap: 4px;
   min-width: 0;
 }
 .port-plane-add input {
@@ -202,7 +248,7 @@
   background: none;
   border: 0;
   border-bottom: 1px solid var(--port-color-muted);
-  padding: 0.125rem 0;
+  padding: 4px 0;
   min-width: 0;
 }
 /* the add field's focus: its rule takes the accent */

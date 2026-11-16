@@ -1,10 +1,11 @@
-<!-- The control plane's rail (t-48): projects, then the shown
-project's running agents by Herdr's word in importance order; a
-project switches this window, an agent opens its task here. Each word
-heading carries its state shape; each agent reads incarnation, name,
-every task it claimed, and Herdr's status line beneath. Presentation
-only: the clicks and the menu are TasksView's delegation, the add
-field's typing is the controller's. -->
+<!-- The control plane's rail (t-48): projects, then each project's
+running agents in importance order of Herdr's word (t-63: flat - no
+word headings; each agent row leads with its state's glyph). A project
+switches this window, an agent opens its task here. An agent reads
+incarnation, name, every task it claimed, and Herdr's status line
+beneath; an unregistered one, its terminal address and Herdr's label.
+Presentation only: the clicks and the menu are TasksView's delegation,
+the add field's typing is the controller's. -->
 
 <script lang="ts">
   import type { TasksUI } from "./tasksController.ts";
@@ -35,22 +36,23 @@ field's typing is the controller's. -->
     if (add.open) addInput?.focus({ preventScroll: true });
   });
 
-  const wordText = (state: string): string => (state === "" ? "no word" : state);
   const titleOf = (agent: RailAgent): string =>
     [agent.msg, agent.progress].filter((part) => part !== null).join(" - ");
   const footRuns = $derived(wordRunsOf(rail.unregistered));
 </script>
 
-{#snippet word(state: string)}
-  <div class="port-plane-word" data-port-word={state}>
-    <span class="port-state-mark" data-port-word={state} aria-hidden="true"></span>{wordText(state)}
-  </div>
+{#snippet glyph(state: string)}
+  <span class="port-state-mark" data-port-word={state} aria-hidden="true"></span>
 {/snippet}
 
 {#snippet agentLines(agent: RailAgent)}
+  {@render glyph(agent.state)}
   {#if agent.incarnation === null}
+    <!-- unregistered: the terminal's address stands in the id column,
+    Herdr's label in the name column -->
     <span class="port-plane-who">
-      <span class="port-plane-incarnation">{agent.label ?? agent.address}</span>
+      <span class="port-plane-incarnation">{agent.address}</span>
+      {#if agent.label !== null}<span class="port-plane-agent-name">{agent.label}</span>{/if}
     </span>
     <span class="port-plane-tasks port-plane-unregistered">unregistered</span>
   {:else}
@@ -65,7 +67,7 @@ field's typing is the controller's. -->
 
 <nav class="port-plane-rail" data-port-control="rail" aria-label="projects">
   {#each rail.projects as project (project.name)}
-    <section class="port-plane-project" data-port-project={project.name}>
+    <section class="port-plane-project" data-port-project={project.name} data-port-current={project.current ? "" : undefined}>
       <button
         class="port-plane-name"
         data-port-control={`project-${project.name}`}
@@ -79,7 +81,6 @@ field's typing is the controller's. -->
         <div class="port-plane-note" title={project.problem}>unreachable</div>
       {/if}
       {#each project.groups as group (group.state)}
-        {@render word(group.state)}
         {#each group.agents as agent (agent.address)}
           <!-- every agent carries y (copy its attach command, t-55), so
           none is disabled; an unregistered one is marked so -->
@@ -90,6 +91,7 @@ field's typing is the controller's. -->
             data-port-kind="agent"
             data-port-title={railAgentText(agent)}
             data-port-unregistered={agent.incarnation === null ? "" : undefined}
+            data-port-word={group.state}
             data-port-hover={hovered === railAgentPart(project.name, agent) ? "" : undefined}
             title={titleOf(agent)}
           >
@@ -123,7 +125,6 @@ field's typing is the controller's. -->
     <section class="port-plane-project" data-port-control="unregistered">
       <div class="port-plane-name port-plane-group">unregistered</div>
       {#each footRuns as run, index (index)}
-        {@render word(run.state)}
         {#each run.agents as agent (agent.address)}
           <button
             class="port-plane-agent"
@@ -136,10 +137,11 @@ field's typing is the controller's. -->
             data-port-hover={hovered === railAgentPart(null, agent) ? "" : undefined}
             title={titleOf(agent)}
           >
+            {@render glyph(agent.state)}
             <span class="port-plane-who">
-              <span class="port-plane-incarnation">{agent.label ?? ""}</span>
+              <span class="port-plane-incarnation">{agent.address}</span>
+              {#if agent.label !== null}<span class="port-plane-agent-name">{agent.label}</span>{/if}
             </span>
-            <span class="port-plane-tasks">{agent.address}</span>
             {#if agent.msg !== null}<span class="port-plane-msg">{agent.msg}</span>{/if}
           </button>
         {/each}

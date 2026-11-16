@@ -169,11 +169,12 @@ function railWithAgent() {
 test("the rail's targets: each project, then its agents, carrying home and shown", () => {
   const targets = railTargetsOf(railWithAgent());
   assert.deepEqual(
-    targets.map((target) => [target.part, target.kind, target.text, target.task, target.home, target.current]),
+    targets.map((target) => [target.part, target.kind, target.text, target.task, target.home, target.current, target.within]),
     [
-      [projectPart("pyrimel"), "project", "pyrimel", null, true, false],
-      [projectPart("saccade"), "project", "saccade", null, false, true],
-      [agentPart("saccade", "i-3"), "agent", "theory (i-3) t-2", "t-2", false, true],
+      [projectPart("pyrimel"), "project", "pyrimel", null, true, false, undefined],
+      [projectPart("saccade"), "project", "saccade", null, false, true, undefined],
+      // an agent sits inside its project (t-63: its label is nested)
+      [agentPart("saccade", "i-3"), "agent", "theory (i-3) t-2", "t-2", false, true, projectPart("saccade")],
     ],
   );
 });
