@@ -1194,7 +1194,7 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         _ => panic!("the log will not fold"),
     };
     assert_eq!(
-        world.incarnations[&saccade::IncarnationId(RecordId(0))]
+        world.incarnations[&saccade::record::objects::incarnation::IncarnationId(RecordId(0))]
             .incarnation
             .address(),
         None,

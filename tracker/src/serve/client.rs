@@ -1,9 +1,9 @@
 //! The client half of the API: one `POST /api/v1/command`, the shared
 //! envelope, and the failure taxonomy the CLI renders.
 
-use crate::Command;
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
+use crate::record::events::Command;
 use crate::serve::incarnation_wire::{
     AttachRequest, IncarnationAddressRequest, IncarnationRegisterRequest,
 };
@@ -511,7 +511,7 @@ pub fn attach(
         &AttachRequest {
             native_id: native_request_id(native_id)?,
             session_file: native_session_file(session_file)?,
-            harness: crate::Harness::default(),
+            harness: crate::host::harness::Harness::default(),
             terminal: None,
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
@@ -521,21 +521,27 @@ pub fn attach(
 /// The typed request pointers are validated where they are built: a
 /// native id or locator this binary cannot build refuses here with
 /// the code the door's parse refusal carries, never a guessed POST.
-fn native_request_id(native_id: &str) -> Result<crate::NativeSessionId, ClientFail> {
-    crate::NativeSessionId::new(native_id.to_string()).map_err(|e| ClientFail::Refused {
-        code: "malformed_request".into(),
-        detail: format!("{e:?}"),
-        message: None,
+fn native_request_id(
+    native_id: &str,
+) -> Result<crate::record::types::pointers::NativeSessionId, ClientFail> {
+    crate::record::types::pointers::NativeSessionId::new(native_id.to_string()).map_err(|e| {
+        ClientFail::Refused {
+            code: "malformed_request".into(),
+            detail: format!("{e:?}"),
+            message: None,
+        }
     })
 }
 
 fn native_session_file(
     session_file: &std::path::Path,
-) -> Result<crate::SessionLocator, ClientFail> {
-    crate::SessionLocator::new(session_file.to_path_buf()).map_err(|e| ClientFail::Refused {
-        code: "malformed_request".into(),
-        detail: format!("{e:?}"),
-        message: None,
+) -> Result<crate::record::types::pointers::SessionLocator, ClientFail> {
+    crate::record::types::pointers::SessionLocator::new(session_file.to_path_buf()).map_err(|e| {
+        ClientFail::Refused {
+            code: "malformed_request".into(),
+            detail: format!("{e:?}"),
+            message: None,
+        }
     })
 }
 
@@ -547,7 +553,7 @@ pub fn send_message(
     to: usize,
     reply_to: Option<usize>,
     task: Option<usize>,
-    body: &crate::Prose,
+    body: &crate::record::types::prose::Prose,
 ) -> Result<SendMessageReply, ClientFail> {
     post_json(
         url,
@@ -636,8 +642,8 @@ pub fn register_incarnation(
     native_id: &str,
     address: &str,
     adopted: bool,
-    harness: crate::Harness,
-    name: Option<&crate::IncarnationName>,
+    harness: crate::host::harness::Harness,
+    name: Option<&crate::record::objects::incarnation::IncarnationName>,
 ) -> Result<(), ClientFail> {
     post_json_unit(
         url,

@@ -450,10 +450,11 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
         saccade::db::record(
             &mut conn,
             &saccade::store::Context::system(),
-            saccade::Command::CreateWorkspace {
-                base: saccade::GitCommit::new("abc123".into()).unwrap(),
-                branch: saccade::GitBranch::new(branch.into()).unwrap(),
-                worktree: saccade::WorktreePath::new(worktree.into()).unwrap(),
+            saccade::record::events::Command::CreateWorkspace {
+                base: saccade::record::types::pointers::GitCommit::new("abc123".into()).unwrap(),
+                branch: saccade::record::types::pointers::GitBranch::new(branch.into()).unwrap(),
+                worktree: saccade::record::types::pointers::WorktreePath::new(worktree.into())
+                    .unwrap(),
             },
             at,
         )
@@ -508,36 +509,48 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
 fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("completions-door");
-    let system = saccade::Context::system();
+    let system = saccade::record::store::Context::system();
     let mut conn = saccade::db::open(&path).unwrap();
     let now = 1;
     // the story: a task, two workspaces (one cleaned), one registered
     // native session
     let commands = [
-        saccade::Command::CreateTask {
-            name: saccade::Prose::new("implement floop".into()).unwrap(),
+        saccade::record::events::Command::CreateTask {
+            name: saccade::record::types::prose::Prose::new("implement floop".into()).unwrap(),
         },
-        saccade::Command::CreateWorkspace {
-            base: saccade::GitCommit::new("aaaa1111".into()).unwrap(),
-            branch: saccade::GitBranch::new("workspace-floop".into()).unwrap(),
-            worktree: saccade::WorktreePath::new("/tmp/sac-api-floop".into()).unwrap(),
+        saccade::record::events::Command::CreateWorkspace {
+            base: saccade::record::types::pointers::GitCommit::new("aaaa1111".into()).unwrap(),
+            branch: saccade::record::types::pointers::GitBranch::new("workspace-floop".into())
+                .unwrap(),
+            worktree: saccade::record::types::pointers::WorktreePath::new(
+                "/tmp/sac-api-floop".into(),
+            )
+            .unwrap(),
         },
-        saccade::Command::CreateWorkspace {
-            base: saccade::GitCommit::new("bbbb2222".into()).unwrap(),
-            branch: saccade::GitBranch::new("workspace-gloom".into()).unwrap(),
-            worktree: saccade::WorktreePath::new("/tmp/sac-api-gloom".into()).unwrap(),
+        saccade::record::events::Command::CreateWorkspace {
+            base: saccade::record::types::pointers::GitCommit::new("bbbb2222".into()).unwrap(),
+            branch: saccade::record::types::pointers::GitBranch::new("workspace-gloom".into())
+                .unwrap(),
+            worktree: saccade::record::types::pointers::WorktreePath::new(
+                "/tmp/sac-api-gloom".into(),
+            )
+            .unwrap(),
         },
-        saccade::Command::CleanWorkspace {
-            workspace: saccade::RecordId(2),
+        saccade::record::events::Command::CleanWorkspace {
+            workspace: saccade::record::store::RecordId(2),
         },
-        saccade::Command::RegisterIncarnation {
-            native_id: saccade::NativeSessionId::new("sess-7777".into()).unwrap(),
+        saccade::record::events::Command::RegisterIncarnation {
+            native_id: saccade::record::types::pointers::NativeSessionId::new("sess-7777".into())
+                .unwrap(),
             saved_session: Some(
-                saccade::SessionLocator::new("/home/j/.pi/sessions/7777.json".into()).unwrap(),
+                saccade::record::types::pointers::SessionLocator::new(
+                    "/home/j/.pi/sessions/7777.json".into(),
+                )
+                .unwrap(),
             ),
             address: None,
             adopted: false,
-            harness: saccade::Harness::Pi,
+            harness: saccade::host::harness::Harness::Pi,
         },
     ];
     for command in commands {
@@ -716,7 +729,7 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
         .iter()
         .find(|(_, ctx)| ctx.incarnation.address() == Some("t1"))
         .expect("the door birth carries the host address");
-    let saccade::Incarnation {
+    let saccade::record::objects::incarnation::Incarnation {
         native_id,
         saved_session,
         ..
@@ -847,7 +860,7 @@ printf '{}\n'
             _ => panic!("the log will not fold"),
         }
     };
-    let name_at = |world: &saccade::World, address: &str| {
+    let name_at = |world: &saccade::record::store::World, address: &str| {
         world
             .incarnations
             .iter()
@@ -1017,7 +1030,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     let landed = boards
         .commit("0", &work, None, "the recorded account")
         .expect("the objects land");
-    let commit = saccade::GitCommit::new(landed.commit.clone()).unwrap();
+    let commit = saccade::record::types::pointers::GitCommit::new(landed.commit.clone()).unwrap();
 
     let mut conn = saccade::db::open(&db).unwrap();
     saccade::db::record(
@@ -1027,8 +1040,8 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
             tier: saccade::store::Tier::Agent,
             scope: None,
         },
-        saccade::Command::CreateTask {
-            name: saccade::Prose::new("implement foo".into()).unwrap(),
+        saccade::record::events::Command::CreateTask {
+            name: saccade::record::types::prose::Prose::new("implement foo".into()).unwrap(),
         },
         1,
     )
@@ -1040,8 +1053,8 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
             tier: saccade::store::Tier::Agent,
             scope: None,
         },
-        saccade::Command::CommitBoard {
-            task: saccade::TaskId(0),
+        saccade::record::events::Command::CommitBoard {
+            task: saccade::record::objects::task::TaskId(0),
             commit: commit.clone(),
             parent: None,
             incorporations: Vec::new(),

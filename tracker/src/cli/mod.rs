@@ -16,7 +16,6 @@ use std::process::{Command as ProcessCommand, ExitCode};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use saccade::World;
 use saccade::views::{MessageLine, TaskView, mailbox, message_line, show_view, task_view};
 
 use self::board::{BoardVerb, board_door};
@@ -29,12 +28,16 @@ use self::skill::skill_door;
 use self::task::{born_of, parse_task_id, read_only, render_records};
 use self::workspace::workspace_door;
 
+use saccade::Reject;
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
-use saccade::objects::task::TaskId;
-use saccade::{
-    ActorName, Command, Context, IncarnationId, Prose, RecordId, Reject, Scope, Tier, WorktreePath,
-};
+use saccade::record::events::Command;
+use saccade::record::objects::incarnation::IncarnationId;
+use saccade::record::objects::task::TaskId;
+use saccade::record::store::{Context, RecordId, Scope, Tier, World};
+use saccade::record::types::actor::ActorName;
+use saccade::record::types::pointers::WorktreePath;
+use saccade::record::types::prose::Prose;
 
 #[derive(Parser)]
 #[command(name = "sac", version, about = "Saccade: awesome issue tracker")]
@@ -964,7 +967,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     identity_fallback_guard(cli, &context, attached_terminal())?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
-    let mut world_now: Option<saccade::World> = None;
+    let mut world_now: Option<saccade::record::store::World> = None;
     let stored = match &destination {
         Destination::Local { db } => {
             let now = cli.at.unwrap_or_else(db::now_epoch);
@@ -1004,12 +1007,12 @@ fn teaching_line(
     cli: &Cli,
     destination: &Destination,
     command: &Command,
-    world_now: Option<&saccade::World>,
+    world_now: Option<&saccade::record::store::World>,
 ) -> Result<Option<String>, Fail> {
     if cli.json {
         return Ok(None);
     }
-    let current_revision = |task: saccade::TaskId| -> Result<usize, Fail> {
+    let current_revision = |task: saccade::record::objects::task::TaskId| -> Result<usize, Fail> {
         match world_now {
             Some(world) => Ok(world
                 .tasks

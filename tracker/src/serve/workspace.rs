@@ -181,7 +181,7 @@ fn clean_operation(
     // recorded cleaned and every resource absent is idempotent success:
     // no duplicate transition, verified through the same doors the
     // cleanup itself ran - terminal list and visible absence alike
-    if stage == crate::WorkspaceStage::Cleaned {
+    if stage == crate::record::objects::workspace::WorkspaceStage::Cleaned {
         if present || registered.is_some() {
             return Err(ApiFail::Refused(
                 StatusCode::CONFLICT,

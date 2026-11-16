@@ -236,15 +236,21 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     if let Some(task) = world.task_born_at(rid) {
         return Some(RefTarget::Task { task: task.0 });
     }
-    if world.incarnations.contains_key(&crate::IncarnationId(rid)) {
+    if world
+        .incarnations
+        .contains_key(&crate::record::objects::incarnation::IncarnationId(rid))
+    {
         return Some(RefTarget::Incarnation {
-            num: world.incarnation_num(crate::IncarnationId(rid))?,
+            num: world.incarnation_num(crate::record::objects::incarnation::IncarnationId(rid))?,
             task: None,
         });
     }
-    if world.messages.contains_key(&crate::MessageId(rid)) {
+    if world
+        .messages
+        .contains_key(&crate::record::objects::message::MessageId(rid))
+    {
         return Some(RefTarget::Message {
-            num: world.message_num(crate::MessageId(rid))?,
+            num: world.message_num(crate::record::objects::message::MessageId(rid))?,
         });
     }
     Some(RefTarget::Record {
@@ -770,9 +776,13 @@ mod test {
             3,
             &ctx("pi"),
             Event::WorkspaceCreated {
-                base: crate::GitCommit::new("abc123".into()).unwrap(),
-                branch: crate::GitBranch::new("feature-abc123ab".into()).unwrap(),
-                worktree: crate::WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+                base: crate::record::types::pointers::GitCommit::new("abc123".into()).unwrap(),
+                branch: crate::record::types::pointers::GitBranch::new("feature-abc123ab".into())
+                    .unwrap(),
+                worktree: crate::record::types::pointers::WorktreePath::new(
+                    "/repo/wt/feature-abc123ab".into(),
+                )
+                .unwrap(),
             },
         );
         push(
@@ -799,7 +809,7 @@ mod test {
                 saved_session: None,
                 address: None,
                 adopted: false,
-                harness: crate::Harness::Pi,
+                harness: crate::host::harness::Harness::Pi,
             },
         );
 
@@ -825,7 +835,7 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
-                harness: crate::Harness::Pi,
+                harness: crate::host::harness::Harness::Pi,
             }
         }
 

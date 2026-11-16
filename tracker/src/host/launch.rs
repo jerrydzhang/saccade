@@ -15,8 +15,10 @@ use crate::herdr::HerdrCore;
 use crate::host;
 use crate::host_contract::{HostAddress, HostContract, Liveness};
 use crate::pi_session;
+use crate::record::objects::incarnation::{Incarnation, IncarnationId};
+use crate::record::objects::workspace::WorkspaceStage;
+use crate::record::store::World;
 use crate::workspace::LifecycleAddress;
-use crate::{Incarnation, IncarnationId, WorkspaceStage, World};
 
 /// One launch selection: a fresh session in an explicit existing
 /// workspace under the named harness, or a saved session resumed under

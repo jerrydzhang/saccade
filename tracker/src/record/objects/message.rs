@@ -83,13 +83,17 @@ mod tables {
                 body: Prose::new("filler".into()).unwrap(),
             },
             Event::IncarnationRegistered {
-                native_id: crate::NativeSessionId::new("a1b2c3d4".into()).unwrap(),
+                native_id: crate::record::types::pointers::NativeSessionId::new("a1b2c3d4".into())
+                    .unwrap(),
                 saved_session: Some(
-                    crate::SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap(),
+                    crate::record::types::pointers::SessionLocator::new(
+                        "/sessions/a1b2c3d4.jsonl".into(),
+                    )
+                    .unwrap(),
                 ),
                 address: None,
                 adopted: false,
-                harness: crate::Harness::Pi,
+                harness: crate::host::harness::Harness::Pi,
             },
             Event::TaskClaimed {
                 id: TaskId(0),

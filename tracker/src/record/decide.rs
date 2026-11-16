@@ -137,11 +137,13 @@ mod test {
     use crate::harness::Harness;
     use crate::objects::incarnation::{IncarnationId, IncarnationName};
     use crate::objects::message::MessageId;
+    use crate::record::objects::task::TaskId;
+    use crate::record::store::RecordId;
+    use crate::record::types::prose::Prose;
     use crate::types::actor::ActorName;
     use crate::types::pointers::{
         GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath,
     };
-    use crate::{Prose, RecordId, TaskId};
 
     fn agent() -> Context {
         Context {

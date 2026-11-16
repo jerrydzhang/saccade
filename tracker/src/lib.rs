@@ -6,31 +6,15 @@ pub mod record;
 pub mod serve;
 pub mod telemetry;
 
-// the flat crate-root names stay: the wire, the CLI, and the tests
+// the module re-exports stay: the wire, the CLI, and the tests
 // name these modules at the root, and the concerns are containers
 pub use host::{attempts, harness, herdr, host_contract, launch, paths, pi_session, workspace};
 pub use record::{db, decide, events, objects, refusals, store, types, views};
 pub use serve::{api, client, wire};
-pub use views::Target;
 
 use serde::{Deserialize, Serialize};
 
-pub use decide::decide;
-pub use events::{Command, Event, RecordRef};
-pub use harness::Harness;
-pub use launch::{
-    Composition, FreshBirth, LaunchArm, LaunchFail, LaunchRequest, ResumeTarget, Submitted,
-};
-pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, IncarnationName};
-pub use objects::message::{Message, MessageContext, MessageId, MessageState};
-pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
-pub use objects::workspace::{
-    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceId, WorkspaceStage, WorkspaceStageFact,
-};
-pub use store::{Context, Record, RecordId, Scope, Tier, World};
-pub use types::actor::ActorName;
-pub use types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
-pub use types::prose::Prose;
+use crate::record::objects::task::TaskId;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "snake_case")]
@@ -127,12 +111,12 @@ mod test {
             Reject::InvalidTaskId,
             Reject::NotCurrentParent { expected: None },
             Reject::UnrecordedSourceCommit {
-                source_task: crate::TaskId(0),
+                source_task: crate::record::objects::task::TaskId(0),
                 cited: "a".repeat(40),
             },
             Reject::NotCurrentCommit { current: None },
             Reject::SourceNotAccepted {
-                source_task: crate::TaskId(0),
+                source_task: crate::record::objects::task::TaskId(0),
                 cited: "a".repeat(40),
             },
             Reject::SelfAcceptance,

@@ -54,7 +54,7 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     };
     assert!(matches!(
         world.tasks[0].task.state,
-        saccade::TaskState::Cancelled(_)
+        saccade::record::objects::task::TaskState::Cancelled(_)
     ));
 
     // no terminal anywhere and no SACCADE_ACTOR: refusal, taught
@@ -72,7 +72,7 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     };
     assert!(matches!(
         world.tasks[0].task.state,
-        saccade::TaskState::Cancelled(_)
+        saccade::record::objects::task::TaskState::Cancelled(_)
     ));
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();

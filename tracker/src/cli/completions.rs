@@ -235,7 +235,7 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
-                harness: saccade::Harness::Pi,
+                harness: saccade::host::harness::Harness::Pi,
             },
         ];
         let mut world = World::new();
