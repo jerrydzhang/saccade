@@ -1,5 +1,8 @@
+use crate::ActorName;
+use crate::Command;
 use crate::events::Event;
-use crate::store::Tier;
+use crate::store::{Context, Scope, Tier};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
 pub enum ParseFail {
@@ -72,6 +75,43 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
     ParseFail::Malformed {
         kind: kind.to_string(),
         detail: err.to_string(),
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireTier {
+    Human,
+    Agent,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WireContext {
+    pub actor: ActorName,
+    pub tier: WireTier,
+    /// The environment-declared scope, when the sending session carries one
+    #[serde(default)]
+    pub scope: Option<Scope>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Envelope {
+    pub(crate) context: WireContext,
+    pub(crate) command: Command,
+    pub(crate) at: Option<u64>,
+    /// The client binary that built the request, when it names itself;
+    /// the attempts log carries it beside the server's own version.
+    #[serde(default)]
+    pub(crate) client: Option<String>,
+}
+pub(super) fn wire_context_of(context: &WireContext) -> Context {
+    Context {
+        actor: context.actor.clone(),
+        tier: match context.tier {
+            WireTier::Human => Tier::Human,
+            WireTier::Agent => Tier::Agent,
+        },
+        scope: context.scope.clone(),
     }
 }
 

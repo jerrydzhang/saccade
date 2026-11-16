@@ -3,10 +3,23 @@
 pub mod api;
 pub mod board_wire;
 pub mod client;
+pub mod incarnation_wire;
+pub mod message_wire;
 pub mod pages;
 pub mod window_store;
 pub mod windows;
 pub mod wire;
+pub mod workspace_wire;
+
+mod board;
+mod command;
+mod door;
+mod fail;
+mod hosts;
+mod incarnation;
+mod message;
+mod state;
+mod workspace;
 
 use tracing::info;
 

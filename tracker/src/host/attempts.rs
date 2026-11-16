@@ -61,6 +61,7 @@ impl Attempts {
 
     pub fn append(
         &self,
+        door: &str,
         actor: Option<&str>,
         client: Option<&str>,
         duration_ms: u64,
@@ -68,6 +69,7 @@ impl Attempts {
     ) {
         let mut line = json!({
             "ts": crate::db::now_epoch(),
+            "door": door,
             "actor": actor,
             "client": client,
             "server": env!("CARGO_PKG_VERSION"),
@@ -192,6 +194,7 @@ mod test {
         let db = scratch("landed");
         let attempts = Attempts::beside(&db);
         attempts.append(
+            "command",
             Some("human person"),
             Some("0.3.0"),
             3,
@@ -217,6 +220,7 @@ mod test {
             vec![
                 "actor",
                 "client",
+                "door",
                 "duration_ms",
                 "outcome",
                 "seqs",
@@ -236,6 +240,7 @@ mod test {
         let attempts = Attempts::beside(&db);
         let raw = r#"{"context":{"actor":"pi","tier":"agent"},"command":{"claim_task":{"id":9}}}"#;
         attempts.append(
+            "command",
             Some("pi"),
             None,
             1,
@@ -263,8 +268,15 @@ mod test {
         // a directory where the file would open: the open fails
         std::fs::create_dir_all(crate::paths::attempts_at(&db)).unwrap();
         let attempts = Attempts::beside(&db);
-        attempts.append(Some("pi"), None, 1, Outcome::Landed { seqs: &[0] });
         attempts.append(
+            "command",
+            Some("pi"),
+            None,
+            1,
+            Outcome::Landed { seqs: &[0] },
+        );
+        attempts.append(
+            "command",
             None,
             None,
             0,
