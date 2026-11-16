@@ -474,6 +474,73 @@ pub fn add_checkout(root: &Path, path: &Path, branch: &GitBranch) -> Result<(), 
     })
 }
 
+// -- the merged rule ------------------------------------------------------
+// One function decides mergedness for the workspace doors. No target
+// branch is chosen or recorded: a workspace is merged into every local
+// branch that contains its branch tip, except the branch itself and the
+// recorded (uncleaned) workspaces' branches. The inputs are data - the
+// branch, the recorded branches, the local branches - and ancestry is
+// the caller's closure, so the rule itself tests without a repo; live
+// callers pass git's own answer through `branch_is_ancestor`.
+
+/// Every local branch the workspace is merged into, in the caller's
+/// order: the list names the first, and the sweep and clean doors read
+/// the rest. A candidate qualifies when the branch's tip is an
+/// ancestor of its tip, it is not the branch itself, and it is not a
+/// recorded (uncleaned) workspace's branch - excluding the recorded
+/// branches keeps a stacked workspace from reading its parent as
+/// merged, and a hand-made branch containing the tip (a backup)
+/// qualifies, so the row names it and the human sees it.
+pub fn merged_branches(
+    branch: &GitBranch,
+    recorded: &[GitBranch],
+    local: &[GitBranch],
+    is_ancestor: impl Fn(&GitBranch, &GitBranch) -> Result<bool, WorkspaceFail>,
+) -> Result<Vec<GitBranch>, WorkspaceFail> {
+    let mut merged = Vec::new();
+    for candidate in local {
+        if candidate == branch || recorded.contains(candidate) {
+            continue;
+        }
+        if is_ancestor(branch, candidate)? {
+            merged.push(candidate.clone());
+        }
+    }
+    Ok(merged)
+}
+
+/// git's own ancestry answer between two branches: `merge-base
+/// --is-ancestor` through the scrubbed builder. Exit 0 is ancestor,
+/// exit 1 is not; any other exit is a plumbing failure, never a
+/// verdict.
+pub fn branch_is_ancestor(
+    root: &Path,
+    ancestor: &GitBranch,
+    descendant: &GitBranch,
+) -> Result<bool, WorkspaceFail> {
+    let out = crate::boards::git_command()
+        .arg("-C")
+        .arg(root)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            ancestor.as_str(),
+            descendant.as_str(),
+        ])
+        .output()
+        .map_err(|e| WorkspaceFail::Git(format!("git merge-base --is-ancestor: {e}")))?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(WorkspaceFail::Git(format!(
+            "git merge-base --is-ancestor {} {} failed: {}",
+            ancestor.as_str(),
+            descendant.as_str(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -781,5 +848,252 @@ mod test {
         );
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A scratch repo with a known mainline branch name at the base
+    /// commit; the merged-rule tests branch from there.
+    fn scratch_with_main(tag: &str) -> PathBuf {
+        let root = scratch_repo(tag);
+        git(&root, &["checkout", "-qB", "main"]).unwrap();
+        root
+    }
+
+    /// One branch name, as the rule's inputs carry it.
+    fn branch(name: &str) -> GitBranch {
+        GitBranch::new(name.to_string()).unwrap()
+    }
+
+    /// Branch names as data: the recorded and local lists.
+    fn branches(names: &[&str]) -> Vec<GitBranch> {
+        names.iter().map(|n| branch(n)).collect()
+    }
+
+    /// Commit a file's new content on the checked-out branch; the
+    /// tip comes back as the rule's ancestry reads it.
+    fn commit(root: &Path, name: &str, content: &str, message: &str) -> GitCommit {
+        std::fs::write(root.join(name), content).unwrap();
+        git(root, &["add", name]).unwrap();
+        git(root, &["commit", "-qm", message]).unwrap();
+        GitCommit::new(git(root, &["rev-parse", "HEAD"]).unwrap()).unwrap()
+    }
+
+    /// Plain merge: the workspace branch reaches main by a true merge
+    /// commit and reads merged into main, named by main alone.
+    #[test]
+    fn the_merged_rule_reads_a_plain_merge_merged_into_main() {
+        let root = scratch_with_main("merged-plain");
+        let feature = branch("feature");
+        git(&root, &["checkout", "-qb", feature.as_str()]).unwrap();
+        commit(&root, "f.txt", "feature\n", "feature work");
+        // the human merges with a real merge commit, never a fast-forward
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(
+            &root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "merge the workspace",
+                feature.as_str(),
+            ],
+        )
+        .unwrap();
+
+        // the workspace stands recorded and uncleaned, so its own
+        // branch rides the recorded set with the rest
+        let recorded = branches(&["feature"]);
+        let local = branches(&["main", "feature"]);
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        assert_eq!(
+            merged_branches(&feature, &recorded, &local, live).unwrap(),
+            vec![branch("main")]
+        );
+
+        // a missing branch is a plumbing failure, never a "not merged"
+        // verdict
+        assert!(matches!(
+            branch_is_ancestor(&root, &branch("never-existed"), &branch("main")),
+            Err(WorkspaceFail::Git(_))
+        ));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Fast-forward: main moves onto the workspace tip with no merge
+    /// commit; a commit is its own ancestor, so the row still reads
+    /// merged.
+    #[test]
+    fn the_merged_rule_reads_a_fast_forward_merged() {
+        let root = scratch_with_main("merged-ff");
+        let quickfix = branch("quickfix");
+        git(&root, &["checkout", "-qb", quickfix.as_str()]).unwrap();
+        let tip = commit(&root, "f.txt", "quickfix\n", "quickfix work");
+        // the fast-forward: main's tip becomes the workspace tip itself
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", quickfix.as_str()]).unwrap();
+        assert_eq!(
+            GitCommit::new(git(&root, &["rev-parse", "main"]).unwrap()).unwrap(),
+            tip,
+            "the fast-forward really landed main on the workspace tip"
+        );
+
+        let recorded = branches(&["quickfix"]);
+        let local = branches(&["main", "quickfix"]);
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        assert_eq!(
+            merged_branches(&quickfix, &recorded, &local, live).unwrap(),
+            vec![branch("main")]
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A stack of three: the child workspace sits on the parent
+    /// workspace's branch and the parent takes the child's work in, so
+    /// git ancestry holds towards the parent's branch - yet the child
+    /// must NOT read merged there, because the parent's branch is a
+    /// recorded workspace's branch. It reads merged into main only
+    /// once the parent's branch itself reaches main.
+    #[test]
+    fn the_merged_rule_keeps_a_stacked_child_unmerged_outside_its_parent() {
+        let root = scratch_with_main("merged-stack");
+        // the parent workspace: one commit on main
+        git(&root, &["checkout", "-qb", "stack-parent"]).unwrap();
+        commit(&root, "parent.txt", "parent\n", "parent work");
+        // the child workspace: stacked on the parent, one more commit
+        git(&root, &["checkout", "-qb", "stack-child"]).unwrap();
+        commit(&root, "child.txt", "child\n", "child work");
+        // the parent workspace takes the child's work in: its branch
+        // tip now contains the child's tip, so plain ancestry would
+        // read merged
+        git(&root, &["checkout", "-q", "stack-parent"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", "stack-child"]).unwrap();
+
+        // both workspaces stand recorded and uncleaned
+        let recorded = branches(&["stack-parent", "stack-child"]);
+        let local = branches(&["main", "stack-parent", "stack-child"]);
+        let child = branch("stack-child");
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        let merged = merged_branches(&child, &recorded, &local, live).unwrap();
+        assert!(
+            merged.is_empty(),
+            "the child reads unmerged, never merged into its parent's branch: {merged:?}"
+        );
+
+        // once the parent's branch reaches main, the child reads
+        // merged into main - and still never into the parent's branch
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", "stack-parent"]).unwrap();
+        assert_eq!(
+            merged_branches(&child, &recorded, &local, live).unwrap(),
+            vec![branch("main")]
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A detached rewrite branch: the repository's work integrates
+    /// into a rewrite branch, not main, and a workspace merged there
+    /// reads merged into rewrite - no branch is special-cased by name.
+    #[test]
+    fn the_merged_rule_names_a_detached_rewrite_branch() {
+        let root = scratch_with_main("merged-rewrite");
+        // the rewrite line moves ahead of main
+        git(&root, &["checkout", "-qb", "rewrite"]).unwrap();
+        commit(&root, "rewrite.txt", "rewrite\n", "rewrite base");
+        // a workspace cut from the rewrite line
+        git(&root, &["checkout", "-qb", "rewrite-lexer"]).unwrap();
+        commit(&root, "lexer.txt", "lexer\n", "lexer work");
+        // the rewrite branch takes the workspace in; main never does
+        git(&root, &["checkout", "-q", "rewrite"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", "rewrite-lexer"]).unwrap();
+
+        let lexer = branch("rewrite-lexer");
+        let recorded = branches(&["rewrite-lexer"]);
+        let local = branches(&["main", "rewrite", "rewrite-lexer"]);
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        assert_eq!(
+            merged_branches(&lexer, &recorded, &local, live).unwrap(),
+            vec![branch("rewrite")]
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A squash merge: main gains the same content as one new commit
+    /// with no ancestry behind it, so the workspace reads UNMERGED -
+    /// the honest answer git itself gives.
+    #[test]
+    fn the_merged_rule_reads_a_squash_merge_unmerged() {
+        let root = scratch_with_main("merged-squash");
+        let squashed = branch("squashed");
+        git(&root, &["checkout", "-qb", squashed.as_str()]).unwrap();
+        commit(&root, "f.txt", "squash\n", "squash work");
+        // the human squashes into main: same content, no shared ancestry
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(&root, &["merge", "--squash", squashed.as_str()]).unwrap();
+        git(&root, &["commit", "-qm", "squash the workspace"]).unwrap();
+
+        let recorded = branches(&["squashed"]);
+        let local = branches(&["main", "squashed"]);
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        let merged = merged_branches(&squashed, &recorded, &local, live).unwrap();
+        assert!(merged.is_empty(), "no ancestry, no verdict: {merged:?}");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A hand-made backup branch pointing at the workspace tip
+    /// contains the tip, so the workspace reads merged into it and the
+    /// row names it for the human to see.
+    #[test]
+    fn the_merged_rule_names_a_hand_made_backup_branch() {
+        let root = scratch_with_main("merged-backup");
+        let risky = branch("risky");
+        git(&root, &["checkout", "-qb", risky.as_str()]).unwrap();
+        commit(&root, "f.txt", "work\n", "risky work");
+        // a hand-made backup branch lands exactly on the workspace tip
+        git(&root, &["branch", "backup-before-clean", risky.as_str()]).unwrap();
+
+        let recorded = branches(&["risky"]);
+        let local = branches(&["main", "risky", "backup-before-clean"]);
+        let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(&root, work, target);
+        assert_eq!(
+            merged_branches(&risky, &recorded, &local, live).unwrap(),
+            vec![branch("backup-before-clean")]
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The rule over an in-memory ancestry relation, no git at all:
+    /// every qualifying candidate comes back in the caller's order,
+    /// the branch itself and the recorded workspaces' branches drop
+    /// out even when ancestry would hold, and a non-ancestor never
+    /// qualifies.
+    #[test]
+    fn the_merged_rule_returns_every_candidate_in_order_over_a_fake() {
+        let work = branch("ws");
+        let recorded = branches(&["ws", "older-ws"]);
+        let local = branches(&["main", "older-ws", "backup", "ws", "later-ws", "unrelated"]);
+        // ancestry as data: ws is contained in five of the six
+        // candidates, itself and older-ws included
+        let contains = [
+            ("ws", "main"),
+            ("ws", "backup"),
+            ("ws", "later-ws"),
+            ("ws", "older-ws"),
+            ("ws", "ws"),
+        ];
+        let fake = |work: &GitBranch, target: &GitBranch| {
+            Ok(contains
+                .iter()
+                .any(|(w, t)| *w == work.as_str() && *t == target.as_str()))
+        };
+        assert_eq!(
+            merged_branches(&work, &recorded, &local, fake).unwrap(),
+            branches(&["main", "backup", "later-ws"])
+        );
     }
 }
