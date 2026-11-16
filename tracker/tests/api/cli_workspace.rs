@@ -553,16 +553,11 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
     let (status, body) = post_json(
         &base_url,
         "/api/v1/native/attach",
-        &json!({"native_id": "hereres001", "session_file": here_saved.to_str().unwrap()}),
+        &json!({"native_id": "hereres001", "session_file": here_saved.to_str().unwrap(),
+                "terminal": {"address": "t1", "adopted": false}}),
     );
     assert_eq!(status, 200, "{body}");
     let here_num = json_of(&body)["num"].as_u64().unwrap();
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/incarnations/address",
-        &json!({"incarnation": here_num, "address": "t1", "adopted": false}),
-    );
-    assert_eq!(status, 200, "{body}");
     std::fs::write(
         db.parent().unwrap().join("hc-bin").join("state"),
         b"finished",
@@ -1521,12 +1516,6 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     assert!(err.contains("SACCADE_INCARNATION_SEQ"), "{err}");
 
     // An unbound launch remains recorded, but no initial question is recorded or sent.
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/incarnations/address",
-        &json!({"incarnation": 2, "address": "t2", "adopted": false}),
-    );
-    assert_eq!(status, 200, "{body}");
     let send_log = hc.parent().unwrap().join("argv-send.log");
     let sends_before = std::fs::read_to_string(&send_log).unwrap();
     let started = std::time::Instant::now();

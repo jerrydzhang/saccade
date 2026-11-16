@@ -4,19 +4,16 @@
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
 use crate::record::events::Command;
-use crate::serve::incarnation_wire::{
-    AttachRequest, IncarnationAddressRequest, IncarnationRegisterRequest,
-};
-use crate::serve::message_wire::{MailboxReply, MessageSendRequest};
+use crate::serve::incarnation_wire::IncarnationRegisterRequest;
+use crate::serve::message_wire::MessageSendRequest;
 use crate::serve::workspace_wire::{CleanRequest, CreateRequest};
 use crate::store::{Context, Tier};
 use serde::Deserialize;
 
 // the replies the CLI reads, one definition shared with the server's
 // doors (t-60 2.4): the types live beside the doors' requests
-pub use crate::serve::incarnation_wire::AttachReply;
 pub use crate::serve::message_wire::{
-    MailboxEndpoint, MailboxMessage, MessageFacts, SendMessageReply, SubmissionFacts,
+    MailboxEndpoint, MessageFacts, SendMessageReply, SubmissionFacts,
 };
 pub use crate::serve::workspace_wire::{CleanReply, CreateReply, WorkspaceBirth};
 
@@ -498,26 +495,6 @@ fn bound(detail: &str) -> String {
 
 // -- the native integration's client half -------------------------------
 
-/// Attach a native session: an existing exact native session resolves
-/// its incarnation, a fresh one registers - the machinery's own act.
-pub fn attach(
-    url: &str,
-    native_id: &str,
-    session_file: &std::path::Path,
-) -> Result<AttachReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/native/attach",
-        &AttachRequest {
-            native_id: native_request_id(native_id)?,
-            session_file: native_session_file(session_file)?,
-            harness: crate::host::harness::Harness::default(),
-            terminal: None,
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
-    )
-}
-
 /// The typed request pointers are validated where they are built: a
 /// native id or locator this binary cannot build refuses here with
 /// the code the door's parse refusal carries, never a guessed POST.
@@ -525,18 +502,6 @@ fn native_request_id(
     native_id: &str,
 ) -> Result<crate::record::types::pointers::NativeSessionId, ClientFail> {
     crate::record::types::pointers::NativeSessionId::new(native_id.to_string()).map_err(|e| {
-        ClientFail::Refused {
-            code: "malformed_request".into(),
-            detail: format!("{e:?}"),
-            message: None,
-        }
-    })
-}
-
-fn native_session_file(
-    session_file: &std::path::Path,
-) -> Result<crate::record::types::pointers::SessionLocator, ClientFail> {
-    crate::record::types::pointers::SessionLocator::new(session_file.to_path_buf()).map_err(|e| {
         ClientFail::Refused {
             code: "malformed_request".into(),
             detail: format!("{e:?}"),
@@ -567,35 +532,6 @@ pub fn send_message(
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
     )
-}
-
-/// The reader's own mail, in birth order, any state: a read the
-/// integration polls, never a subscription the tracker keeps.
-pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, ClientFail> {
-    let mut response = ureq::get(&format!("{url}/api/v1/messages?incarnation={incarnation}"))
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call()
-        .map_err(|_| ClientFail::ServerUnreachable {
-            url: url.to_string(),
-        })?;
-    let status = response.status().as_u16();
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|_| ClientFail::ServerUnreachable {
-            url: url.to_string(),
-        })?;
-    if status != 200 {
-        return Err(error_of(status, &text));
-    }
-    let body: MailboxReply = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
-        code: "malformed_response".into(),
-        detail: e.to_string(),
-        message: None,
-    })?;
-    Ok(body.messages)
 }
 
 // -- the task-free workspace controller's client half --------------------
@@ -654,26 +590,6 @@ pub fn register_incarnation(
             adopted,
             harness,
             name: name.cloned(),
-            client: Some(env!("CARGO_PKG_VERSION").to_string()),
-        },
-    )
-}
-
-/// The association's address moves with a relaunch: the same
-/// incarnation, another terminal.
-pub fn assign_host_address(
-    url: &str,
-    incarnation: usize,
-    address: &str,
-    adopted: bool,
-) -> Result<(), ClientFail> {
-    post_json_unit(
-        url,
-        "/api/v1/incarnations/address",
-        &IncarnationAddressRequest {
-            incarnation,
-            address: address.to_string(),
-            adopted,
             client: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
     )

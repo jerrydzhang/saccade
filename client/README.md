@@ -64,9 +64,8 @@ The native test project runs only through the gated session lane:
 
 One entry point: `python3 client/harness/entry.py <lane>`. Every lane
 that spawns runs inside one bwrap sandbox under
-`isolation.PidfdSupervisor`, canary first, gated by
-`SAC_APP_RUNTIME_AUTHORIZED` and a caller-side tracker db
-(`SACCADE_DB`) the canary proves invisible:
+`isolation.PidfdSupervisor`, canary first, requiring a caller-side
+tracker db (`SACCADE_DB`) the canary proves invisible:
 
 - `check-fast` - plain, uncontained tool runs (above)
 - `preflight` - the minimal containment verification

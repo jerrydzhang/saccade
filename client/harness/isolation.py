@@ -22,9 +22,8 @@ review of f53330d):
 - Fail-closed: preflight refuses when bwrap or user namespaces are
   unavailable, or when the pidfd API is missing. There is no weaker
   fallback and no silent downgrade.
-- Runtime authorization is procedural: gated lanes refuse unless
-  SAC_APP_RUNTIME_AUTHORIZED names the review record authorizing
-  this exact harness code.
+- Not token-gated: the lanes take no authorization token; the
+  containment above is the gate.
 """
 
 from __future__ import annotations
@@ -325,21 +324,6 @@ def make_run_root(label: str) -> pathlib.Path:
     # over this path for XDG_RUNTIME_DIR, after the run-root bind.
     (root / "runtime").mkdir()
     return root
-
-
-def authorized() -> bool:
-    return bool(os.environ.get("SAC_APP_RUNTIME_AUTHORIZED", ""))
-
-
-def gate_or_exit(lane: str) -> None:
-    if not authorized():
-        print(
-            f"containment refusal: lane {lane!r} launches processes; runtime is gated "
-            "until the reviewed harness code is authorized "
-            "(set SAC_APP_RUNTIME_AUTHORIZED=<review record>)",
-            file=sys.stderr,
-        )
-        sys.exit(2)
 
 
 def dispatch(argv: list[str]) -> int:

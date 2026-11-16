@@ -14,7 +14,7 @@ use super::board::{
     board_search, board_update,
 };
 use super::command::command;
-use super::incarnation::{incarnation_address, incarnation_register, native_attach};
+use super::incarnation::{incarnation_register, native_attach};
 use super::message::{message_send, messages_history};
 use super::workspace::{workspace_clean, workspace_create};
 pub use crate::serve::hosts::Hosts;
@@ -38,7 +38,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/workspace/clean", post(workspace_clean))
         .route("/api/v1/native/attach", post(native_attach))
         .route("/api/v1/incarnations/register", post(incarnation_register))
-        .route("/api/v1/incarnations/address", post(incarnation_address))
         .route("/api/v1/messages/send", post(message_send))
         .route("/api/v1/messages", get(messages_history))
         .route("/api/v1/boards/path/{task}", get(board_path))

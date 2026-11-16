@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.21.1"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.21.2"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -179,6 +179,10 @@ same fold and board repository as every other read face, wait on the
 record's sequence, and never watch the host - tracker logic does not
 depend on Herdr. `/api/v1` stays `sac`'s own API and changes freely;
 nothing writes through `/view/v1`.
+
+The HTTP API allows read access to the whole tracker. A read route
+needs no named reader - it is what an experiment at the edge reads
+through. A write door with no caller is a retirement candidate.
 
 - **A page belongs to a location, not an endpoint.** The location
   grammar v1 serves: `` (the root, naming the tracker, the host facts

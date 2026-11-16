@@ -5,14 +5,15 @@ fmt:
 lint:
     cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings
 
-# the full suite: the cargo workspace, the app shell's own tests, then
-# the app frontend's vitest unit and browser projects (the native
-# project is gated: just app-test-native)
+# the full suite: the cargo workspace, the app shell's own tests, the
+# app frontend's vitest unit and browser projects, then the native
+# node suites (the vitest native project is gated: just app-test-native)
 test:
     cargo test -q
     just shell-test
     just app-test
     just app-test-browser
+    just native-test
 
 # the app shell library's tests (client/src-tauri/src, compiled through
 # client/port-shell): the GTK/WebKit build needs the saccade-app shell
@@ -43,10 +44,9 @@ app-test-pending:
 # native: the scenarios tagged native or multi-window, in the built
 # port app, through the session lane's suite mode (entry.py session
 # suite: the enforced sandbox, the canary, a private Weston, then
-# vitest's native project). Gated like every lane that spawns: the
-# caller passes SAC_APP_RUNTIME_AUTHORIZED and SACCADE_DB (the
-# caller-side tracker db the canary proves invisible); SAC_APP_BIN
-# defaults to the nix-built port app.
+# vitest's native project). Like every lane that spawns: the caller
+# passes SACCADE_DB (the caller-side tracker db the canary proves
+# invisible); SAC_APP_BIN defaults to the nix-built port app.
 app-test-native *args:
     cargo build -q -p saccade --bin sac
     nix develop .#saccade-app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths .#saccade-app)/bin/saccade-app}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$PWD/target/debug/sac" python3 client/harness/entry.py --board "$PWD/client/fixtures/display-scroll.yaml" session suite "$@"' app-test-native {{args}}
