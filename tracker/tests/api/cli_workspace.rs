@@ -1581,17 +1581,17 @@ fn command_label(program: &str) -> String {
         .unwrap()
 }
 
-/// A list rig: the CLI face pointed at a real serving subprocess, so
-/// the door reads the fold through the server and git at the repo
-/// root exactly where it runs in production.
-struct ListRig {
+/// A workspace rig: the CLI face pointed at a real serving subprocess,
+/// so the doors read the fold through the server and git at the repo
+/// root exactly where they run in production.
+struct WorkspaceRig {
     bin: &'static str,
     url: String,
     repo: String,
     db: String,
 }
 
-impl ListRig {
+impl WorkspaceRig {
     fn sac(&self, args: &[&str]) -> (bool, String, String) {
         let mut full = vec![
             "--server".to_string(),
@@ -1658,7 +1658,7 @@ async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
         sh(worktree, &["commit", "-qm", "list work"]);
     }
 
-    let rig = ListRig {
+    let rig = WorkspaceRig {
         bin,
         url,
         repo: root.display().to_string(),
@@ -1862,4 +1862,331 @@ async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
         json_of(&serde_json::to_string(&listing).unwrap()),
         "the local db face reads the same rows"
     );
+}
+
+/// A clean rig: the serving subprocess, fake host, and scratch repo
+/// the clean tests share. Every piece is drop-guarded - keep the
+/// server and the scratch dir bound for the test's whole body.
+async fn clean_rig(
+    tag: &str,
+) -> (
+    WorkspaceRig,
+    crate::common::ServerProc,
+    crate::common::ScratchDir,
+) {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db(tag);
+    let dir = db.parent().unwrap().to_path_buf();
+    let (root, _first, _head) = scratch_repo(&dir);
+    let hcs = fake_hc_spawn(&dir);
+    let host_state = dir.join("host-terminals");
+    std::fs::write(&host_state, b"").unwrap();
+    let serve_envs = [
+        ("SACCADE_HERDR", hcs.display().to_string()),
+        ("FAKE_HC_TERMINALS", host_state.display().to_string()),
+    ];
+    let serve_envs: Vec<(&str, &str)> = serve_envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let (serve, url) = spawn_serve(
+        bin,
+        &db,
+        &["--repo", &root.display().to_string()],
+        &serve_envs,
+    );
+    let rig = WorkspaceRig {
+        bin,
+        url,
+        repo: root.display().to_string(),
+        db: db.display().to_string(),
+    };
+    (rig, serve, db)
+}
+
+/// The repo's quiet answer on a local branch's existence: git's own
+/// ref read, never the door's word.
+fn local_branch_stands(repo: &str, branch: &str) -> bool {
+    saccade::boards::git_command()
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()
+        .expect("git runs")
+        .status
+        .success()
+}
+
+/// One file committed inside a worktree.
+fn commit_in(worktree: &Path, name: &str, content: &str) {
+    std::fs::write(worktree.join(name), content).unwrap();
+    sh(worktree, &["add", name]);
+    sh(worktree, &["commit", "-qm", "clean work"]);
+}
+
+/// `sac workspace clean` deletes a merged branch: the branch and the
+/// worktree go, the reply carries the additive disposition (deleted,
+/// into what), and the landed record stays exactly the birth-only
+/// event it always was; a re-clean answers idempotently with no
+/// branch act at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_removes_a_merged_branch_and_the_record_stays_unchanged() {
+    let (rig, _serve, _scratch) = clean_rig("ws-clean-merged").await;
+    let root = PathBuf::from(&rig.repo);
+
+    // one merged workspace per face: one commit, ff-merged into main;
+    // each provision cuts at the primary HEAD, so the sequence keeps
+    // every branch an ancestor of main for git branch -d
+    let merged = |label: &str| -> (usize, String, String) {
+        let (seq, branch, path) = rig.provision(label, None);
+        commit_in(Path::new(&path), "a.txt", &format!("{label} work\n"));
+        sh(&root, &["merge", "-q", "--ff-only", &branch]);
+        (seq, branch, path)
+    };
+    let (json_seq, json_branch, json_path) = merged("clean-json");
+    let (_text_seq, text_branch, text_path) = merged("clean-text");
+    assert!(local_branch_stands(&rig.repo, &json_branch));
+    assert!(local_branch_stands(&rig.repo, &text_branch));
+    assert!(Path::new(&json_path).exists());
+
+    // the json face: the disposition rides the reply, the record is
+    // the unchanged Cleaned event, the verified list names the new
+    // branch step and no longer claims retention
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &json_path]);
+    assert!(ok, "clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(reply["cleaned"], json!(true));
+    assert_eq!(reply["already_cleaned"], json!(false));
+    assert_eq!(
+        reply["branch"],
+        json!({"deleted": true, "merged_into": ["main"], "kept": null}),
+        "{out}"
+    );
+    assert_eq!(reply["records"][0]["kind"], json!("workspace_cleaned"));
+    assert_eq!(
+        reply["records"][0]["payload"],
+        json!({"workspace": json_seq}),
+        "the event is unchanged: the birth reference and nothing else"
+    );
+    let verified: Vec<String> = reply["verified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        verified
+            .iter()
+            .any(|s| s == &format!("removed the branch {json_branch} (merged into main)")),
+        "{verified:?}"
+    );
+    assert!(
+        verified
+            .iter()
+            .any(|s| s == "removed the checkout with git worktree remove"),
+        "{verified:?}"
+    );
+    assert!(
+        !verified.iter().any(|s| s.contains("retained")),
+        "a removed branch is never called retained: {verified:?}"
+    );
+    assert!(!Path::new(&json_path).exists(), "the worktree went");
+    assert!(
+        !local_branch_stands(&rig.repo, &json_branch),
+        "the branch went"
+    );
+
+    // the text face: the removal named with the first target
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &text_path]);
+    assert!(ok, "clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {text_branch} removed (merged into main)")),
+        "{out}"
+    );
+    assert!(!out.contains("retained"), "{out}");
+    assert!(!local_branch_stands(&rig.repo, &text_branch));
+
+    // the re-clean: idempotent, and this call acted no branch - the
+    // disposition is null on that face
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &json_path]);
+    assert!(ok, "re-clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(reply["already_cleaned"], json!(true));
+    assert_eq!(reply["branch"], json!(null), "{out}");
+    assert_eq!(reply["records"], json!([]));
+}
+
+/// `sac workspace clean` keeps an unmerged branch: today's behavior
+/// byte for byte - the removal line still claims retention - plus the
+/// disposition naming why it stands, in the reply and the output.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_keeps_an_unmerged_branch_and_the_output_says_so() {
+    let (rig, _serve, _scratch) = clean_rig("ws-clean-kept").await;
+
+    // two unmerged workspaces: one commit each, never merged; the
+    // second cut after the first cleaned, its retained branch holding
+    // no tip of this one
+    let (kept_seq, kept_branch, kept_path) = rig.provision("clean-kept", None);
+    commit_in(Path::new(&kept_path), "k.txt", "kept work\n");
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &kept_path]);
+    assert!(ok, "clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(reply["cleaned"], json!(true));
+    assert_eq!(
+        reply["branch"],
+        json!({"deleted": false, "merged_into": [], "kept": "unmerged"}),
+        "{out}"
+    );
+    let verified: Vec<String> = reply["verified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        verified.iter().any(|s| s
+            == &format!(
+                "removed the checkout with git worktree remove; branch {kept_branch} retained"
+            )),
+        "today's retention line stands byte for byte: {verified:?}"
+    );
+    assert!(!verified.iter().any(|s| s.contains("removed the branch")));
+    assert!(
+        local_branch_stands(&rig.repo, &kept_branch),
+        "the branch stands"
+    );
+    assert!(!Path::new(&kept_path).exists());
+    assert_eq!(
+        reply["records"][0]["payload"],
+        json!({"workspace": kept_seq})
+    );
+
+    // the second workspace's text face: the output says the branch is
+    // kept, and why
+    let (_seq, branch, path) = rig.provision("clean-kept-2", None);
+    commit_in(Path::new(&path), "k2.txt", "kept work too\n");
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &path]);
+    assert!(ok, "clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {branch} kept (unmerged)")),
+        "{out}"
+    );
+    assert!(local_branch_stands(&rig.repo, &branch), "the branch stands");
+}
+
+/// The self-exclusion subtlety at the clean door: a cleaned
+/// workspace's retained branch counts as a candidate, so a branch
+/// retained by an earlier clean can make this one deletable - the
+/// only candidate containing the younger tip is the elder's retained
+/// branch, and the clean deletes on it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleaned_workspaces_retained_branch_makes_this_one_deletable() {
+    let (rig, _serve, _scratch) = clean_rig("ws-clean-self").await;
+    let root = PathBuf::from(&rig.repo);
+
+    // the elder: one commit; the younger: one commit of its own, cut
+    // at the same base - the two tips diverge
+    let (_elder_seq, elder_branch, elder_path) = rig.provision("clean-elder", None);
+    commit_in(Path::new(&elder_path), "e.txt", "elder work\n");
+    let (_younger_seq, younger_branch, younger_path) = rig.provision("clean-younger", None);
+    commit_in(Path::new(&younger_path), "y.txt", "younger work\n");
+
+    // the elder's branch takes the younger's work in: its tip now
+    // contains the younger's - yet the elder reads unmerged, for the
+    // younger's branch is a standing recorded workspace's branch
+    sh(
+        Path::new(&elder_path),
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "take the younger work",
+            &younger_branch,
+        ],
+    );
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &elder_path]);
+    assert!(ok, "elder clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(
+        reply["branch"],
+        json!({"deleted": false, "merged_into": [], "kept": "unmerged"}),
+        "{out}"
+    );
+    assert!(
+        local_branch_stands(&rig.repo, &elder_branch),
+        "the elder's branch is retained"
+    );
+
+    // the primary checkout moves onto the elder's retained branch -
+    // this story's integration branch; main stays behind, holding
+    // neither tip
+    sh(&root, &["checkout", "-q", &elder_branch]);
+
+    // the younger's clean: the ONLY candidate containing its tip is
+    // the cleaned workspace's retained branch - had cleaned workspaces'
+    // branches been excluded, this clean would keep the branch
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &younger_path]);
+    assert!(ok, "younger clean refused: {out}{err}");
+    let reply = json_of(&out);
+    assert_eq!(
+        reply["branch"],
+        json!({"deleted": true, "merged_into": [elder_branch], "kept": null}),
+        "{out}"
+    );
+    assert!(
+        !local_branch_stands(&rig.repo, &younger_branch),
+        "the younger's branch went"
+    );
+    assert!(
+        local_branch_stands(&rig.repo, &elder_branch),
+        "the retained branch stands"
+    );
+}
+
+/// The dirty refusal is unchanged and comes before any branch act: a
+/// merged branch behind a dirty checkout stands through the refusal,
+/// nothing records, and the clean after the dirt is removed deletes
+/// the branch as the rule says.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dirty_refusal_still_refuses_before_any_branch_act() {
+    let (rig, _serve, _scratch) = clean_rig("ws-clean-dirty").await;
+    let root = PathBuf::from(&rig.repo);
+    let (_seq, branch, path) = rig.provision("clean-dirty", None);
+    let wt = Path::new(&path);
+    commit_in(wt, "d.txt", "dirty work\n");
+    // the rule would say merged: the work is in main
+    sh(&root, &["merge", "-q", "--ff-only", &branch]);
+    std::fs::write(wt.join("untracked.txt"), "kept\n").unwrap();
+
+    let (ok, out, err) = rig.sac(&["--json", "workspace", "clean", &path]);
+    assert!(!ok, "the dirty clean must refuse: {out}");
+    assert!(err.contains("workspace_work_present"), "{err}");
+    assert!(local_branch_stands(&rig.repo, &branch), "the branch stands");
+    assert!(wt.exists(), "the worktree stands");
+
+    // nothing recorded: no Cleaned fact anywhere in the log
+    let (ok, out, err) = rig.sac(&["--json", "log"]);
+    assert!(ok, "log refused: {out}{err}");
+    let log = json_of(&out);
+    assert!(
+        !log["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "workspace_cleaned"),
+        "{out}"
+    );
+
+    // the dirt removed, the clean runs and the branch goes
+    std::fs::remove_file(wt.join("untracked.txt")).unwrap();
+    let (ok, out, err) = rig.sac(&["workspace", "clean", &path]);
+    assert!(ok, "clean refused: {out}{err}");
+    assert!(
+        out.contains(&format!("branch {branch} removed (merged into main)")),
+        "{out}"
+    );
+    assert!(!local_branch_stands(&rig.repo, &branch));
 }

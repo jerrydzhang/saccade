@@ -433,6 +433,27 @@ pub fn preserved_work(path: &Path) -> Result<Option<String>, WorkspaceFail> {
     Ok(if out.is_empty() { None } else { Some(out) })
 }
 
+/// Delete the branch with git's own protections: `git branch -d` -
+/// never a force - refuses when the branch is not fully merged per
+/// git's own check (HEAD, or its upstream when one is set) or stands
+/// checked out in any worktree. git's refusal is the door's refusal.
+pub fn delete_branch(root: &Path, branch: &GitBranch) -> Result<(), WorkspaceFail> {
+    let out = crate::boards::git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["branch", "-d", branch.as_str()])
+        .output()
+        .map_err(|e| WorkspaceFail::Git(format!("git branch -d: {e}")))?;
+    if !out.status.success() {
+        return Err(WorkspaceFail::Git(format!(
+            "git branch -d {} refused: {}",
+            branch.as_str(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
 /// Remove the checkout with git's normal protections: no force, no
 /// branch deletion - the branch and every commit on it stand.
 pub fn remove_checkout(root: &Path, path: &Path) -> Result<(), WorkspaceFail> {
@@ -657,6 +678,20 @@ pub fn last_commit_time(root: &Path, tip: &GitCommit) -> Result<u64, WorkspaceFa
         .map_err(|e| WorkspaceFail::Git(format!("git show gave no time: {e:?}")))
 }
 
+/// The recorded (uncleaned) workspaces' branches, in birth order: the
+/// merged rule's exclusion set, shared by the list and the clean
+/// doors so neither can drift from the other. A cleaned workspace's
+/// retained branch is not here - it counts as a candidate.
+pub fn recorded_workspace_branches(world: &World) -> Vec<GitBranch> {
+    world
+        .workspace_births()
+        .into_iter()
+        .filter_map(|birth| world.workspace_facts(birth))
+        .filter(|facts| facts.stage != WorkspaceStage::Cleaned)
+        .map(|facts| facts.branch)
+        .collect()
+}
+
 /// Every recorded workspace that is not cleaned, in birth order, each
 /// row the fold's facts joined with git's answers at `root`. The
 /// merged rule reads every uncleaned recorded branch as its
@@ -671,7 +706,7 @@ pub fn workspace_list(world: &World, root: &Path) -> Result<Vec<ListRow>, Worksp
         .filter_map(|birth| world.workspace_facts(birth))
         .filter(|facts| facts.stage != WorkspaceStage::Cleaned)
         .collect();
-    let recorded: Vec<GitBranch> = standing.iter().map(|f| f.branch.clone()).collect();
+    let recorded = recorded_workspace_branches(world);
     let live = |work: &GitBranch, target: &GitBranch| branch_is_ancestor(root, work, target);
     let mut rows = Vec::new();
     for facts in &standing {
@@ -1027,6 +1062,41 @@ mod test {
             git(&readded, &["rev-parse", "HEAD"]).unwrap(),
             branch_tip(&root, &branch).unwrap().unwrap().as_str()
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The branch deletion keeps git's own protections: a branch
+    /// merged into HEAD deletes, an unmerged branch refuses and
+    /// stands, a branch checked out in any worktree refuses - no
+    /// force anywhere.
+    #[test]
+    fn the_branch_deletion_keeps_gits_own_protections() {
+        let root = scratch_with_main("delete-branch");
+        // merged: the branch's work is in main, HEAD is main
+        let merged = branch("merged-line");
+        git(&root, &["checkout", "-qb", merged.as_str()]).unwrap();
+        commit(&root, "f.txt", "work\n", "merged work");
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        git(&root, &["merge", "-q", "--ff-only", merged.as_str()]).unwrap();
+        delete_branch(&root, &merged).unwrap();
+        assert_eq!(branch_tip(&root, &merged).unwrap(), None);
+
+        // unmerged: git's own refusal, the branch stands, and the
+        // refusal names the branch
+        let unmerged = branch("unmerged-line");
+        git(&root, &["checkout", "-qb", unmerged.as_str()]).unwrap();
+        commit(&root, "g.txt", "kept\n", "unmerged work");
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        let refused = delete_branch(&root, &unmerged);
+        assert!(matches!(refused, Err(WorkspaceFail::Git(_))), "{refused:?}");
+        assert!(refused.unwrap_err().detail().contains(unmerged.as_str()));
+        assert!(branch_tip(&root, &unmerged).unwrap().is_some());
+
+        // checked out at the primary: git refuses a checked-out branch
+        let refused = delete_branch(&root, &branch("main"));
+        assert!(matches!(refused, Err(WorkspaceFail::Git(_))), "{refused:?}");
+        assert!(branch_tip(&root, &branch("main")).unwrap().is_some());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

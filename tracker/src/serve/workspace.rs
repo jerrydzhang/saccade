@@ -13,7 +13,9 @@ use crate::workspace;
 use super::door::{door, ready};
 use super::fail::ApiFail;
 use super::state::{AppState, Inner, ServerState};
-use super::workspace_wire::{CleanReply, CleanRequest, CreateReply, CreateRequest, WorkspaceBirth};
+use super::workspace_wire::{
+    BranchOutcome, CleanReply, CleanRequest, CreateReply, CreateRequest, WorkspaceBirth,
+};
 
 // -- the task-free workspace controller ----------------------------------
 
@@ -236,6 +238,7 @@ fn clean_operation(
             cleaned: false,
             already_cleaned: true,
             workspace: WorkspaceBirth::of(facts),
+            branch: None,
             verified,
             records: Vec::new(),
         });
@@ -255,12 +258,11 @@ fn clean_operation(
         ));
     }
     if destructive {
-        // the branch is retained: a missing branch refuses the
-        // destructive act before anything runs
-        if workspace::branch_tip(&repo_root, &facts.branch)
-            .map_err(ApiFail::Workspace)?
-            .is_none()
-        {
+        // the branch is retained until the rule says otherwise: a
+        // missing branch refuses the destructive act before anything
+        // runs
+        let tip = workspace::branch_tip(&repo_root, &facts.branch).map_err(ApiFail::Workspace)?;
+        if tip.is_none() {
             return Err(ApiFail::Refused(
                 StatusCode::CONFLICT,
                 "workspace_branch_missing",
@@ -300,6 +302,33 @@ fn clean_operation(
     } else {
         verified.push("can-clean: recorded Available, checkout already absent".into());
     }
+
+    // the branch decision, read off the pre-clean fold before any
+    // effect: the merged rule over the standing recorded branches as
+    // the exclusion set - this workspace is itself recorded-uncleaned
+    // until its own Cleaned fact lands, and the rule's not-the-branch-
+    // itself exclusion keeps its own branch from excluding it - so a
+    // cleaned workspace's retained branch counts as a candidate and a
+    // stacked workspace's standing parent never does
+    let branch_outcome = match workspace::branch_tip(&repo_root, &facts.branch)
+        .map_err(ApiFail::Workspace)?
+    {
+        None => BranchOutcome::kept_missing(),
+        Some(_) => {
+            let recorded = workspace::recorded_workspace_branches(&world);
+            let local = workspace::local_branches(&repo_root).map_err(ApiFail::Workspace)?;
+            let merged_into =
+                workspace::merged_branches(&facts.branch, &recorded, &local, |work, target| {
+                    workspace::branch_is_ancestor(&repo_root, work, target)
+                })
+                .map_err(ApiFail::Workspace)?;
+            if merged_into.is_empty() {
+                BranchOutcome::kept_unmerged()
+            } else {
+                BranchOutcome::deleted(merged_into.iter().map(|b| b.as_str().to_string()).collect())
+            }
+        }
+    };
 
     // the host stage: enumerate by exact path over one read, close
     // each address, and take the finished fact from the close replies
@@ -366,14 +395,20 @@ fn clean_operation(
     }
     verified.push("verified: the host names no terminals for the workspace".into());
 
-    // the checkout removal: git's normal protections, the branch and
-    // every commit on it retained; an already-absent checkout satisfies
+    // the checkout removal: git's normal protections; an
+    // already-absent checkout satisfies. The branch's own step follows
+    // the verified removal, so the removal line claims retention only
+    // where the branch actually stands
     if destructive {
         workspace::remove_checkout(&repo_root, &canonical).map_err(ApiFail::Workspace)?;
-        verified.push(format!(
-            "removed the checkout with git worktree remove; branch {} retained",
-            facts.branch.as_str()
-        ));
+        verified.push(if branch_outcome.deleted {
+            "removed the checkout with git worktree remove".to_string()
+        } else {
+            format!(
+                "removed the checkout with git worktree remove; branch {} retained",
+                facts.branch.as_str()
+            )
+        });
     }
 
     // absence: the path is gone and git no longer registers it
@@ -400,6 +435,23 @@ fn clean_operation(
     }
     verified.push("verified: the checkout is gone and git registers no worktree there".into());
 
+    // the branch itself, after the verified removal: deleted when the
+    // merged rule said merged, through git branch -d - git's own
+    // refusal (not fully merged, checked out elsewhere) refuses the
+    // whole clean, never a force; kept otherwise, named so in the reply
+    if branch_outcome.deleted {
+        workspace::delete_branch(&repo_root, &facts.branch).map_err(ApiFail::Workspace)?;
+        verified.push(format!(
+            "removed the branch {} (merged into {})",
+            facts.branch.as_str(),
+            branch_outcome
+                .merged_into
+                .first()
+                .map(String::as_str)
+                .unwrap_or_default()
+        ));
+    }
+
     // every step verified: the completed fact lands, machinery-authored
     let drafts = vec![db::RecordDraft {
         context: Context::system(),
@@ -410,16 +462,19 @@ fn clean_operation(
             cleaned: true,
             already_cleaned: false,
             workspace: WorkspaceBirth::of(facts),
+            branch: Some(branch_outcome),
             verified,
             records,
         }),
         Err(ExecuteFail::Reject(crate::Reject::WorkspaceStageMismatch)) => {
             // a concurrent door recorded the same completion: the
-            // resources are verified absent either way - idempotent
+            // resources are verified absent either way - idempotent,
+            // and this call's own branch act is disclosed as it ran
             Ok(CleanReply {
                 cleaned: false,
                 already_cleaned: true,
                 workspace: WorkspaceBirth::of(facts),
+                branch: Some(branch_outcome),
                 verified,
                 records: Vec::new(),
             })

@@ -202,7 +202,9 @@ fn commit_age(now_epoch: u64, then: u64) -> String {
 
 /// `sac workspace clean`: the ordered cleanup through the server's
 /// effects. The reply names every verified step; a failure names the
-/// step that stopped, and retry is the recovery path.
+/// step that stopped, and retry is the recovery path. The branch's
+/// disposition rides the reply: removed when merged (into what),
+/// otherwise why it stands.
 pub(super) fn workspace_clean_door(
     cli: &Cli,
     destination: &Destination,
@@ -227,17 +229,40 @@ pub(super) fn workspace_clean_door(
             "cleaned": reply.cleaned,
             "already_cleaned": reply.already_cleaned,
             "workspace": reply.workspace,
+            "branch": reply.branch,
             "verified": reply.verified,
             "records": reply.records,
         }))
         .expect("plain data"));
     }
+    let branch_line = reply.branch.map(|outcome| {
+        let name = &reply.workspace.branch;
+        match (outcome.deleted, outcome.kept) {
+            (true, _) => format!(
+                "branch {} removed (merged into {})",
+                name,
+                outcome
+                    .merged_into
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("?")
+            ),
+            (false, Some(client::BranchKept::Unmerged)) => {
+                format!("branch {name} kept (unmerged)")
+            }
+            (false, Some(client::BranchKept::Missing)) => format!("branch {name} already absent"),
+            (false, None) => format!("branch {name} kept"),
+        }
+    });
     Ok(format!(
-        "workspace {} ({}, branch {})\n  {}\n{}",
+        "workspace {} ({}, branch {})\n  {}\n{}{}",
         reply.workspace.path,
         reply.workspace.seq,
         reply.workspace.branch,
         fact,
+        branch_line
+            .map(|line| format!("  {line}\n"))
+            .unwrap_or_default(),
         reply
             .verified
             .iter()
