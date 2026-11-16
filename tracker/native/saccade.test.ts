@@ -217,7 +217,13 @@ class FakePi implements ExtensionAPI {
 			this.rendered.push(
 				renderer(
 					{ type: "custom", customType, data } as CustomEntry<T>,
-					{ expanded: false },
+					// no keys are configured in the fake: the hints
+					// answer as pi does for an unbound id
+					{
+						expanded: false,
+						keyText: () => "",
+						keyHint: (_keybinding, description) => description,
+					},
 					undefined as unknown as Theme,
 				),
 			);
