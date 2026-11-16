@@ -8,10 +8,13 @@
 
 use proptest::prelude::*;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
+use saccade::record::events::Command;
+use saccade::record::objects::task::TaskId;
+use saccade::record::store::{Context, RecordId, Tier, World};
+use saccade::record::types::prose::Prose;
 use saccade::store::{Record, Scope};
 use saccade::types::actor::ActorName;
 use saccade::wire;
-use saccade::{Command, Context, Prose, RecordId, TaskId, Tier, World};
 
 #[derive(Clone, Debug)]
 enum Action {
@@ -132,8 +135,8 @@ fn task_at(world: &World, n: u8) -> TaskId {
 
 /// A commit from the drawn task's list, or a guaranteed-absent hash:
 /// the near-miss draw keeps the parent and offer guards exercised.
-fn commit_at(world: &World, task: TaskId, n: u8) -> saccade::GitCommit {
-    let garbage = || saccade::GitCommit::new("0".repeat(40)).unwrap();
+fn commit_at(world: &World, task: TaskId, n: u8) -> saccade::record::types::pointers::GitCommit {
+    let garbage = || saccade::record::types::pointers::GitCommit::new("0".repeat(40)).unwrap();
     world
         .tasks
         .get(task.0)
@@ -146,7 +149,11 @@ fn commit_at(world: &World, task: TaskId, n: u8) -> saccade::GitCommit {
 /// An incorporation pairing the drawn source task with its last
 /// commit, or a source past the id space: the unrecorded-citation
 /// draw keeps the store guard exercised.
-fn incorporation_at(world: &World, _task: u8, n: u8) -> Option<(TaskId, saccade::GitCommit)> {
+fn incorporation_at(
+    world: &World,
+    _task: u8,
+    n: u8,
+) -> Option<(TaskId, saccade::record::types::pointers::GitCommit)> {
     let source = TaskId(n as usize % (world.tasks.len() + 1));
     if source.0 == world.tasks.len() {
         return Some((TaskId(usize::MAX), garbage_commit()));
@@ -158,8 +165,8 @@ fn incorporation_at(world: &World, _task: u8, n: u8) -> Option<(TaskId, saccade:
     Some((source, last.commit.clone()))
 }
 
-fn garbage_commit() -> saccade::GitCommit {
-    saccade::GitCommit::new("f".repeat(40)).unwrap()
+fn garbage_commit() -> saccade::record::types::pointers::GitCommit {
+    saccade::record::types::pointers::GitCommit::new("f".repeat(40)).unwrap()
 }
 
 /// Any record position the log already holds - births and record
@@ -176,22 +183,33 @@ fn record_ref_at(records: usize, n: u8) -> RecordId {
 
 /// A registered native incarnation a claim names; the sentinel slot
 /// draws a guaranteed-absent reference.
-fn incarnation_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
-    let born: Vec<saccade::IncarnationId> = world.incarnations.keys().copied().collect();
+fn incarnation_at(
+    world: &World,
+    n: u8,
+) -> Option<saccade::record::objects::incarnation::IncarnationId> {
+    let born: Vec<saccade::record::objects::incarnation::IncarnationId> =
+        world.incarnations.keys().copied().collect();
     let slot = n as usize % (born.len() + 1);
     if slot == born.len() {
-        Some(saccade::IncarnationId(RecordId(usize::MAX)))
+        Some(saccade::record::objects::incarnation::IncarnationId(
+            RecordId(usize::MAX),
+        ))
     } else {
         Some(born[slot])
     }
 }
 
 /// The registered native identities, in birth order.
-fn native_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
-    let born: Vec<saccade::IncarnationId> = world
+fn native_at(world: &World, n: u8) -> Option<saccade::record::objects::incarnation::IncarnationId> {
+    let born: Vec<saccade::record::objects::incarnation::IncarnationId> = world
         .incarnations
         .iter()
-        .filter(|(_, ctx)| matches!(ctx.incarnation, saccade::Incarnation::Native { .. }))
+        .filter(|(_, ctx)| {
+            matches!(
+                ctx.incarnation,
+                saccade::record::objects::incarnation::Incarnation { .. }
+            )
+        })
         .map(|(id, _)| *id)
         .collect();
     let slot = n as usize % (born.len() + 1);
@@ -199,8 +217,9 @@ fn native_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
 }
 
 /// The messages the fold holds, with a one-past-the-end sentinel.
-fn message_at(world: &World, n: u8) -> Option<saccade::MessageId> {
-    let ids: Vec<saccade::MessageId> = world.messages.keys().copied().collect();
+fn message_at(world: &World, n: u8) -> Option<saccade::record::objects::message::MessageId> {
+    let ids: Vec<saccade::record::objects::message::MessageId> =
+        world.messages.keys().copied().collect();
     let slot = n as usize % (ids.len() + 1);
     ids.get(slot).copied()
 }
@@ -245,8 +264,12 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             };
             Command::CommitBoard {
                 task,
-                commit: saccade::GitCommit::new(format!("c{:02}{}", task.0, "a".repeat(36)))
-                    .unwrap(),
+                commit: saccade::record::types::pointers::GitCommit::new(format!(
+                    "c{:02}{}",
+                    task.0,
+                    "a".repeat(36)
+                ))
+                .unwrap(),
                 // the near-miss draw keeps the parent guard exercised
                 parent: (incorporation % 4 != 3)
                     .then(|| {
@@ -277,22 +300,28 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         },
         Action::Accept { .. } => Command::AcceptBoard { task },
         Action::CreateWorkspace { draw } => Command::CreateWorkspace {
-            base: saccade::GitCommit::new("abc000".into()).unwrap(),
-            branch: saccade::GitBranch::new(format!("feature-{draw:02}")).unwrap(),
-            worktree: saccade::WorktreePath::new(format!("/generated/wt/feature-{draw:02}").into())
+            base: saccade::record::types::pointers::GitCommit::new("abc000".into()).unwrap(),
+            branch: saccade::record::types::pointers::GitBranch::new(format!("feature-{draw:02}"))
                 .unwrap(),
+            worktree: saccade::record::types::pointers::WorktreePath::new(
+                format!("/generated/wt/feature-{draw:02}").into(),
+            )
+            .unwrap(),
         },
         Action::Register { draw } => Command::RegisterIncarnation {
-            native_id: saccade::NativeSessionId::new(format!("native-{draw:02}")).unwrap(),
+            native_id: saccade::record::types::pointers::NativeSessionId::new(format!(
+                "native-{draw:02}"
+            ))
+            .unwrap(),
             saved_session: Some(
-                saccade::SessionLocator::new(
+                saccade::record::types::pointers::SessionLocator::new(
                     format!("/generated/sessions/native-{draw:02}.jsonl").into(),
                 )
                 .unwrap(),
             ),
             address: None,
             adopted: false,
-            harness: saccade::Harness::Pi,
+            harness: saccade::host::harness::Harness::Pi,
         },
         // the launch machinery's own association facts, drawn against
         // whichever birth the sequence carries; unknown draws refuse
@@ -300,14 +329,18 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             draw,
             locator: file,
         } => Command::BindSavedSession {
-            incarnation: saccade::IncarnationId(RecordId(*draw as usize)),
-            saved_session: saccade::SessionLocator::new(
+            incarnation: saccade::record::objects::incarnation::IncarnationId(RecordId(
+                *draw as usize,
+            )),
+            saved_session: saccade::record::types::pointers::SessionLocator::new(
                 format!("/generated/sessions/bound-{draw:02}-{file:02}.jsonl").into(),
             )
             .unwrap(),
         },
         Action::AssignAddress { draw, variant } => Command::AssignHostAddress {
-            incarnation: saccade::IncarnationId(RecordId(*draw as usize)),
+            incarnation: saccade::record::objects::incarnation::IncarnationId(RecordId(
+                *draw as usize,
+            )),
             address: Some(format!("/generated/tty/{draw:02}-{variant:02}")),
             adopted: false,
         },
@@ -318,17 +351,27 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             Command::CleanWorkspace { workspace: birth }
         }
         Action::Send { from, to, reply } => Command::SendMessage {
-            from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
-            to: native_at(world, *to).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            from: native_at(world, *from).unwrap_or(
+                saccade::record::objects::incarnation::IncarnationId(RecordId(usize::MAX)),
+            ),
+            to: native_at(world, *to).unwrap_or(
+                saccade::record::objects::incarnation::IncarnationId(RecordId(usize::MAX)),
+            ),
             reply_to: message_at(world, *reply),
             task: None,
-            body: saccade::Prose::new("generated message".into()).unwrap(),
+            body: saccade::record::types::prose::Prose::new("generated message".into()).unwrap(),
         },
         Action::Name { draw, by } => Command::NameIncarnation {
-            incarnation: native_at(world, *draw)
-                .unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
-            name: (by % 4 != 3)
-                .then(|| saccade::IncarnationName::new(format!("generated-{}", by % 3)).unwrap()),
+            incarnation: native_at(world, *draw).unwrap_or(
+                saccade::record::objects::incarnation::IncarnationId(RecordId(usize::MAX)),
+            ),
+            name: (by % 4 != 3).then(|| {
+                saccade::record::objects::incarnation::IncarnationName::new(format!(
+                    "generated-{}",
+                    by % 3
+                ))
+                .unwrap()
+            }),
         },
         Action::Submit { message } => {
             let id = message_at(world, *message);
@@ -336,8 +379,12 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
                 .and_then(|mid| world.messages.get(&mid))
                 .map(|m| m.message.to);
             Command::SubmitMessage {
-                id: id.unwrap_or(saccade::MessageId(RecordId(usize::MAX))),
-                by: by.unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+                id: id.unwrap_or(saccade::record::objects::message::MessageId(RecordId(
+                    usize::MAX,
+                ))),
+                by: by.unwrap_or(saccade::record::objects::incarnation::IncarnationId(
+                    RecordId(usize::MAX),
+                )),
             }
         }
     }
@@ -502,9 +549,9 @@ proptest! {
                 prop_assert!(
                     saccade::views::wait_matches(
                         &live,
-                        saccade::RecordId(row.seq),
+                        saccade::record::store::RecordId(row.seq),
                         &event,
-                        &saccade::Target::Task(*home)
+                        &saccade::record::views::Target::Task(*home)
                     ),
                     "seq {} folds into t-{} but the task wait does not match it",
                     row.seq,
@@ -695,7 +742,7 @@ fn reject_of(fail: &ExecuteFail) -> saccade::Reject {
 fn stored_to_records(rows: &[StoredRecord]) -> Vec<Record> {
     rows.iter()
         .map(|row| Record {
-            id: saccade::RecordId(row.seq),
+            id: saccade::record::store::RecordId(row.seq),
             timestamp: row.event_time,
             context: Context {
                 actor: ActorName::new(row.actor.clone()).unwrap(),

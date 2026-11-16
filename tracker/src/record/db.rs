@@ -513,9 +513,10 @@ mod test {
     use crate::events::{Command, Event};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{TaskId, TaskState};
+    use crate::record::store::{RecordId, Scope};
+    use crate::record::types::prose::Prose;
     use crate::store::Tier;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
-    use crate::{Prose, RecordId, Scope};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -634,13 +635,17 @@ mod test {
             &mut conn,
             &system,
             Command::RegisterIncarnation {
-                native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
+                native_id: crate::record::types::pointers::NativeSessionId::new("aaaa1111".into())
+                    .unwrap(),
                 saved_session: Some(
-                    crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+                    crate::record::types::pointers::SessionLocator::new(
+                        "/sessions/aaaa1111.jsonl".into(),
+                    )
+                    .unwrap(),
                 ),
                 address: Some("/tty3".into()),
                 adopted: false,
-                harness: crate::Harness::Pi,
+                harness: crate::host::harness::Harness::Pi,
             },
             21,
         )
@@ -649,12 +654,13 @@ mod test {
             &mut conn,
             &system,
             Command::RegisterIncarnation {
-                native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
+                native_id: crate::record::types::pointers::NativeSessionId::new("bbbb2222".into())
+                    .unwrap(),
                 saved_session: None,
                 address: Some("/tty4".into()),
                 adopted: false,
                 // the other harness rides the same round-trip
-                harness: crate::Harness::ClaudeCode,
+                harness: crate::host::harness::Harness::ClaudeCode,
             },
             22,
         )
@@ -698,7 +704,7 @@ mod test {
             &mut conn,
             &system,
             Command::SubmitMessage {
-                id: crate::MessageId(RecordId(12)),
+                id: crate::record::objects::message::MessageId(RecordId(12)),
                 by: IncarnationId(RecordId(10)),
             },
             24,
@@ -737,8 +743,10 @@ mod test {
             &system,
             Command::BindSavedSession {
                 incarnation: IncarnationId(RecordId(10)),
-                saved_session: crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into())
-                    .unwrap(),
+                saved_session: crate::record::types::pointers::SessionLocator::new(
+                    "/sessions/bbbb2222-bound.jsonl".into(),
+                )
+                .unwrap(),
             },
             29,
         )
@@ -763,8 +771,10 @@ mod test {
             &agent(),
             Command::CommitBoard {
                 task: TaskId(0),
-                commit: crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
-                    .unwrap(),
+                commit: crate::record::types::pointers::GitCommit::new(
+                    "aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                )
+                .unwrap(),
                 parent: None,
                 incorporations: Vec::new(),
             },
@@ -776,8 +786,10 @@ mod test {
             &agent(),
             Command::OfferBoard {
                 task: TaskId(0),
-                commit: crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
-                    .unwrap(),
+                commit: crate::record::types::pointers::GitCommit::new(
+                    "aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                )
+                .unwrap(),
             },
             35,
         )
@@ -797,11 +809,15 @@ mod test {
             &agent(),
             Command::CommitBoard {
                 task: TaskId(0),
-                commit: crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
-                    .unwrap(),
+                commit: crate::record::types::pointers::GitCommit::new(
+                    "bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                )
+                .unwrap(),
                 parent: Some(
-                    crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
-                        .unwrap(),
+                    crate::record::types::pointers::GitCommit::new(
+                        "aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    )
+                    .unwrap(),
                 ),
                 incorporations: Vec::new(),
             },
@@ -813,8 +829,10 @@ mod test {
             &agent(),
             Command::OfferBoard {
                 task: TaskId(0),
-                commit: crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
-                    .unwrap(),
+                commit: crate::record::types::pointers::GitCommit::new(
+                    "bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                )
+                .unwrap(),
             },
             38,
         )
@@ -832,13 +850,17 @@ mod test {
             &agent(),
             Command::CommitBoard {
                 task: TaskId(4),
-                commit: crate::GitCommit::new("cccc3333cccccccccccccccccccccccccccccccc".into())
-                    .unwrap(),
+                commit: crate::record::types::pointers::GitCommit::new(
+                    "cccc3333cccccccccccccccccccccccccccccccc".into(),
+                )
+                .unwrap(),
                 parent: None,
                 incorporations: vec![(
                     TaskId(0),
-                    crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
-                        .unwrap(),
+                    crate::record::types::pointers::GitCommit::new(
+                        "bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                    )
+                    .unwrap(),
                 )],
             },
             40,
@@ -847,7 +869,9 @@ mod test {
 
         // the naming family rides the same round-trip: the launch's
         // name, the session naming itself, the human's clear
-        let name = |n: &str| Some(crate::IncarnationName::new(n.into()).unwrap());
+        let name = |n: &str| {
+            Some(crate::record::objects::incarnation::IncarnationName::new(n.into()).unwrap())
+        };
         record(
             &mut conn,
             &system,
@@ -954,12 +978,13 @@ mod test {
         assert_eq!(loadout.rows[14].actor.as_str(), "saccade");
         assert_eq!(loadout.rows[14].tier, "system");
         assert_eq!(
-            world.workspaces[&crate::WorkspaceId(RecordId(14))].workspace,
-            crate::CreatedWorkspace {
+            world.workspaces[&crate::record::objects::workspace::WorkspaceId(RecordId(14))]
+                .workspace,
+            crate::record::objects::workspace::CreatedWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                stage: crate::WorkspaceStage::Cleaned,
+                stage: crate::record::objects::workspace::WorkspaceStage::Cleaned,
             }
         );
         assert_eq!(world.provenance[&RecordId(14)], None);
@@ -1007,38 +1032,49 @@ mod test {
         assert_eq!(world.provenance[&RecordId(15)], None);
         assert_eq!(
             world.workspace_stage(RecordId(14)),
-            Some(crate::WorkspaceStage::Cleaned)
+            Some(crate::record::objects::workspace::WorkspaceStage::Cleaned)
         );
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(9))].incarnation,
-            crate::Incarnation::Native {
-                native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
+            crate::record::objects::incarnation::Incarnation {
+                native_id: crate::record::types::pointers::NativeSessionId::new("aaaa1111".into())
+                    .unwrap(),
                 saved_session: Some(
-                    crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+                    crate::record::types::pointers::SessionLocator::new(
+                        "/sessions/aaaa1111.jsonl".into()
+                    )
+                    .unwrap(),
                 ),
                 address: Some("/tty3".into()),
                 adopted: false,
-                harness: crate::Harness::Pi,
+                harness: crate::host::harness::Harness::Pi,
             }
         );
         // the door-birth's locator binds once and the address moves
         assert_eq!(
             world.incarnations[&IncarnationId(RecordId(10))].incarnation,
-            crate::Incarnation::Native {
-                native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
+            crate::record::objects::incarnation::Incarnation {
+                native_id: crate::record::types::pointers::NativeSessionId::new("bbbb2222".into())
+                    .unwrap(),
                 saved_session: Some(
-                    crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into()).unwrap(),
+                    crate::record::types::pointers::SessionLocator::new(
+                        "/sessions/bbbb2222-bound.jsonl".into()
+                    )
+                    .unwrap(),
                 ),
                 address: Some("/tty9".into()),
                 adopted: false,
-                harness: crate::Harness::ClaudeCode,
+                harness: crate::host::harness::Harness::ClaudeCode,
             }
         );
         assert_eq!(world.messages.len(), 1);
-        let mctx = &world.messages[&crate::MessageId(RecordId(12))];
-        assert_eq!(mctx.state, crate::MessageState::Submitted);
+        let mctx = &world.messages[&crate::record::objects::message::MessageId(RecordId(12))];
+        assert_eq!(
+            mctx.state,
+            crate::record::objects::message::MessageState::Submitted
+        );
         assert_eq!(mctx.message.task, Some(TaskId(0)));
         // the board family folded: dense revisions, the accepted
         // final state, and the consumer's declared citation
@@ -1064,7 +1100,10 @@ mod test {
             world.tasks[4].commits.last().unwrap().incorporations,
             vec![(
                 TaskId(0),
-                crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),).unwrap()
+                crate::record::types::pointers::GitCommit::new(
+                    "bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                )
+                .unwrap()
             )]
         );
 

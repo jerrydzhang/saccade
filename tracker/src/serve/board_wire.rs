@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Component as PathComponent, Path, PathBuf};
 
-use crate::RecordId;
 use crate::api::WireContext;
 use crate::objects::task::TaskId;
+use crate::record::store::RecordId;
 use crate::store::World;
 use crate::wire;
 
@@ -347,11 +347,11 @@ pub fn board_history(
             continue;
         };
         let named: Option<(TaskId, Option<serde_json::Value>)> = match &event {
-            crate::Event::TaskCreated { .. } => world
+            crate::record::events::Event::TaskCreated { .. } => world
                 .task_born_at(RecordId(row.seq))
                 .filter(|id| id.0 == task)
                 .map(|id| (id, None)),
-            crate::Event::TaskClaimed { id, incarnation } => (*id == TaskId(task))
+            crate::record::events::Event::TaskClaimed { id, incarnation } => (*id == TaskId(task))
                 .then_some((
                     *id,
                     Some(json!({
@@ -359,20 +359,23 @@ pub fn board_history(
                     })),
                 ))
                 .filter(|(_, extra)| extra.is_some()),
-            crate::Event::TaskCommitted {
+            crate::record::events::Event::TaskCommitted {
                 task: id, commit, ..
             } => (*id == TaskId(task)).then_some((*id, Some(json!({ "commit": commit.as_str() })))),
-            crate::Event::TaskOffered { task: id, commit } => {
+            crate::record::events::Event::TaskOffered { task: id, commit } => {
                 (*id == TaskId(task)).then_some((*id, Some(json!({ "commit": commit.as_str() }))))
             }
-            crate::Event::TaskRejected { task: id, grounds } => {
+            crate::record::events::Event::TaskRejected { task: id, grounds } => {
                 (*id == TaskId(task)).then_some((*id, Some(json!({ "grounds": grounds.as_str() }))))
             }
-            crate::Event::TaskAccepted { task: id } => (*id == TaskId(task)).then_some((*id, None)),
-            crate::Event::TaskCancelled { id, explanation } => (*id == TaskId(task))
-                .then_some((*id, Some(json!({ "explanation": explanation.as_str() }))))
-                .filter(|(_, extra)| extra.is_some()),
-            crate::Event::TaskReopened { id, explanation } => (*id == TaskId(task))
+            crate::record::events::Event::TaskAccepted { task: id } => {
+                (*id == TaskId(task)).then_some((*id, None))
+            }
+            crate::record::events::Event::TaskCancelled { id, explanation } => (*id
+                == TaskId(task))
+            .then_some((*id, Some(json!({ "explanation": explanation.as_str() }))))
+            .filter(|(_, extra)| extra.is_some()),
+            crate::record::events::Event::TaskReopened { id, explanation } => (*id == TaskId(task))
                 .then_some((*id, Some(json!({ "explanation": explanation.as_str() }))))
                 .filter(|(_, extra)| extra.is_some()),
             _ => None,
@@ -597,15 +600,17 @@ fn history_search(
                 continue;
             };
             let (revision, event_name, detail) = match &event {
-                crate::Event::TaskOffered { task: id, .. } if id.0 == position => (
+                crate::record::events::Event::TaskOffered { task: id, .. } if id.0 == position => (
                     world.tasks[position].revision_of(RecordId(row.seq)),
                     "offer",
                     None,
                 ),
-                crate::Event::TaskRejected { task: id, grounds } if id.0 == position => {
+                crate::record::events::Event::TaskRejected { task: id, grounds }
+                    if id.0 == position =>
+                {
                     (None, "reject", Some(grounds.as_str().to_string()))
                 }
-                crate::Event::TaskAccepted { task: id } if id.0 == position => {
+                crate::record::events::Event::TaskAccepted { task: id } if id.0 == position => {
                     (None, "accept", None)
                 }
                 _ => continue,

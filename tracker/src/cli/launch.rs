@@ -1,19 +1,19 @@
 use super::workspace::render_birth;
 use super::*;
-use saccade::IncarnationId;
 use saccade::client;
 use saccade::host;
 use saccade::host_contract::HostContract;
+use saccade::record::objects::incarnation::IncarnationId;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::process::ExitCode;
 
 /// The selected launch harness: the two compiled-in kinds, spoken as
 /// the wire's own tokens; anything else refuses with the values named.
-pub(super) fn parse_harness(value: &str) -> Result<saccade::Harness, Fail> {
+pub(super) fn parse_harness(value: &str) -> Result<saccade::host::harness::Harness, Fail> {
     match value {
-        "pi" => Ok(saccade::Harness::Pi),
-        "claude-code" => Ok(saccade::Harness::ClaudeCode),
+        "pi" => Ok(saccade::host::harness::Harness::Pi),
+        "claude-code" => Ok(saccade::host::harness::Harness::ClaudeCode),
         other => Err(Fail::Usage(format!(
             "'{other}' is not a harness (expected pi or claude-code)"
         ))),
@@ -22,16 +22,22 @@ pub(super) fn parse_harness(value: &str) -> Result<saccade::Harness, Fail> {
 
 /// The typed harness a door carries: None means no explicit choice
 /// (fresh launches compose Pi, resumes run the recorded kind).
-pub(super) fn harness_choice(value: &Option<String>) -> Result<Option<saccade::Harness>, Fail> {
+pub(super) fn harness_choice(
+    value: &Option<String>,
+) -> Result<Option<saccade::host::harness::Harness>, Fail> {
     value.as_deref().map(parse_harness).transpose()
 }
 
 /// The launch's --name, validated before anything launches.
-pub(super) fn launch_name(cli: &Cli) -> Result<Option<saccade::IncarnationName>, Fail> {
+pub(super) fn launch_name(
+    cli: &Cli,
+) -> Result<Option<saccade::record::objects::incarnation::IncarnationName>, Fail> {
     match &cli.command {
         Cmd::Launch {
             name: Some(name), ..
-        } => Ok(Some(saccade::IncarnationName::new(name.clone())?)),
+        } => Ok(Some(
+            saccade::record::objects::incarnation::IncarnationName::new(name.clone())?,
+        )),
         _ => Ok(None),
     }
 }
@@ -42,7 +48,7 @@ pub(super) fn launch_name(cli: &Cli) -> Result<Option<saccade::IncarnationName>,
 fn register_fresh(
     url: &str,
     submitted: &mut saccade::launch::Submitted,
-    name: Option<&saccade::IncarnationName>,
+    name: Option<&saccade::record::objects::incarnation::IncarnationName>,
 ) -> Result<(), Fail> {
     let Some(fresh) = &submitted.fresh else {
         return Ok(());
@@ -86,7 +92,7 @@ pub(super) fn launch_door(
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     prompt: &[String],
 ) -> Result<String, Fail> {
     let submitted = submitted_launch(cli, destination, workspace, resume, harness, prompt)?;
@@ -150,7 +156,7 @@ pub(super) fn submitted_launch(
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     prompt: &[String],
 ) -> Result<saccade::launch::Submitted, Fail> {
     let url = server_url(destination, "launch")?;
@@ -182,17 +188,17 @@ pub(super) fn submitted_launch(
 /// the fold here, so the composition speaks incarnations, never
 /// token strings.
 pub(super) fn launch_arm<'a>(
-    world: &saccade::World,
+    world: &saccade::record::store::World,
     workspace: Option<&'a std::path::Path>,
     resume: Option<&str>,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     prompt: &'a [String],
 ) -> Result<saccade::launch::LaunchArm<'a>, Fail> {
     match (workspace, resume) {
         (Some(dir), None) => Ok(saccade::launch::LaunchArm::Fresh {
             workspace: dir,
             prompt,
-            harness: harness.unwrap_or(saccade::Harness::Pi),
+            harness: harness.unwrap_or(saccade::host::harness::Harness::Pi),
         }),
         (None, Some(token)) => {
             let id = resolve_incarnation(world, token)?;
@@ -322,7 +328,7 @@ pub(super) fn launch_here_run(
     cli: &Cli,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     prompt: &[String],
 ) -> Result<HereRun, Fail> {
     let destination = resolve_destination(cli)?;
@@ -403,7 +409,7 @@ pub(super) fn launch_here_run(
             .map(|f| f.harness)
             .or_else(|| submitted.resume.as_ref().map(|r| r.harness))
         {
-            Some(saccade::Harness::ClaudeCode) => "claude-code",
+            Some(saccade::host::harness::Harness::ClaudeCode) => "claude-code",
             _ => "pi",
         },
         resumed_num,
@@ -494,7 +500,7 @@ pub(super) fn ask_run(
     cli: &Cli,
     destination: &Destination,
     workspace: &std::path::Path,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     question: &str,
 ) -> Result<AskOutcome, Fail> {
     let url = server_url(destination, "launch")?;
@@ -545,12 +551,13 @@ pub(super) fn ask_run(
     let newborn = world
         .incarnations
         .iter()
-        .find(|(_, ctx)| match &ctx.incarnation {
-            saccade::Incarnation::Native {
+        .find(|(_, ctx)| {
+            let saccade::record::objects::incarnation::Incarnation {
                 native_id,
                 harness,
                 ..
-            } => native_id.as_str() == fresh.native_id && *harness == fresh.harness,
+            } = &ctx.incarnation;
+            native_id.as_str() == fresh.native_id && *harness == fresh.harness
         })
         .map(|(id, _)| *id)
         .ok_or_else(|| {
@@ -626,7 +633,7 @@ pub(super) fn ask_door(
     cli: &Cli,
     destination: &Destination,
     workspace: &std::path::Path,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     question: &str,
 ) -> Result<String, Fail> {
     let outcome = ask_run(cli, destination, workspace, harness, question)?;
@@ -695,7 +702,7 @@ pub(super) fn launch_new_door(
     label: Option<&str>,
     base: Option<&str>,
     ask: Option<&str>,
-    harness: Option<saccade::Harness>,
+    harness: Option<saccade::host::harness::Harness>,
     prompt: &[String],
 ) -> Result<String, Fail> {
     let birth = provision_new(destination, label, base)?;

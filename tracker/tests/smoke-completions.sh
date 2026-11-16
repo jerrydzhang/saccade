@@ -33,6 +33,33 @@ export XDG_STATE_HOME="$SMOKE/state"
 export XDG_DATA_HOME="$SMOKE/data"
 export SACCADE_ACTOR=smoker
 
+# workspace clean's host step reads the host's terminal table over one
+# `herdr-core ls --json` ask, and that ask must never join the
+# machine's real herdr-core. The resolver's ambient arm walks PATH for
+# an executable named herdr-core - the SACCADE_HERDR override is
+# scrubbed above and never set here, and a compile-time pin sits below
+# the ambient arm - so the stand-in takes that exact name and the
+# scratch dir holding it goes first on PATH. The tests' fake_hc is the
+# shape: argv lands in the scratch dir as evidence, the listing verb
+# answers an empty terminal table so clean's closure verification
+# passes, any other verb refuses nonzero with a note.
+FAKE_HOST="$SMOKE/fake-host"
+mkdir -p "$FAKE_HOST"
+cat > "$FAKE_HOST/herdr-core" <<'EOF'
+#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+printf '%s\n' "$*" >> "$here/argv-$1.log"
+if [ "$1" = ls ] && [ "$2" = --json ]; then
+  printf '{"terminals":[]}\n'
+  exit 0
+fi
+printf 'the smoke fake answers ls --json only\n' >&2
+exit 64
+EOF
+chmod +x "$FAKE_HOST/herdr-core"
+PATH="$FAKE_HOST:$PATH"
+export PATH
+
 # the scratch repo: one commit, a real checkout, one plain directory
 # so the filesystem fallback has something ordinary to offer
 git -C "$SMOKE" init -q repo
@@ -82,6 +109,13 @@ curl -sf -X POST "$URL/api/v1/native/attach" \
 
 # clean the workspace through the real door
 "$BIN" workspace clean "$WS" >/dev/null || fail "workspace clean"
+# the clean door's host read went through the stand-in: the evidence
+# log names the one ask, or the resolver walked past the fake
+ls "$FAKE_HOST"/argv-*.log >/dev/null 2>&1 || fail "clean asked no host at all"
+grep -qx "ls --json" "$FAKE_HOST/argv-ls.log" || {
+  cat "$FAKE_HOST"/argv-*.log
+  fail "workspace clean never asked the fake host"
+}
 
 # the script loads the way fish loads vendor completions; probes run
 # in an interactive fish against the discovered server

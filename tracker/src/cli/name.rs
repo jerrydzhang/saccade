@@ -13,7 +13,9 @@ pub(super) fn name_door(
 ) -> Result<String, Fail> {
     let name = match (name, clear) {
         (_, true) => None,
-        (Some(name), false) => Some(saccade::IncarnationName::new(name.to_string())?),
+        (Some(name), false) => Some(saccade::record::objects::incarnation::IncarnationName::new(
+            name.to_string(),
+        )?),
         (None, false) => {
             return Err(Fail::Usage(
                 "name what? pass the name, or --clear to remove it".into(),

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::db::ExecuteFail;
 use crate::host::HostFail;
 use crate::workspace::WorkspaceFail;
-use crate::{Command, Reject};
+use crate::{Reject, record::events::Command};
 
 use super::state::AppState;
 

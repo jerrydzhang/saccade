@@ -92,19 +92,16 @@ pub(super) fn incarnation_lines(world: &World, records: &[StoredRecord]) -> Vec<
                 .incarnation_num(*id)
                 .expect("the key comes from the map itself");
             let actor = birth_actor(records, id.0);
-            let description = match &ctx.incarnation {
-                Incarnation::Native {
-                    native_id,
-                    saved_session,
-                    ..
-                } => {
-                    let saved = saved_session
-                        .as_ref()
-                        .map(|l| format!("saved {}", l.as_path().display()))
-                        .unwrap_or_else(|| "awaiting its first save".into());
-                    format!("{actor} native session {}, {saved}", native_id.as_str())
-                }
-            };
+            let Incarnation {
+                native_id,
+                saved_session,
+                ..
+            } = &ctx.incarnation;
+            let saved = saved_session
+                .as_ref()
+                .map(|l| format!("saved {}", l.as_path().display()))
+                .unwrap_or_else(|| "awaiting its first save".into());
+            let description = format!("{actor} native session {}, {saved}", native_id.as_str());
             one(format!("i-{number}"), description)
         })
         .collect()
@@ -238,7 +235,7 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
-                harness: saccade::Harness::Pi,
+                harness: saccade::host::harness::Harness::Pi,
             },
         ];
         let mut world = World::new();

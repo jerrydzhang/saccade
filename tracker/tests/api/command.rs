@@ -2,8 +2,9 @@
 
 use serde_json::{Value, json};
 
+use saccade::record::events::Command;
+use saccade::record::types::prose::Prose;
 use saccade::store::Context;
-use saccade::{Command, Prose};
 
 use crate::common::{
     attempts_lines, envelope, fake_hc, get_json, hc_argv, json_of, post_command, post_json,
@@ -807,8 +808,8 @@ fn retire_peer(
 /// rule can read, refuses before the POST leaves.
 #[tokio::test(flavor = "multi_thread")]
 async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
-    use saccade::Command;
     use saccade::client::{self, ClientFail};
+    use saccade::record::events::Command;
     use saccade::store::{Context, Tier};
     use saccade::types::actor::ActorName;
 
@@ -818,7 +819,7 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
         scope: None,
     };
     let command = || Command::CreateTask {
-        name: saccade::Prose::new("across the line".into()).unwrap(),
+        name: saccade::record::types::prose::Prose::new("across the line".into()).unwrap(),
     };
 
     let major = env!("CARGO_PKG_VERSION_MAJOR");
@@ -913,8 +914,8 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
 /// records come back, and refusals arrive as their typed failure.
 #[tokio::test(flavor = "multi_thread")]
 async fn client_send_lands_and_refuses_through_the_wire() {
-    use saccade::Command;
     use saccade::client::{self, ClientFail};
+    use saccade::record::events::Command;
     use saccade::store::{Context, Tier};
     use saccade::types::actor::ActorName;
 
@@ -930,7 +931,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &base,
         &agent,
         Command::CreateTask {
-            name: saccade::Prose::new("client smoke".into()).unwrap(),
+            name: saccade::record::types::prose::Prose::new("client smoke".into()).unwrap(),
         },
         Some(7),
     )
@@ -947,7 +948,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &base,
         &agent,
         Command::ClaimTask {
-            id: saccade::TaskId(9),
+            id: saccade::record::objects::task::TaskId(9),
             incarnation: None,
         },
         None,
@@ -973,7 +974,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         "http://127.0.0.1:1",
         &agent,
         Command::CreateTask {
-            name: saccade::Prose::new("never lands".into()).unwrap(),
+            name: saccade::record::types::prose::Prose::new("never lands".into()).unwrap(),
         },
         None,
     )

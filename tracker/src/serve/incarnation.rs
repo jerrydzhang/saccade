@@ -2,8 +2,8 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::Response;
 
-use crate::Command;
 use crate::db::{self, StoredRecord};
+use crate::record::events::Command;
 use crate::store::{Context, RecordId, World};
 
 use super::door::{door, ready};
@@ -24,7 +24,7 @@ use super::state::{AppState, Inner, ServerState};
 fn present_terminal(
     inner: &mut Inner,
     world: &World,
-    incarnation: crate::IncarnationId,
+    incarnation: crate::record::objects::incarnation::IncarnationId,
     terminal: &PresentedTerminal,
 ) -> Result<Vec<StoredRecord>, ApiFail> {
     let ctx = world
@@ -51,9 +51,9 @@ fn present_terminal(
 
 fn attach_operation(
     guard: &mut ServerState,
-    native_id: &crate::NativeSessionId,
-    saved_session: &crate::SessionLocator,
-    harness: crate::Harness,
+    native_id: &crate::record::types::pointers::NativeSessionId,
+    saved_session: &crate::record::types::pointers::SessionLocator,
+    harness: crate::host::harness::Harness,
     terminal: Option<&PresentedTerminal>,
 ) -> Result<AttachReply, ApiFail> {
     let inner = ready(guard)?;
@@ -164,7 +164,7 @@ fn attach_operation(
         registered: true,
         incarnation: birth.0,
         num: world
-            .incarnation_num(crate::IncarnationId(birth))
+            .incarnation_num(crate::record::objects::incarnation::IncarnationId(birth))
             .expect("the landed registration folds in"),
         records: stored,
     })
@@ -201,11 +201,11 @@ pub(super) async fn incarnation_register(State(app): State<AppState>, body: Byte
 /// on whichever incarnation the registration resolved.
 fn incarnation_register_operation(
     inner: &mut Inner,
-    native_id: crate::NativeSessionId,
+    native_id: crate::record::types::pointers::NativeSessionId,
     address: String,
     adopted: bool,
-    harness: crate::Harness,
-    name: Option<crate::IncarnationName>,
+    harness: crate::host::harness::Harness,
+    name: Option<crate::record::objects::incarnation::IncarnationName>,
 ) -> Result<(Vec<StoredRecord>, usize, bool), ApiFail> {
     let (mut stored, incarnation, registered) =
         register_or_recover(inner, native_id, address, adopted, harness)?;
@@ -214,7 +214,9 @@ fn incarnation_register_operation(
             &mut inner.conn,
             &Context::system(),
             Command::NameIncarnation {
-                incarnation: crate::IncarnationId(RecordId(incarnation)),
+                incarnation: crate::record::objects::incarnation::IncarnationId(RecordId(
+                    incarnation,
+                )),
                 name: Some(name),
             },
             db::now_epoch(),
@@ -226,10 +228,10 @@ fn incarnation_register_operation(
 
 fn register_or_recover(
     inner: &mut Inner,
-    native_id: crate::NativeSessionId,
+    native_id: crate::record::types::pointers::NativeSessionId,
     address: String,
     adopted: bool,
-    harness: crate::Harness,
+    harness: crate::host::harness::Harness,
 ) -> Result<(Vec<StoredRecord>, usize, bool), ApiFail> {
     let loadout = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
     let db::LoadState::Full(world) = loadout.state else {
@@ -285,7 +287,9 @@ pub(super) async fn incarnation_address(State(app): State<AppState>, body: Bytes
         |_app, guard, request| {
             let inner = ready(guard)?;
             let command = Command::AssignHostAddress {
-                incarnation: crate::IncarnationId(RecordId(request.incarnation)),
+                incarnation: crate::record::objects::incarnation::IncarnationId(RecordId(
+                    request.incarnation,
+                )),
                 address: Some(request.address),
                 adopted: request.adopted,
             };

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::RecordId;
 use crate::events::Event;
+use crate::record::store::RecordId;
 use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
 /// The record position of a created workspace's birth is its identity.

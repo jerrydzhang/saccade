@@ -7,9 +7,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use crate::Command;
 use crate::attempts::{AsReceived, Outcome};
 use crate::db::{self, StoredRecord};
+use crate::record::events::Command;
 use crate::store::{Context, RecordId, Tier};
 
 use super::door::{integration_outcome, ready};

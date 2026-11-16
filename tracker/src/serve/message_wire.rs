@@ -17,7 +17,7 @@ pub struct MessageSendRequest {
     pub reply_to: Option<usize>,
     #[serde(default)]
     pub task: Option<usize>,
-    pub body: crate::Prose,
+    pub body: crate::record::types::prose::Prose,
     #[serde(default)]
     pub client: Option<String>,
 }

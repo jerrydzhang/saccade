@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
 
-use crate::Command;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
+use crate::record::events::Command;
 use crate::store::{Context, World};
 
 use super::api::TAURI_ORIGINS;
@@ -47,7 +47,10 @@ impl SubmitLocks {
     /// The lock is synchronous because the adapter's submit is a
     /// blocking subprocess call (the bounded attempt's own bound
     /// contains it).
-    pub fn acquire(&self, to: crate::IncarnationId) -> Arc<Mutex<()>> {
+    pub fn acquire(
+        &self,
+        to: crate::record::objects::incarnation::IncarnationId,
+    ) -> Arc<Mutex<()>> {
         let mut map = self.locks.lock().expect("the submit locks hold");
         map.entry(to.0.0)
             .or_insert_with(|| Arc::new(Mutex::new(())))

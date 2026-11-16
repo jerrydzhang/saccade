@@ -70,7 +70,14 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   const out = openSync(log, "a");
   const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1", "--port", String(port)];
   for (const origin of origins) args.push("--allow-origin", origin);
-  const child = spawn(sacBin(), args, { stdio: ["ignore", out, out] });
+  // the state root is the run's own: `sac serve` opens the seeded
+  // repo's board store under XDG_STATE_HOME, so the pin keeps it out
+  // of the caller's real state directory (the lane's sandbox HOME
+  // already scopes the fallback; this makes it explicit)
+  const child = spawn(sacBin(), args, {
+    stdio: ["ignore", out, out],
+    env: { ...process.env, XDG_STATE_HOME: join(root, "state") },
+  });
   const stop = async (): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exited = new Promise((resolve) => child.once("exit", resolve));

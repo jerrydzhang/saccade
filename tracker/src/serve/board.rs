@@ -135,7 +135,7 @@ fn board_commit_operation(
         db::LoadState::Full(world) => world,
         db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
     };
-    let task_id = crate::TaskId(request.task);
+    let task_id = crate::record::objects::task::TaskId(request.task);
     if world.tasks.get(request.task).is_none() {
         return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
     }

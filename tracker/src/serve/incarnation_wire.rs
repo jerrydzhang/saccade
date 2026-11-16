@@ -34,15 +34,15 @@ pub struct PresentedTerminal {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttachRequest {
-    pub native_id: crate::NativeSessionId,
-    pub session_file: crate::SessionLocator,
+    pub native_id: crate::record::types::pointers::NativeSessionId,
+    pub session_file: crate::record::types::pointers::SessionLocator,
     /// The harness the attaching session runs under; the pi
     /// extension sends none and folds as pi. Absent stays absent on
     /// the wire: the pi client's hand-built request named no key, and
     /// the field's default folds the same.
     #[serde(default)]
     #[serde(skip_serializing_if = "harness_is_default")]
-    pub harness: crate::Harness,
+    pub harness: crate::host::harness::Harness,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<PresentedTerminal>,
@@ -52,8 +52,8 @@ pub struct AttachRequest {
 
 /// The wire keeps the default off the attach request: the client's
 /// hand-built body named no harness key.
-fn harness_is_default(harness: &crate::Harness) -> bool {
-    *harness == crate::Harness::default()
+fn harness_is_default(harness: &crate::host::harness::Harness) -> bool {
+    *harness == crate::host::harness::Harness::default()
 }
 
 /// The launch door's own birth: the pre-allocated native id and the
@@ -61,7 +61,7 @@ fn harness_is_default(harness: &crate::Harness) -> bool {
 /// association exists at launch time, no correlation token, no wait.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IncarnationRegisterRequest {
-    pub native_id: crate::NativeSessionId,
+    pub native_id: crate::record::types::pointers::NativeSessionId,
     pub address: String,
     /// The address kind: the here door adopts the caller terminal,
     /// every other birth launches a new terminal.
@@ -69,13 +69,13 @@ pub struct IncarnationRegisterRequest {
     pub adopted: bool,
     /// The harness the fresh session runs under; absent folds as pi.
     #[serde(default)]
-    pub harness: crate::Harness,
+    pub harness: crate::host::harness::Harness,
     /// The launch's name, recorded as the birth's first naming. It
     /// rides only when the launch carries one, so a server that
     /// predates naming still answers an unnamed launch.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<crate::IncarnationName>,
+    pub name: Option<crate::record::objects::incarnation::IncarnationName>,
     #[serde(default)]
     pub client: Option<String>,
 }

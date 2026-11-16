@@ -9,7 +9,10 @@ use serde_json::json;
 use crate::attempts::AsReceived;
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, RecordId, Tier, World};
-use crate::{Command, MessageId, Reject};
+use crate::{
+    Reject,
+    record::{events::Command, objects::message::MessageId},
+};
 
 use super::fail::{ApiFail, api_failure, execute_failure_response};
 use super::message_wire::{
@@ -178,7 +181,7 @@ pub(super) fn send_operation(
             // the addressee's machinery act: the outcome record is the
             // recipient's, never the sender's
             let outcome_record = Command::SubmitMessage {
-                id: crate::MessageId(RecordId(sent)),
+                id: crate::record::objects::message::MessageId(RecordId(sent)),
                 by: to,
             };
             let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
@@ -233,11 +236,11 @@ pub(super) fn message_facts(
         .world;
     let mctx = numbers
         .messages
-        .get(&crate::MessageId(RecordId(sent)))
+        .get(&crate::record::objects::message::MessageId(RecordId(sent)))
         .expect("the landed message folds in");
     let message = MessageFacts {
         seq: sent,
-        num: numbers.message_num(crate::MessageId(RecordId(sent))),
+        num: numbers.message_num(crate::record::objects::message::MessageId(RecordId(sent))),
     };
     let from = MessageFacts {
         seq: mctx.message.from.0.0,
@@ -305,7 +308,7 @@ pub(super) async fn message_send(State(app): State<AppState>, body: Bytes) -> Re
         from,
         to: to_id,
         reply_to,
-        task: request.task.map(crate::TaskId),
+        task: request.task.map(crate::record::objects::task::TaskId),
         body: request.body,
     };
     // the whole send path runs off the async runtime: the adapter ask
@@ -364,7 +367,10 @@ pub(super) struct MailboxQuery {
 
 /// The mailbox read: the reader's mail in birth order, any state,
 /// both directions, with the log's cursor.
-fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> MailboxReply {
+fn mailbox_view(
+    snapshot: &Snapshot,
+    id: crate::record::objects::incarnation::IncarnationId,
+) -> MailboxReply {
     let world = &snapshot.world;
     let messages: Vec<MailboxMessage> = world
         .messages
@@ -388,8 +394,8 @@ fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> MailboxReply {
                 reply_to: mctx.message.reply_to.and_then(|r| world.message_num(r)),
                 task: mctx.message.task.map(|t| t.0),
                 state: match mctx.state {
-                    crate::MessageState::Pending => "pending",
-                    crate::MessageState::Submitted => "submitted",
+                    crate::record::objects::message::MessageState::Pending => "pending",
+                    crate::record::objects::message::MessageState::Submitted => "submitted",
                 }
                 .to_string(),
                 body: mctx.message.body.as_str().to_string(),
@@ -426,7 +432,7 @@ pub(super) async fn messages_history(
                 .into_response();
         }
     };
-    let id = crate::IncarnationId(RecordId(query.incarnation));
+    let id = crate::record::objects::incarnation::IncarnationId(RecordId(query.incarnation));
     if !snapshot.world.incarnations.contains_key(&id) {
         return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
     }

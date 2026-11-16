@@ -824,7 +824,7 @@ fn last_commit_per_session(snapshot: &Snapshot) -> std::collections::BTreeMap<St
         if row.kind != "task_committed" {
             continue;
         }
-        let Ok(crate::Event::TaskCommitted { commit, .. }) =
+        let Ok(crate::record::events::Event::TaskCommitted { commit, .. }) =
             wire::assemble(&row.kind, &row.payload)
         else {
             continue;

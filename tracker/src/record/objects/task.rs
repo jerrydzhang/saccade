@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::RecordId;
 use crate::events::Event;
 use crate::objects::incarnation::IncarnationId;
+use crate::record::store::RecordId;
 use crate::types::actor::ActorName;
 use crate::types::pointers::GitCommit;
 use crate::types::prose::Prose;

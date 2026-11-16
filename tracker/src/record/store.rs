@@ -623,7 +623,7 @@ impl World {
                 self.incarnations.insert(
                     IncarnationId(record.id),
                     IncarnationContext {
-                        incarnation: Incarnation::Native {
+                        incarnation: Incarnation {
                             native_id: native_id.clone(),
                             saved_session: saved_session.clone(),
                             address: address.clone(),
@@ -645,7 +645,7 @@ impl World {
                     .incarnations
                     .get_mut(&incarnation)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                let Incarnation::Native {
+                let Incarnation {
                     saved_session: bound,
                     ..
                 } = &mut ctx.incarnation;
@@ -672,7 +672,7 @@ impl World {
                     .incarnations
                     .get_mut(&incarnation)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                let Incarnation::Native {
+                let Incarnation {
                     address: carried,
                     adopted: carried_kind,
                     ..
@@ -828,10 +828,10 @@ pub fn execute(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Event;
-    use crate::Scope;
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{Owner, TaskId, TaskState};
+    use crate::record::events::Event;
+    use crate::record::store::Scope;
     use crate::types::actor::ActorName;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
     use crate::types::prose::Prose;
@@ -1438,12 +1438,12 @@ mod test {
         let birth = RecordId(0);
         assert_eq!(world.provenance[&birth], None);
         assert_eq!(
-            world.workspaces[&crate::WorkspaceId(birth)].workspace,
-            crate::CreatedWorkspace {
+            world.workspaces[&crate::record::objects::workspace::WorkspaceId(birth)].workspace,
+            crate::record::objects::workspace::CreatedWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                stage: crate::WorkspaceStage::Available,
+                stage: crate::record::objects::workspace::WorkspaceStage::Available,
             }
         );
         // several sessions may select one workspace: a second creation
@@ -1472,7 +1472,7 @@ mod test {
         let created_birth = RecordId(0);
         assert_eq!(
             world.workspace_stage(created_birth),
-            Some(crate::WorkspaceStage::Available)
+            Some(crate::record::objects::workspace::WorkspaceStage::Available)
         );
         assert_eq!(
             world.workspace_births_at(Path::new("/repo/wt/feature-abc123ab")),
@@ -1491,7 +1491,7 @@ mod test {
         .unwrap();
         assert_eq!(
             log.world().workspace_stage(created_birth),
-            Some(crate::WorkspaceStage::Cleaned)
+            Some(crate::record::objects::workspace::WorkspaceStage::Cleaned)
         );
         // the lifecycle fact rides no task home, like every machinery
         // workspace fact
@@ -1553,11 +1553,11 @@ mod test {
         .unwrap();
         assert_eq!(
             log.world().workspace_stage(RecordId(3)),
-            Some(crate::WorkspaceStage::Available)
+            Some(crate::record::objects::workspace::WorkspaceStage::Available)
         );
         // the setting fact's provenance lives on the context
         assert_eq!(
-            log.world().workspaces[&crate::WorkspaceId(birth)]
+            log.world().workspaces[&crate::record::objects::workspace::WorkspaceId(birth)]
                 .stage_fact
                 .as_ref()
                 .map(|fact| fact.record),
@@ -1658,10 +1658,10 @@ mod test {
 
     // -- the native communication contracts --------------------------
 
-    use crate::NativeSessionId;
-    use crate::SessionLocator;
     use crate::harness::Harness;
     use crate::objects::message::MessageState;
+    use crate::record::types::pointers::NativeSessionId;
+    use crate::record::types::pointers::SessionLocator;
 
     fn registered(id: &str) -> Command {
         Command::RegisterIncarnation {
@@ -1713,7 +1713,7 @@ mod test {
         assert_eq!(world.provenance[&birth], None);
         assert_eq!(
             world.incarnations[&IncarnationId(birth)].incarnation,
-            Incarnation::Native {
+            Incarnation {
                 native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
                 saved_session: Some(
                     SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap()
@@ -1764,7 +1764,7 @@ mod test {
         .unwrap();
         assert_eq!(
             log.world().incarnations[&IncarnationId(RecordId(2))].incarnation,
-            Incarnation::Native {
+            Incarnation {
                 native_id: NativeSessionId::new("door-dddd".into()).unwrap(),
                 saved_session: None,
                 address: Some("/tty5".into()),
@@ -1968,7 +1968,9 @@ mod test {
     fn named(id: usize, name: Option<&str>) -> Command {
         Command::NameIncarnation {
             incarnation: IncarnationId(RecordId(id)),
-            name: name.map(|n| crate::IncarnationName::new(n.into()).unwrap()),
+            name: name.map(|n| {
+                crate::record::objects::incarnation::IncarnationName::new(n.into()).unwrap()
+            }),
         }
     }
 
@@ -1982,10 +1984,9 @@ mod test {
         log.execute_system(registered("bbbb2222"), 1).unwrap();
         let (first, second) = (IncarnationId(RecordId(0)), IncarnationId(RecordId(1)));
         let name_of = |log: &Log, id| {
-            log.world().incarnations[&id]
-                .name
-                .as_ref()
-                .map(|n: &crate::IncarnationName| n.as_str().to_string())
+            log.world().incarnations[&id].name.as_ref().map(
+                |n: &crate::record::objects::incarnation::IncarnationName| n.as_str().to_string(),
+            )
         };
         // a registration carries no name
         assert_eq!(name_of(&log, first), None);

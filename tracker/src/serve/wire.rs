@@ -1,6 +1,6 @@
-use crate::ActorName;
-use crate::Command;
 use crate::events::Event;
+use crate::record::events::Command;
+use crate::record::types::actor::ActorName;
 use crate::store::{Context, Scope, Tier};
 use serde::{Deserialize, Serialize};
 
@@ -187,7 +187,12 @@ mod test {
             },
             Event::IncarnationNamed {
                 incarnation: IncarnationId(RecordId(16)),
-                name: Some(crate::IncarnationName::new("th\u{e9}orie".into()).unwrap()),
+                name: Some(
+                    crate::record::objects::incarnation::IncarnationName::new(
+                        "th\u{e9}orie".into(),
+                    )
+                    .unwrap(),
+                ),
             },
             Event::IncarnationNamed {
                 incarnation: IncarnationId(RecordId(16)),

@@ -5,7 +5,7 @@
 
 use crate::objects::task::TaskContext;
 use crate::store::World;
-use crate::{Command, Reject, TaskId};
+use crate::{Reject, record::events::Command, record::objects::task::TaskId};
 
 /// What the refusal should have said: the id space's grammar and
 /// the target the asker probably meant. None when the world has
@@ -106,9 +106,9 @@ fn need(world: &World, id: TaskId, what: &str) -> Option<String> {
 
 fn state_word(ctx: &TaskContext) -> &'static str {
     match ctx.task.state {
-        crate::TaskState::Open => "open",
-        crate::TaskState::Offered => "offered",
-        crate::TaskState::Concluded => "concluded",
-        crate::TaskState::Cancelled(_) => "cancelled",
+        crate::record::objects::task::TaskState::Open => "open",
+        crate::record::objects::task::TaskState::Offered => "offered",
+        crate::record::objects::task::TaskState::Concluded => "concluded",
+        crate::record::objects::task::TaskState::Cancelled(_) => "cancelled",
     }
 }
