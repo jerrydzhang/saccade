@@ -197,12 +197,14 @@ export function actsFor(
   }
   if (target.kind === "math" && target.part !== null) {
     // t-62: the expression's LaTeX source is the whole menu - y copies
-    // it, and as the first act a plain click copies (the machinery's
-    // plain click runs act 0, scenario 9). The payload is the TeX, not
-    // the authored $...$ form: what pasting into notes wants is the
-    // source; the delimiters are a display convention whoever pastes
-    // re-adds in their own notation. A copy carries the exact stored
-    // value, never rendered markup.
+    // it, through the menu's own paths (right-click, a select label,
+    // Enter while the menu is open). A click on the expression acts
+    // nothing: math wires no click primary (the human's ruling), the
+    // only kind whose first act is menu-only. The payload is the TeX,
+    // not the authored $...$ form: what pasting into notes wants is
+    // the source; the delimiters are a display convention whoever
+    // pastes re-adds in their own notation. A copy carries the exact
+    // stored value, never rendered markup.
     const tex = deps.mathTex?.(target.part) ?? null;
     const ports = deps.referencePorts();
     if (tex === null || ports === null) return [];

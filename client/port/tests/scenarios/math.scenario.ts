@@ -106,9 +106,10 @@ test("t-61 rendered math is inert: no tabindex, no explorer keys, no docs link",
 // document order, the TeX riding the target - and its menu's one act,
 // y, copies the expression's LaTeX source: the TeX a paste into notes
 // wants, not the authored $...$ form and not rendered markup. The
-// journeys are the machinery's own (scenario 9): select mode and a
-// right-click open the menu, a plain click runs the first act
-// directly - so a plain click on math copies.
+// journeys are the menu's own: select mode and a right-click open
+// the act list; a click on math acts nothing (the human's ruling) -
+// math wires no click primary, the only kind whose first act is
+// menu-only.
 const TEX_INLINE = "(\\mathbb{Z}_2)^p";
 const TEX_DISPLAY = "E = mc^2";
 
@@ -157,15 +158,29 @@ test("t-62 a math part's menu is y copy LaTeX: the label journey and the right-c
   await expect.poll(async () => (await app.readout()).copy?.payload ?? null).toBe(TEX_DISPLAY);
 });
 
-test("t-62 a plain click on math copies its TeX directly (the primary act), no menu", async ({ app, tracker }) => {
+test("t-62 a click on math acts nothing: nothing copies, no menu; the part still selects through its menu", async ({ app, tracker }) => {
   await mathPartsBoard(app, tracker);
   expect((await app.readout()).copy).toBeNull();
+  // a click acts nothing: no copy, no menu - on both expressions
   await app.clickPart("/content/0/math/0");
-  await expect.poll(async () => (await app.readout()).copy?.payload ?? null).toBe(TEX_INLINE);
-  expect(await app.menuOpen()).toBe(false);
   await app.clickPart("/content/0/math/1");
-  await expect.poll(async () => (await app.readout()).copy?.payload ?? null).toBe(TEX_DISPLAY);
+  // an absence: it is asserted over a window, not awaited
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect((await app.readout()).copy).toBeNull();
   expect(await app.menuOpen()).toBe(false);
+  // the part still selects: the right-click journey opens ITS menu,
+  // the machinery paints the selection mark on the expression, and y
+  // copies exactly
+  await app.clickPart("/content/0/math/0", { button: "right" });
+  await expect.poll(() => app.menuOpen()).toBe(true);
+  const win = appWindow();
+  expect(win.document.querySelector('[data-port-part="/content/0/math/0"][data-port-selected]')).not.toBeNull();
+  expect(await app.menuActs()).toEqual(["y"]);
+  await app.clickMenuAct("y");
+  await expect.poll(async () => (await app.readout()).copy?.payload ?? null).toBe(TEX_INLINE);
+  await expect.poll(() => app.menuOpen()).toBe(false);
+  // the selection mark went with the menu
+  expect(win.document.querySelector("[data-port-selected]")).toBeNull();
 });
 
 test("t-62 an invalid expression is no math part: no math menu, the authored source stays as text", async ({ app, tracker }) => {

@@ -56,9 +56,6 @@ export interface HydrationHost {
   /** A plain click on an incorporation's source line (off its
    * citation link): its first act, expand or collapse (t-58). */
   incorporationPrimaryClick?(part: string): void;
-  /** A plain click on a rendered math expression: its first act,
-   * copy LaTeX (t-62). */
-  mathPrimaryClick(part: string): void;
 }
 
 /** The elements of `container` matching `selector` that it owns: an
@@ -83,7 +80,7 @@ export async function hydrate(
 
   const mathPending = ownAll(container, '[data-pending="math"]');
   for (const span of mathPending) {
-    await hydrateMath(span, host, collected);
+    await hydrateMath(span, collected);
     if (stale()) return collected;
   }
 
@@ -281,7 +278,7 @@ function middleClick(element: HTMLElement, act: () => void): () => boolean {
   return () => performance.now() - actedAt < 250;
 }
 
-async function hydrateMath(span: HTMLElement, host: HydrationHost, outcomes: RenderOutcome[]): Promise<void> {
+async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {
   const tex = span.dataset.unitTex ?? "";
   const line = span.dataset.line ? Number(span.dataset.line) : undefined;
   const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, authored: span.dataset.unitSource ?? "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
@@ -299,22 +296,12 @@ async function hydrateMath(span: HTMLElement, host: HydrationHost, outcomes: Ren
   }
   span.textContent = "";
   span.append(result.container);
-  // a plain click runs the math's first act, copy LaTeX (t-62),
-  // through the controller's shared menu path; the right-gesture
-  // guard as diagrams (the synthesized post-contextmenu click never
-  // copies)
-  const part = span.getAttribute("data-port-part");
-  if (part !== null) {
-    let contextmenuAt = 0;
-    span.addEventListener("contextmenu", () => {
-      contextmenuAt = performance.now();
-    });
-    span.addEventListener("click", (event) => {
-      if (event.button !== 0 || event.shiftKey) return;
-      if (performance.now() - contextmenuAt < 250) return;
-      host.mathPrimaryClick(part);
-    });
-  }
+  // a click on math acts nothing (t-62, the human's ruling): math
+  // wires no click primary - the expression's act is the menu's, open
+  // by right-click or a select label, and no stray click copies. The
+  // span still carries its part path, so the generic contextmenu path
+  // and the select labels resolve it, and the open menu paints the
+  // part's selection mark.
   outcomes.push({ kind: "math", status: "ok", message: "", line });
 }
 

@@ -174,9 +174,6 @@ export interface BoardUI extends HydrationHost {
   /** A plain click on a figure runs its first act (enlarge) through
    * the shared menu path. */
   figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
-  /** A plain click on a rendered math expression runs its first act
-   * (copy LaTeX, t-62) through the shared menu path. */
-  mathPrimaryClick(part: string): void;
   /** A plain click on a prose ref: its first act (follow here). */
   refPrimaryClick(part: string): void;
   /** The window services the reference acts ride (the one open
@@ -432,15 +429,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           ? `${frame.board.task}@r${match[1]}:${part}`
           : part;
       boardMenu.session.primaryClick({ kind, label: citation ?? part, part });
-      notifyMenu();
-    },
-    mathPrimaryClick(part) {
-      // the math target's own kind; the primary act is copy LaTeX
-      // (actsFor's math branch, t-62), the SAME session path every
-      // invocation uses
-      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "math");
-      if (target === undefined) return;
-      boardMenu.session.primaryClick({ kind: "math", label: target.text, part });
       notifyMenu();
     },
     setReadingLayoutPort(port) {
