@@ -396,7 +396,8 @@ pub(super) fn search_door(
 ) -> Result<String, Fail> {
     if terms.is_empty() {
         return Err(Fail::Usage(
-            "search names its terms: sac search <terms...> [--history] [--in t-N@rA..rB]".into(),
+            "search names its terms: sac search <terms...> [--history] [--within t-N@rA..rB]"
+                .into(),
         ));
     }
     let url = server_url(destination, "search")?;

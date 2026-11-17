@@ -235,8 +235,9 @@ belong on the board; logistics belongs in messages.
 `sac search <terms>` searches the current boards, one line per task.
 `sac search --history <terms>` finds the revisions where terms appeared
 or disappeared, with commit messages and decision grounds, narrowed by
-`--in t-N` or `--in t-N@rA..rB`. A `t-N` or `t-N@rK` term is a reference
-search: incorporations citing it, plus messages carrying the task.
+`--within t-N` or `--within t-N@rA..rB`. A `t-N` or `t-N@rK` term is a
+reference search: incorporations citing it, plus messages carrying the
+task.
 Orienting on one task is not search: `sac show t-N` and reading the board.
 
 ## Naming
