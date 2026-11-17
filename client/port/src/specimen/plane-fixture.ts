@@ -42,9 +42,9 @@ const words: WordsSnapshot = {
     t12: word({ msg: "Started; no word yet" }),
     t13: word({ state: "compacting", msg: "Compacting the conversation" }),
     // unregistered: one in the project's repo, two nowhere known
-    t70: word({ state: "working", cwd: `${REPO}/notes`, where: "pyrimel / scratch", msg: "Drafting the atlas notes" }),
+    t70: word({ state: "working", cwd: `${REPO}/notes`, terminalTitle: "pyrimel / scratch", msg: "Drafting the atlas notes" }),
     t7q: word({ state: "error", app: "pi", terminalTitle: "pi run", msg: "Lost the model connection" }),
-    t7r: word({ state: "idle", cwd: "/srv/elsewhere", where: "elsewhere / 1" }),
+    t7r: word({ state: "idle", cwd: "/srv/elsewhere", terminalTitle: "elsewhere / 1" }),
   },
 };
 

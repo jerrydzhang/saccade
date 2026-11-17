@@ -18,8 +18,7 @@
 // slug (<repo basename>-<fnv1a of the repo path>,
 // tracker/src/host/paths.rs) followed by /worktrees/. The deepest repo
 // path wins. Any other shows in the unregistered group at the rail's
-// foot, named by Herdr's `where` label (else the terminal's title)
-// and its address.
+// foot, named by the terminal's title and its address.
 
 import type { ViewPage } from "../pages.ts";
 
@@ -36,8 +35,6 @@ export type HerdrWord = {
   finished?: string;
   /** The terminal's working directory, as the core holds it. */
   cwd?: string;
-  /** Herdr's `where` label ("saccade / general"). */
-  where?: string;
   /** The terminal's own title (not the program's status title). */
   terminalTitle?: string;
   at: number;
@@ -63,9 +60,9 @@ export type RailAgent = {
   /** The terminal's address as the local core names it (other/t63 on
    * a core federating that machine): the attach act's argument. */
   address: string;
-  /** What names an unregistered agent: Herdr's where label, else the
-   * terminal's title; null when the core sent neither (and on a
-   * registered agent, which its incarnation names). */
+  /** What names an unregistered agent: the terminal's title; null
+   * when the core sent none (and on a registered agent, which its
+   * incarnation names). */
   label: string | null;
   /** Shown in place of the incarnation, which stays small beside it
    * (t-56); null when unnamed or unregistered. */
@@ -272,8 +269,8 @@ export function railOf(
       incarnation: null,
       name: null,
       address,
-      // an empty label or title (a fresh terminal's) names nothing
-      label: [word.where, word.terminalTitle].find((name) => name !== undefined && name.length > 0) ?? null,
+      // an empty title (a fresh terminal's) names nothing
+      label: word.terminalTitle !== undefined && word.terminalTitle.length > 0 ? word.terminalTitle : null,
       state: word.state ?? "",
       msg: word.msg ?? null,
       progress: word.progress ?? null,
@@ -466,7 +463,6 @@ export function wordsOf(raw: unknown): WordsSnapshot {
       keep("title", "title");
       keep("finished", "finished");
       keep("cwd", "cwd");
-      keep("where", "where");
       keep("terminalTitle", "terminal_title");
       words[address] = word;
     }

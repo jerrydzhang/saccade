@@ -13,9 +13,9 @@ const words = {
   generation: 1,
   connected: true,
   words: {
-    t7a: { app: "claude", state: "idle", where: "elsewhere / 1", at: 1 },
-    t7b: { app: "claude", state: "working", msg: "Drafting the notes", where: "notes run", at: 1 },
-    t7c: { app: "pi", state: "blocked", where: "pi run", at: 1 },
+    t7a: { app: "claude", state: "idle", terminal_title: "elsewhere / 1", at: 1 },
+    t7b: { app: "claude", state: "working", msg: "Drafting the notes", terminal_title: "notes run", at: 1 },
+    t7c: { app: "pi", state: "blocked", terminal_title: "pi run", at: 1 },
   },
 };
 
@@ -32,7 +32,7 @@ test("the rail is flat: rows in importance order, no word headings, a stray's la
   for (const heading of ["blocked", "working", "idle"]) {
     expect(foot.split("\n").map((line) => line.trim())).not.toContain(heading);
   }
-  // the id column holds the address, the name column Herdr's label
+  // the id column holds the address, the name column the terminal's title
   const row = (await app.partText("rail/terminal/t7c")) ?? "";
   expect(row.indexOf("t7c")).toBeGreaterThanOrEqual(0);
   expect(row.indexOf("t7c")).toBeLessThan(row.indexOf("pi run"));
@@ -44,7 +44,7 @@ test("select mode: an agent inside a project is labelled nested; the project and
   expect(root.repo_path).toBeTruthy();
   const placed = {
     ...words,
-    words: { ...words.words, t7d: { app: "claude", state: "working", where: "inside", cwd: root.repo_path, at: 1 } },
+    words: { ...words.words, t7d: { app: "claude", state: "working", terminal_title: "inside", cwd: root.repo_path, at: 1 } },
   };
   const { app } = await bridged({ words: placed });
   await openPlane(app, tracker);

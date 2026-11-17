@@ -50,10 +50,6 @@ pub struct WordRow {
     /// working directory, from the snapshot row or the created event's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Herdr's `where` label (`saccade / general`): the snapshot row's,
-    /// the created event's, then each labels event's.
-    #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
-    pub where_label: Option<String>,
     /// The terminal's own title (not the program's status title).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
@@ -73,7 +69,6 @@ impl WordRow {
             title: None,
             finished: None,
             cwd: facts.cwd,
-            where_label: facts.where_label,
             terminal_title: facts.title,
             at,
         }
@@ -368,20 +363,6 @@ fn apply(shared: &Shared, event: CoreEvent) {
                 _ => false,
             });
         }
-        // a known terminal's labels moved: the where label is the
-        // set's, absent when the set carries none
-        CoreEvent::Labels {
-            terminal,
-            where_label,
-        } => {
-            shared.publish_if(move |words| match words.get_mut(&terminal) {
-                Some(row) if row.where_label != where_label => {
-                    row.where_label = where_label;
-                    true
-                }
-                _ => false,
-            });
-        }
         CoreEvent::Other | CoreEvent::End => {}
     }
 }
@@ -606,11 +587,10 @@ mod tests {
     #[test]
     fn rows_carry_where_the_terminal_is_from_the_snapshot_and_after_connect() {
         // t-55: the rail places an agent no tracker registered by its
-        // cwd and names it by Herdr's where label. The snapshot row
+        // cwd and names it by the terminal's title. The snapshot row
         // carries both; a terminal created after connect carries its
-        // whole row in the created event and its where label in the
-        // labels event that follows (the live core's sequence, seen),
-        // its title in title events, its word in status
+        // whole row in the created event (a labels event that follows
+        // changes nothing), its title in title events, its word in status
         let lines = vec![
             r#"{"jsonrpc":"2.0","id":1,"result":{"channel":null,"seq":1,"terminals":[{"address":"t63","cwd":"/home/jerry/Projects/saccade","labels":{"where":"saccade / general"},"state":"live","status":{"app":"claude-code","state":"working"},"status_ms":1794696901630,"title":"Envision board zoom"}]}}"#.into(),
             r#"{"jsonrpc":"2.0","method":"event","params":{"data":{"address":"t8b","cwd":"/home/jerry/.local/state/saccade/pyrimel-11f6a386/worktrees/t-0","labels":{"herdr.space":"spdc"},"state":"live","status":null,"status_ms":null,"title":"","turn":0},"seq":2,"terminal":"t8b","type":"created"}}"#.into(),
@@ -630,7 +610,6 @@ mod tests {
         });
         let t63 = &snapshot.words["t63"];
         assert_eq!(t63.cwd.as_deref(), Some("/home/jerry/Projects/saccade"));
-        assert_eq!(t63.where_label.as_deref(), Some("saccade / general"));
         assert_eq!(t63.terminal_title.as_deref(), Some("Envision board zoom"));
         assert_eq!(t63.app.as_deref(), Some("claude-code"));
         let t8b = &snapshot.words["t8b"];
@@ -638,19 +617,17 @@ mod tests {
             t8b.cwd.as_deref(),
             Some("/home/jerry/.local/state/saccade/pyrimel-11f6a386/worktrees/t-0")
         );
-        assert_eq!(t8b.where_label.as_deref(), Some("t-0 / 2"));
         assert_eq!(t8b.terminal_title.as_deref(), Some("claude"));
         assert_eq!(t8b.app.as_deref(), Some("claude-code"));
         assert_eq!(t8b.state.as_deref(), Some("idle"));
         let t8c = &snapshot.words["t8c"];
         assert_eq!(t8c.cwd.as_deref(), Some("/srv/x"));
-        assert_eq!(t8c.where_label, None, "no label was sent: none is shown");
         assert_eq!(t8c.app, None, "a created shell has no word");
-        // the wire: the label rides as `where`, absent fields stay absent
+        // the wire: no where field rides, absent fields stay absent
         let wire = serde_json::to_value(t63).unwrap();
-        assert_eq!(wire["where"], "saccade / general");
+        assert!(wire.get("where").is_none());
         assert_eq!(wire["terminal_title"], "Envision board zoom");
-        assert!(serde_json::to_value(t8c).unwrap().get("where").is_none());
+        assert!(serde_json::to_value(t8c).unwrap().get("app").is_none());
     }
 
     #[test]

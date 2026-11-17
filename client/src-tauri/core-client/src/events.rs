@@ -58,13 +58,6 @@ pub enum CoreEvent {
     },
     /// The terminal's own title changed (not the program's status title).
     Title { terminal: String, title: String },
-    /// The terminal's labels changed: the core sends the whole set
-    /// (seen: a fresh terminal's `where` arrives this way just after
-    /// `created`); `where` is absent when the set carries none.
-    Labels {
-        terminal: String,
-        where_label: Option<String>,
-    },
     /// The core announced a restart (`restarted`, `lost`): kept
     /// terminals come back under their addresses; the feed's consumer
     /// re-derives its table from the next snapshot.
@@ -92,12 +85,11 @@ pub struct SnapshotTerminal {
 }
 
 /// A terminal's place facts, exactly as the core holds them: its
-/// working directory, Herdr's `where` label, its own title. None when
+/// working directory and its own title. None when
 /// the core sent none.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TerminalFacts {
     pub cwd: Option<String>,
-    pub where_label: Option<String>,
     pub title: Option<String>,
 }
 
@@ -107,7 +99,6 @@ impl TerminalFacts {
         let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_string);
         TerminalFacts {
             cwd: text(row.get("cwd")),
-            where_label: text(row.get("labels").and_then(|labels| labels.get("where"))),
             title: text(row.get("title")),
         }
     }
@@ -131,7 +122,6 @@ impl CoreEvent {
             CoreEvent::Finished { terminal, .. } => Some(terminal),
             CoreEvent::Created { terminal, .. } => Some(terminal),
             CoreEvent::Title { terminal, .. } => Some(terminal),
-            CoreEvent::Labels { terminal, .. } => Some(terminal),
             _ => None,
         }
     }
@@ -243,20 +233,6 @@ pub fn parse_line(line: &str, first: bool) -> Result<CoreEvent, CoreFail> {
             Ok(CoreEvent::Title {
                 terminal,
                 title: title.to_string(),
-            })
-        }
-        Some("labels") => {
-            let Some(terminal) = terminal else {
-                return Ok(CoreEvent::Other);
-            };
-            Ok(CoreEvent::Labels {
-                terminal,
-                where_label: value
-                    .get("data")
-                    .and_then(|d| d.get("labels"))
-                    .and_then(|labels| labels.get("where"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
             })
         }
         Some("finished") => {
@@ -523,7 +499,8 @@ mod test {
     #[test]
     fn a_snapshot_row_carries_where_the_terminal_is_and_later_events_move_it() {
         // the shape the pinned core sends (read off a live core,
-        // trimmed): cwd, labels.where and the terminal's own title per row
+        // trimmed): cwd and the terminal's own title per row; its labels
+        // carry nothing this client reads
         let snapshot = r#"{"jsonrpc":"2.0","id":1,"result":{"channel":null,"seq":8070,"terminals":[{"address":"t63","argv":["fish"],"cwd":"/home/jerry/Projects/saccade","foreground":{"argv":["sac","launch"],"cwd":"/home/jerry/Projects/saccade","name":"sac","pid":5},"labels":{"herdr.space":"sp1","where":"saccade / general"},"state":"live","status":{"app":"claude-code","state":"working"},"status_ms":1794696901630,"title":"Envision board zoom"},{"address":"t7r","cwd":"/srv/x","labels":{},"state":"live","status":null,"title":null}]}}"#;
         let event = parse_line(snapshot, true).unwrap();
         let CoreEvent::Snapshot { terminals } = event else {
@@ -533,7 +510,6 @@ mod test {
             terminals[0].facts,
             TerminalFacts {
                 cwd: Some("/home/jerry/Projects/saccade".into()),
-                where_label: Some("saccade / general".into()),
                 title: Some("Envision board zoom".into()),
             }
         );
@@ -541,13 +517,12 @@ mod test {
             terminals[1].facts,
             TerminalFacts {
                 cwd: Some("/srv/x".into()),
-                where_label: None,
                 title: None,
             },
-            "no where label and a null title stay absent"
+            "a null title stays absent"
         );
         // the live core's created event (seen, trimmed): the whole row,
-        // its where label not yet set - a labels event brings it
+        // its labels ignored
         let created = r#"{"jsonrpc":"2.0","method":"event","params":{"data":{"address":"t8b","argv":["/run/current-system/sw/bin/fish"],"cwd":"/home/jerry/Projects/pyrimel","labels":{"herdr.space":"spdc","herdr.tab":"tb52"},"state":"live","status":null,"status_ms":null,"title":"","turn":0},"seq":8120,"terminal":"t8b","type":"created"}}"#;
         assert_eq!(
             parse_line(created, false).unwrap(),
@@ -555,7 +530,6 @@ mod test {
                 terminal: "t8b".into(),
                 facts: TerminalFacts {
                     cwd: Some("/home/jerry/Projects/pyrimel".into()),
-                    where_label: None,
                     title: Some(String::new()),
                 },
             }
@@ -563,10 +537,8 @@ mod test {
         let labels = r#"{"jsonrpc":"2.0","method":"event","params":{"data":{"labels":{"herdr.space":"spdc","herdr.tab":"tb52","where":"pyrimel / 2"}},"seq":8126,"terminal":"t8b","type":"labels"}}"#;
         assert_eq!(
             parse_line(labels, false).unwrap(),
-            CoreEvent::Labels {
-                terminal: "t8b".into(),
-                where_label: Some("pyrimel / 2".into()),
-            }
+            CoreEvent::Other,
+            "a labels event is not interpreted: no label names anything here"
         );
         // the title event the live core sends
         let title = r#"{"jsonrpc":"2.0","method":"event","params":{"data":{"title":"curl -s ~/P/jernerics"},"seq":8073,"terminal":"t89","type":"title"}}"#;
