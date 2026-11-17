@@ -132,6 +132,7 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
     generation: 4,
     connected: true,
     words: {
+      // a where field (the retired desktop app's label) is not read
       t63: { state: "working", app: "claude-code", cwd: "/home/jerry/Projects/saccade", where: "saccade / general", terminal_title: "Envision", at: 6 },
     },
   });
@@ -139,7 +140,6 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
     state: "working",
     app: "claude-code",
     cwd: "/home/jerry/Projects/saccade",
-    where: "saccade / general",
     terminalTitle: "Envision",
     at: 6,
   });
@@ -304,17 +304,17 @@ function strayWords(): WordsSnapshot {
       // registered: i-3 of saccade (bare t12), never doubled as a stray
       t12: { state: "working", app: "claude-code", cwd: "/home/jerry/Projects/saccade", at: 1 },
       // in the saccade repo, unregistered
-      t63: { state: "working", app: "claude-code", msg: "editing", cwd: "/home/jerry/Projects/saccade", where: "saccade / general", at: 2 },
+      t63: { state: "working", app: "claude-code", msg: "editing", cwd: "/home/jerry/Projects/saccade", terminalTitle: "saccade / general", at: 2 },
       // in a subdirectory of the repo
       t6r: { state: "idle", app: "pi", cwd: "/home/jerry/Projects/saccade/nix", terminalTitle: "pi", at: 3 },
       // in a pyrimel worktree, through a federating core
-      "other/t4j": { state: "done", app: "claude-code", cwd: "/home/jerry/.local/state/saccade/pyrimel-11f6a386/worktrees/t-0", where: "t-0 / 2", at: 4 },
+      "other/t4j": { state: "done", app: "claude-code", cwd: "/home/jerry/.local/state/saccade/pyrimel-11f6a386/worktrees/t-0", terminalTitle: "t-0 / 2", at: 4 },
       // nowhere a project knows: the foot group, by word then name
-      t7x: { state: "done", app: "claude-code", cwd: "/srv/elsewhere", where: "elsewhere / 1", at: 5 },
+      t7x: { state: "done", app: "claude-code", cwd: "/srv/elsewhere", terminalTitle: "elsewhere / 1", at: 5 },
       t7r: { state: "working", app: "claude-code", cwd: "/srv/other", terminalTitle: "", at: 6 },
-      t7q: { state: "error", app: "pi", where: "", terminalTitle: "pi run", at: 7 },
+      t7q: { state: "error", app: "pi", terminalTitle: "pi run", at: 7 },
       // a shell: no app, never shown
-      t3k: { cwd: "/home/jerry/Projects/saccade", where: "saccade / service", at: 8 },
+      t3k: { cwd: "/home/jerry/Projects/saccade", terminalTitle: "saccade / service", at: 8 },
       // ended: not running
       t9: { app: "claude-code", finished: "exited", cwd: "/home/jerry/Projects/saccade", at: 9 },
       // a nested repo inside saccade: the deeper project holds it
@@ -346,7 +346,7 @@ test("a stray agent shows under the project whose repo or worktree holds its cwd
       ["working", [["i-3", "t12", null], [null, "t63", "saccade / general"]]],
       ["idle", [[null, "t6r", "pi"]]],
     ],
-    "the where label names it, else the terminal's title; the registered t12 is not doubled",
+    "the terminal's title names it; the registered t12 is not doubled",
   );
   assert.equal(project("saccade").groups[0]?.agents[1]?.msg, "editing", "the program's own words");
   assert.deepEqual(

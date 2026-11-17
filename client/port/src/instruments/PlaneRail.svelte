@@ -120,8 +120,7 @@ the add field's typing is the controller's. -->
   {/if}
   {#if rail.unregistered.length > 0}
     <!-- agents no tracker registered and no project's repo holds
-    (t-55): named by Herdr's where label (else the terminal's title)
-    and the address, under their words as the core reports them -->
+    (t-55): named by the terminal's title and the address, under their words as the core reports them -->
     <section class="port-plane-project" data-port-control="unregistered">
       <div class="port-plane-name port-plane-group">unregistered</div>
       {#each footRuns as run, index (index)}

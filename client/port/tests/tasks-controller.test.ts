@@ -611,9 +611,9 @@ test("an agent no tracker registered is a rail target: s labels it, its menu is 
     generation: 1,
     connected: true,
     words: {
-      "other/t63": { state: "working", app: "claude-code", cwd: "/srv/tasks-test", where: "tasks-test / general", at: 1 },
+      "other/t63": { state: "working", app: "claude-code", cwd: "/srv/tasks-test", terminal_title: "tasks-test / general", at: 1 },
       t7r: { state: "done", app: "claude-code", cwd: "/elsewhere", at: 2 },
-      t3k: { cwd: "/srv/tasks-test", where: "tasks-test / service", at: 3 },
+      t3k: { cwd: "/srv/tasks-test", terminal_title: "tasks-test / service", at: 3 },
     },
   };
   vi.stubGlobal("window", {
@@ -660,7 +660,7 @@ test("an agent no tracker registered is a rail target: s labels it, its menu is 
   assert.deepEqual(
     project?.groups.map((group) => [group.state, group.agents.map((agent) => [agent.incarnation, agent.address, agent.label])]),
     [["working", [[null, "other/t63", "tasks-test / general"]]]],
-    "under its project, unregistered, named by Herdr's where label; the shell never shows",
+    "under its project, unregistered, named by the terminal's title; the shell never shows",
   );
   assert.deepEqual(shown.unregistered.map((agent) => agent.address), ["t7r"]);
   h.press("s");
