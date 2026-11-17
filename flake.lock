@@ -69,6 +69,134 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
+          "nixpkgs"
+        ],
+        "systems": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
+          "systems"
+        ],
+        "treefmt-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
+          "treefmt-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790001035,
+        "narHash": "sha256-1/SLBjSYBzDdDhvLQ83wrzBakyS/xNGgtxHGNuveOEQ=",
+        "owner": "Mic92",
+        "repo": "bun2nix",
+        "rev": "07a5bfc8ac36c5370199343fa620b69f63186e33",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Mic92",
+        "ref": "llm-agents",
+        "repo": "bun2nix",
+        "type": "github"
+      }
+    },
+    "bun2nix_11": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "nixpkgs"
+        ],
+        "systems": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "systems"
+        ],
+        "treefmt-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "treefmt-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790001035,
+        "narHash": "sha256-1/SLBjSYBzDdDhvLQ83wrzBakyS/xNGgtxHGNuveOEQ=",
+        "owner": "Mic92",
+        "repo": "bun2nix",
+        "rev": "07a5bfc8ac36c5370199343fa620b69f63186e33",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Mic92",
+        "ref": "llm-agents",
+        "repo": "bun2nix",
+        "type": "github"
+      }
+    },
+    "bun2nix_12": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -195,12 +323,18 @@
           "wrapped-pi",
           "saccade",
           "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "llm-agents",
           "flake-parts"
         ],
         "nixpkgs": [
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -215,12 +349,18 @@
           "wrapped-pi",
           "saccade",
           "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "llm-agents",
           "systems"
         ],
         "treefmt-nix": [
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -252,6 +392,9 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "wrapped-pi",
           "llm-agents",
           "flake-parts"
@@ -259,6 +402,9 @@
         "nixpkgs": [
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -272,6 +418,9 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "wrapped-pi",
           "llm-agents",
           "systems"
@@ -279,6 +428,9 @@
         "treefmt-nix": [
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -305,8 +457,10 @@
     "bun2nix_5": {
       "inputs": {
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -315,8 +469,10 @@
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -325,8 +481,10 @@
           "nixpkgs"
         ],
         "systems": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -335,8 +493,10 @@
           "systems"
         ],
         "treefmt-nix": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -363,8 +523,10 @@
     "bun2nix_6": {
       "inputs": {
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -373,8 +535,10 @@
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -383,8 +547,10 @@
           "nixpkgs"
         ],
         "systems": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -393,8 +559,10 @@
           "systems"
         ],
         "treefmt-nix": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -423,8 +591,6 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -433,8 +599,6 @@
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -447,8 +611,6 @@
         "systems": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -457,8 +619,6 @@
           "systems"
         ],
         "treefmt-nix": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -489,8 +649,6 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -499,8 +657,6 @@
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -513,8 +669,6 @@
         "systems": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -523,8 +677,6 @@
           "systems"
         ],
         "treefmt-nix": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -557,6 +709,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -567,6 +720,7 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -579,6 +733,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -589,6 +744,7 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -758,20 +914,44 @@
     "cachix_12": {
       "inputs": {
         "devenv": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -795,23 +975,47 @@
     "cachix_13": {
       "inputs": {
         "devenv": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -836,12 +1040,24 @@
     "cachix_14": {
       "inputs": {
         "devenv": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -849,6 +1065,12 @@
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -856,6 +1078,12 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -881,31 +1109,39 @@
     "cachix_15": {
       "inputs": {
         "devenv": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -930,16 +1166,20 @@
     "cachix_16": {
       "inputs": {
         "devenv": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -947,8 +1187,10 @@
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -956,8 +1198,10 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -983,8 +1227,10 @@
     "cachix_17": {
       "inputs": {
         "devenv": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -992,8 +1238,10 @@
           "devenv"
         ],
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1002,8 +1250,10 @@
           "flake-compat"
         ],
         "git-hooks": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1012,8 +1262,10 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1041,27 +1293,19 @@
       "inputs": {
         "devenv": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "git-hooks": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -1087,13 +1331,9 @@
         "devenv": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -1102,14 +1342,10 @@
         "git-hooks": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -1173,14 +1409,10 @@
         "devenv": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1190,15 +1422,11 @@
         "git-hooks": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1226,15 +1454,11 @@
         "devenv": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1245,16 +1469,12 @@
         "git-hooks": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1283,16 +1503,12 @@
         "devenv": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1304,8 +1520,6 @@
         "git-hooks": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1313,8 +1527,6 @@
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1344,8 +1556,6 @@
         "devenv": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1353,8 +1563,6 @@
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1367,8 +1575,6 @@
         "git-hooks": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1377,8 +1583,6 @@
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1410,13 +1614,9 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -1427,14 +1627,10 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -1464,13 +1660,9 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -1483,14 +1675,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -1521,14 +1709,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv"
         ],
         "flake-compat": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -1542,6 +1726,184 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_27": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_28": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_29": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -1552,6 +1914,7 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -1597,6 +1960,177 @@
         "nixpkgs": [
           "saccade",
           "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_30": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_31": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788181969,
+        "narHash": "sha256-OUB6hPlFBB9FRdZgZXSye4lDOg+fbrqKe8ePv2IM7NY=",
+        "owner": "cachix",
+        "repo": "cachix",
+        "rev": "98093e8eea6c1635ef1337a576fa76f3e8bd4f39",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "latest",
+        "repo": "cachix",
+        "type": "github"
+      }
+    },
+    "cachix_32": {
+      "inputs": {
+        "devenv": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv"
+        ],
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "git-hooks": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -1943,6 +2477,19 @@
         "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
       }
     },
+    "claude-code-aarch64-linux_10": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-srYR4KN735pj9fce52uVlWlCTQS8IXuKDUxVj0+ziss=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      }
+    },
     "claude-code-aarch64-linux_2": {
       "flake": false,
       "locked": {
@@ -2034,7 +2581,33 @@
         "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
       }
     },
+    "claude-code-aarch64-linux_9": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-srYR4KN735pj9fce52uVlWlCTQS8IXuKDUxVj0+ziss=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      }
+    },
     "claude-code-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-RUTn2MnXO6jGO5OVuQISn1XDAMTDBncfZ3DM3pHrtYk=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      }
+    },
+    "claude-code-x86_64-linux_10": {
       "flake": false,
       "locked": {
         "lastModified": 499162500,
@@ -2126,6 +2699,19 @@
       }
     },
     "claude-code-x86_64-linux_8": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-RUTn2MnXO6jGO5OVuQISn1XDAMTDBncfZ3DM3pHrtYk=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      }
+    },
+    "claude-code-x86_64-linux_9": {
       "flake": false,
       "locked": {
         "lastModified": 499162500,
@@ -2461,7 +3047,109 @@
         "type": "github"
       }
     },
+    "crate2nix_27": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
+    "crate2nix_28": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
+    "crate2nix_29": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
     "crate2nix_3": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
+    "crate2nix_30": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
+    "crate2nix_31": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772186516,
+        "narHash": "sha256-8s28pzmQ6TOIUzznwFibtW1CMieMUl1rYJIxoQYor58=",
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rossng",
+        "repo": "crate2nix",
+        "rev": "ba5dd398e31ee422fbe021767eb83b0650303a6e",
+        "type": "github"
+      }
+    },
+    "crate2nix_32": {
       "flake": false,
       "locked": {
         "lastModified": 1772186516,
@@ -2666,12 +3354,12 @@
         "cachix": "cachix_12",
         "crate2nix": "crate2nix_12",
         "flake-compat": "flake-compat_12",
-        "flake-parts": "flake-parts_16",
+        "flake-parts": "flake-parts_14",
         "ghostty": "ghostty_12",
         "git-hooks": "git-hooks_12",
         "nix": "nix_12",
         "nixd": "nixd_12",
-        "nixpkgs": "nixpkgs_40",
+        "nixpkgs": "nixpkgs_37",
         "rust-overlay": "rust-overlay_20"
       },
       "locked": {
@@ -2693,12 +3381,12 @@
         "cachix": "cachix_13",
         "crate2nix": "crate2nix_13",
         "flake-compat": "flake-compat_13",
-        "flake-parts": "flake-parts_17",
+        "flake-parts": "flake-parts_15",
         "ghostty": "ghostty_13",
         "git-hooks": "git-hooks_13",
         "nix": "nix_13",
         "nixd": "nixd_13",
-        "nixpkgs": "nixpkgs_43",
+        "nixpkgs": "nixpkgs_40",
         "rust-overlay": "rust-overlay_21"
       },
       "locked": {
@@ -2720,12 +3408,12 @@
         "cachix": "cachix_14",
         "crate2nix": "crate2nix_14",
         "flake-compat": "flake-compat_14",
-        "flake-parts": "flake-parts_18",
+        "flake-parts": "flake-parts_16",
         "ghostty": "ghostty_14",
         "git-hooks": "git-hooks_14",
         "nix": "nix_14",
         "nixd": "nixd_14",
-        "nixpkgs": "nixpkgs_46",
+        "nixpkgs": "nixpkgs_43",
         "rust-overlay": "rust-overlay_23"
       },
       "locked": {
@@ -3093,6 +3781,87 @@
         "type": "github"
       }
     },
+    "devenv_27": {
+      "inputs": {
+        "cachix": "cachix_27",
+        "crate2nix": "crate2nix_27",
+        "flake-compat": "flake-compat_27",
+        "flake-parts": "flake-parts_35",
+        "ghostty": "ghostty_27",
+        "git-hooks": "git-hooks_27",
+        "nix": "nix_27",
+        "nixd": "nixd_27",
+        "nixpkgs": "nixpkgs_91",
+        "rust-overlay": "rust-overlay_45"
+      },
+      "locked": {
+        "lastModified": 1791892338,
+        "narHash": "sha256-WI1JKa9DUyyMmZybAMcJ2jyL87LGcKDGmaYnP6UVsgs=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1049c535047812f9e074f7adc9c29c7d1916f498",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "devenv_28": {
+      "inputs": {
+        "cachix": "cachix_28",
+        "crate2nix": "crate2nix_28",
+        "flake-compat": "flake-compat_28",
+        "flake-parts": "flake-parts_36",
+        "ghostty": "ghostty_28",
+        "git-hooks": "git-hooks_28",
+        "nix": "nix_28",
+        "nixd": "nixd_28",
+        "nixpkgs": "nixpkgs_94",
+        "rust-overlay": "rust-overlay_46"
+      },
+      "locked": {
+        "lastModified": 1789991752,
+        "narHash": "sha256-SiH+H00IutELZBg7BBNo6r5DU6E+DG7DjrbeX5+QLa0=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1c57b5dea0d400af97053fdd1a536fca17378f73",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "devenv_29": {
+      "inputs": {
+        "cachix": "cachix_29",
+        "crate2nix": "crate2nix_29",
+        "flake-compat": "flake-compat_29",
+        "flake-parts": "flake-parts_37",
+        "ghostty": "ghostty_29",
+        "git-hooks": "git-hooks_29",
+        "nix": "nix_29",
+        "nixd": "nixd_29",
+        "nixpkgs": "nixpkgs_97",
+        "rust-overlay": "rust-overlay_48"
+      },
+      "locked": {
+        "lastModified": 1789991752,
+        "narHash": "sha256-SiH+H00IutELZBg7BBNo6r5DU6E+DG7DjrbeX5+QLa0=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1c57b5dea0d400af97053fdd1a536fca17378f73",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
     "devenv_3": {
       "inputs": {
         "cachix": "cachix_3",
@@ -3112,6 +3881,87 @@
         "owner": "cachix",
         "repo": "devenv",
         "rev": "1049c535047812f9e074f7adc9c29c7d1916f498",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "devenv_30": {
+      "inputs": {
+        "cachix": "cachix_30",
+        "crate2nix": "crate2nix_30",
+        "flake-compat": "flake-compat_30",
+        "flake-parts": "flake-parts_40",
+        "ghostty": "ghostty_30",
+        "git-hooks": "git-hooks_30",
+        "nix": "nix_30",
+        "nixd": "nixd_30",
+        "nixpkgs": "nixpkgs_103",
+        "rust-overlay": "rust-overlay_50"
+      },
+      "locked": {
+        "lastModified": 1791892338,
+        "narHash": "sha256-WI1JKa9DUyyMmZybAMcJ2jyL87LGcKDGmaYnP6UVsgs=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1049c535047812f9e074f7adc9c29c7d1916f498",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "devenv_31": {
+      "inputs": {
+        "cachix": "cachix_31",
+        "crate2nix": "crate2nix_31",
+        "flake-compat": "flake-compat_31",
+        "flake-parts": "flake-parts_41",
+        "ghostty": "ghostty_31",
+        "git-hooks": "git-hooks_31",
+        "nix": "nix_31",
+        "nixd": "nixd_31",
+        "nixpkgs": "nixpkgs_106",
+        "rust-overlay": "rust-overlay_51"
+      },
+      "locked": {
+        "lastModified": 1789991752,
+        "narHash": "sha256-SiH+H00IutELZBg7BBNo6r5DU6E+DG7DjrbeX5+QLa0=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1c57b5dea0d400af97053fdd1a536fca17378f73",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "devenv_32": {
+      "inputs": {
+        "cachix": "cachix_32",
+        "crate2nix": "crate2nix_32",
+        "flake-compat": "flake-compat_32",
+        "flake-parts": "flake-parts_42",
+        "ghostty": "ghostty_32",
+        "git-hooks": "git-hooks_32",
+        "nix": "nix_32",
+        "nixd": "nixd_32",
+        "nixpkgs": "nixpkgs_109",
+        "rust-overlay": "rust-overlay_53"
+      },
+      "locked": {
+        "lastModified": 1789991752,
+        "narHash": "sha256-SiH+H00IutELZBg7BBNo6r5DU6E+DG7DjrbeX5+QLa0=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "1c57b5dea0d400af97053fdd1a536fca17378f73",
         "type": "github"
       },
       "original": {
@@ -3586,7 +4436,103 @@
         "type": "github"
       }
     },
+    "flake-compat_27": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-compat_28": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-compat_29": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
     "flake-compat_3": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-compat_30": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-compat_31": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-compat_32": {
       "flake": false,
       "locked": {
         "lastModified": 1767039857,
@@ -3834,16 +4780,17 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "wrapped-pi",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -3860,17 +4807,19 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "llm-agents",
+          "saccade",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -3882,7 +4831,15 @@
     "flake-parts_16": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -3904,18 +4861,25 @@
     "flake-parts_17": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
-          "devenv",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -3927,19 +4891,25 @@
     "flake-parts_18": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
-          "devenv",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -3951,8 +4921,10 @@
     "flake-parts_19": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -3998,8 +4970,10 @@
     "flake-parts_20": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4024,8 +4998,10 @@
     "flake-parts_21": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4051,8 +5027,10 @@
     "flake-parts_22": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4078,8 +5056,10 @@
     "flake-parts_23": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4106,8 +5086,6 @@
       "inputs": {
         "nixpkgs-lib": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -4129,8 +5107,6 @@
     "flake-parts_25": {
       "inputs": {
         "nixpkgs-lib": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -4156,8 +5132,6 @@
         "nixpkgs-lib": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -4180,8 +5154,6 @@
     "flake-parts_27": {
       "inputs": {
         "nixpkgs-lib": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -4209,8 +5181,6 @@
         "nixpkgs-lib": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4235,8 +5205,6 @@
     "flake-parts_29": {
       "inputs": {
         "nixpkgs-lib": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -4289,8 +5257,6 @@
         "nixpkgs-lib": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4316,8 +5282,6 @@
     "flake-parts_31": {
       "inputs": {
         "nixpkgs-lib": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -4348,8 +5312,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -4375,8 +5337,6 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -4398,8 +5358,6 @@
     "flake-parts_34": {
       "inputs": {
         "nixpkgs-lib": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -4430,6 +5388,91 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_36": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_37": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_38": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -4451,12 +5494,13 @@
         "type": "github"
       }
     },
-    "flake-parts_36": {
+    "flake-parts_39": {
       "inputs": {
         "nixpkgs-lib": [
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -4495,6 +5539,143 @@
         "owner": "hercules-ci",
         "repo": "flake-parts",
         "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_40": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_41": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_42": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_43": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_44": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -4960,7 +6141,109 @@
         "type": "github"
       }
     },
+    "ghostty_27": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
+    "ghostty_28": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
+    "ghostty_29": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
     "ghostty_3": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
+    "ghostty_30": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
+    "ghostty_31": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786026742,
+        "narHash": "sha256-tRtgTg/i3w1nFdRHU2IGekfJN8EyP+HARW4MtoUZyqk=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018",
+        "type": "github"
+      }
+    },
+    "ghostty_32": {
       "flake": false,
       "locked": {
         "lastModified": 1786026742,
@@ -5179,11 +6462,23 @@
     "git-hooks_12": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -5206,12 +6501,24 @@
     "git-hooks_13": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -5235,6 +6542,12 @@
     "git-hooks_14": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5242,6 +6555,12 @@
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5266,16 +6585,20 @@
     "git-hooks_15": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -5299,8 +6622,10 @@
     "git-hooks_16": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5308,8 +6633,10 @@
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5334,8 +6661,10 @@
     "git-hooks_17": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5344,8 +6673,10 @@
           "flake-compat"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5372,14 +6703,10 @@
       "inputs": {
         "flake-compat": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -5404,14 +6731,10 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -5464,15 +6787,11 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5499,16 +6818,12 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5536,8 +6851,6 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5545,8 +6858,6 @@
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5575,8 +6886,6 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5585,8 +6894,6 @@
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5617,14 +6924,10 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -5653,14 +6956,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-compat"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -5690,6 +6989,118 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_27": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_28": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_29": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -5700,6 +7111,7 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -5733,6 +7145,117 @@
         "nixpkgs": [
           "saccade",
           "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_30": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_31": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788267358,
+        "narHash": "sha256-nt+lUqYVpc9Y6JeMd2WmXzCDojasdadKo0mWcluvY2Y=",
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "rev": "27555e2624241fb116b49095df4caaee85a25691",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "git-hooks_32": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -6024,6 +7547,19 @@
         "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
       }
     },
+    "herdr-app-aarch64-linux_6": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483419,
+        "narHash": "sha256-xNmkPXXa2Tustkg2OP+eIuSziyqcWsMhbae9H45ku/8=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      }
+    },
     "herdr-app-x86_64-linux": {
       "flake": false,
       "locked": {
@@ -6089,7 +7625,33 @@
         "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
       }
     },
+    "herdr-app-x86_64-linux_6": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483418,
+        "narHash": "sha256-Kx0QKYramjgM9SxAAJats6o1+O14nGaf+5vnBxEp9UY=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      }
+    },
     "herdr-core-aarch64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624171,
+        "narHash": "sha256-URBw4Oo794eS6RRWv4LthkTqzzDcbOPFStLpfohi28g=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      }
+    },
+    "herdr-core-aarch64-linux_10": {
       "flake": false,
       "locked": {
         "lastModified": 1793624171,
@@ -6193,7 +7755,33 @@
         "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
       }
     },
+    "herdr-core-aarch64-linux_9": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624171,
+        "narHash": "sha256-URBw4Oo794eS6RRWv4LthkTqzzDcbOPFStLpfohi28g=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      }
+    },
     "herdr-core-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624075,
+        "narHash": "sha256-jdgIcDV9Y9RhvofLHpDLYtB/iCpnJ9pF0nlZ0LlqLrM=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      }
+    },
+    "herdr-core-x86_64-linux_10": {
       "flake": false,
       "locked": {
         "lastModified": 1793624075,
@@ -6297,6 +7885,19 @@
         "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
       }
     },
+    "herdr-core-x86_64-linux_9": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624075,
+        "narHash": "sha256-jdgIcDV9Y9RhvofLHpDLYtB/iCpnJ9pF0nlZ0LlqLrM=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      }
+    },
     "llm-agents": {
       "inputs": {
         "bun2nix": "bun2nix",
@@ -6322,10 +7923,54 @@
     "llm-agents_10": {
       "inputs": {
         "bun2nix": "bun2nix_10",
-        "flake-parts": "flake-parts_36",
-        "nixpkgs": "nixpkgs_92",
+        "flake-parts": "flake-parts_39",
+        "nixpkgs": "nixpkgs_101",
         "systems": "systems_10",
-        "treefmt-nix": "treefmt-nix_36"
+        "treefmt-nix": "treefmt-nix_39"
+      },
+      "locked": {
+        "lastModified": 1790069497,
+        "narHash": "sha256-fbNEOF6ylN6TIHa7RfFICTeQsYnZRGmVVJWkggjdgbg=",
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "rev": "181f1f9efe7ac92a3d98c6b79ba870161e7f209a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "type": "github"
+      }
+    },
+    "llm-agents_11": {
+      "inputs": {
+        "bun2nix": "bun2nix_11",
+        "flake-parts": "flake-parts_43",
+        "nixpkgs": "nixpkgs_110",
+        "systems": "systems_11",
+        "treefmt-nix": "treefmt-nix_43"
+      },
+      "locked": {
+        "lastModified": 1790069497,
+        "narHash": "sha256-fbNEOF6ylN6TIHa7RfFICTeQsYnZRGmVVJWkggjdgbg=",
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "rev": "181f1f9efe7ac92a3d98c6b79ba870161e7f209a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "type": "github"
+      }
+    },
+    "llm-agents_12": {
+      "inputs": {
+        "bun2nix": "bun2nix_12",
+        "flake-parts": "flake-parts_44",
+        "nixpkgs": "nixpkgs_113",
+        "systems": "systems_12",
+        "treefmt-nix": "treefmt-nix_44"
       },
       "locked": {
         "lastModified": 1790069497,
@@ -6366,10 +8011,10 @@
     "llm-agents_3": {
       "inputs": {
         "bun2nix": "bun2nix_3",
-        "flake-parts": "flake-parts_14",
-        "nixpkgs": "nixpkgs_35",
+        "flake-parts": "flake-parts_17",
+        "nixpkgs": "nixpkgs_44",
         "systems": "systems_3",
-        "treefmt-nix": "treefmt-nix_14"
+        "treefmt-nix": "treefmt-nix_17"
       },
       "locked": {
         "lastModified": 1790069497,
@@ -6388,10 +8033,10 @@
     "llm-agents_4": {
       "inputs": {
         "bun2nix": "bun2nix_4",
-        "flake-parts": "flake-parts_15",
-        "nixpkgs": "nixpkgs_38",
+        "flake-parts": "flake-parts_18",
+        "nixpkgs": "nixpkgs_47",
         "systems": "systems_4",
-        "treefmt-nix": "treefmt-nix_15"
+        "treefmt-nix": "treefmt-nix_18"
       },
       "locked": {
         "lastModified": 1790069497,
@@ -6498,10 +8143,10 @@
     "llm-agents_9": {
       "inputs": {
         "bun2nix": "bun2nix_9",
-        "flake-parts": "flake-parts_35",
-        "nixpkgs": "nixpkgs_89",
+        "flake-parts": "flake-parts_38",
+        "nixpkgs": "nixpkgs_98",
         "systems": "systems_9",
-        "treefmt-nix": "treefmt-nix_35"
+        "treefmt-nix": "treefmt-nix_38"
       },
       "locked": {
         "lastModified": 1790069497,
@@ -6706,30 +8351,66 @@
     "nix_12": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv"
         ]
@@ -6752,35 +8433,71 @@
     "nix_13": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
@@ -6804,6 +8521,12 @@
     "nix_14": {
       "inputs": {
         "flake-compat": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -6811,6 +8534,12 @@
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -6818,6 +8547,12 @@
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -6825,6 +8560,12 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -6832,12 +8573,24 @@
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -6862,47 +8615,59 @@
     "nix_15": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv"
@@ -6926,8 +8691,10 @@
     "nix_16": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -6935,8 +8702,10 @@
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -6944,8 +8713,10 @@
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -6953,8 +8724,10 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -6962,16 +8735,20 @@
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -6996,8 +8773,10 @@
     "nix_17": {
       "inputs": {
         "flake-compat": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7006,8 +8785,10 @@
           "flake-compat"
         ],
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7016,8 +8797,10 @@
           "flake-parts"
         ],
         "git-hooks-nix": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7026,8 +8809,10 @@
           "git-hooks"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7036,8 +8821,10 @@
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7045,8 +8832,10 @@
           "devenv"
         ],
         "nixpkgs-regression": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7073,41 +8862,29 @@
       "inputs": {
         "flake-compat": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "git-hooks-nix": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
         ],
         "nixpkgs-23-11": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv"
         ]
@@ -7132,14 +8909,10 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -7148,14 +8921,10 @@
         "git-hooks-nix": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -7164,13 +8933,9 @@
         "nixpkgs-23-11": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
@@ -7242,15 +9007,11 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7260,15 +9021,11 @@
         "git-hooks-nix": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7278,14 +9035,10 @@
         "nixpkgs-23-11": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7312,16 +9065,12 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7332,16 +9081,12 @@
         "git-hooks-nix": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7352,15 +9097,11 @@
         "nixpkgs-23-11": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7388,8 +9129,6 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7397,8 +9136,6 @@
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7410,8 +9147,6 @@
         "git-hooks-nix": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7419,8 +9154,6 @@
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7432,16 +9165,12 @@
         "nixpkgs-23-11": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7470,8 +9199,6 @@
         "flake-compat": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7480,8 +9207,6 @@
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7494,8 +9219,6 @@
         "git-hooks-nix": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7504,8 +9227,6 @@
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7518,8 +9239,6 @@
         "nixpkgs-23-11": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7527,8 +9246,6 @@
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7559,14 +9276,10 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7577,14 +9290,10 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7595,13 +9304,9 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7630,14 +9335,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7650,14 +9351,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7670,13 +9367,9 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv"
         ],
         "nixpkgs-regression": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7706,15 +9399,11 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "flake-compat"
         ],
         "flake-parts": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7728,15 +9417,11 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "git-hooks"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -7750,6 +9435,247 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788036898,
+        "narHash": "sha256-3NT3yTvoRT7+rxLDNovpyeTDIJkZlBoO72rcu2x9Y9o=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "b9b81726b38469c55b9706d80d37d6c73cc7f76c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_27": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790176416,
+        "narHash": "sha256-acP7QvsB+dHghUeL9AwSSZ3qS//skpqjv484aveg1EQ=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "bd10d7f563420c6034b9d1dc75c4168fc01e5afc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_28": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788036898,
+        "narHash": "sha256-3NT3yTvoRT7+rxLDNovpyeTDIJkZlBoO72rcu2x9Y9o=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "b9b81726b38469c55b9706d80d37d6c73cc7f76c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_29": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -7759,6 +9685,7 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -7824,6 +9751,234 @@
         "owner": "cachix",
         "repo": "nix",
         "rev": "bd10d7f563420c6034b9d1dc75c4168fc01e5afc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_30": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790176416,
+        "narHash": "sha256-acP7QvsB+dHghUeL9AwSSZ3qS//skpqjv484aveg1EQ=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "bd10d7f563420c6034b9d1dc75c4168fc01e5afc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_31": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788036898,
+        "narHash": "sha256-3NT3yTvoRT7+rxLDNovpyeTDIJkZlBoO72rcu2x9Y9o=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "b9b81726b38469c55b9706d80d37d6c73cc7f76c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "devenv-2.35",
+        "repo": "nix",
+        "type": "github"
+      }
+    },
+    "nix_32": {
+      "inputs": {
+        "flake-compat": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-compat"
+        ],
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "git-hooks-nix": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "nixpkgs-23-11": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv"
+        ],
+        "nixpkgs-regression": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788036898,
+        "narHash": "sha256-3NT3yTvoRT7+rxLDNovpyeTDIJkZlBoO72rcu2x9Y9o=",
+        "owner": "cachix",
+        "repo": "nix",
+        "rev": "b9b81726b38469c55b9706d80d37d6c73cc7f76c",
         "type": "github"
       },
       "original": {
@@ -8350,12 +10505,110 @@
     "nixd_12": {
       "inputs": {
         "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_14"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_13": {
+      "inputs": {
+        "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_15"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_14": {
+      "inputs": {
+        "flake-parts": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "devenv",
           "nixpkgs"
         ],
@@ -8375,81 +10628,23 @@
         "type": "github"
       }
     },
-    "nixd_13": {
-      "inputs": {
-        "flake-parts": [
-          "wrapped-pi",
-          "saccade",
-          "devenv",
-          "flake-parts"
-        ],
-        "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
-          "devenv",
-          "nixpkgs"
-        ],
-        "treefmt-nix": "treefmt-nix_17"
-      },
-      "locked": {
-        "lastModified": 1788165251,
-        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
-        "owner": "nix-community",
-        "repo": "nixd",
-        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "nixd",
-        "type": "github"
-      }
-    },
-    "nixd_14": {
-      "inputs": {
-        "flake-parts": [
-          "wrapped-pi",
-          "saccade",
-          "saccade",
-          "devenv",
-          "flake-parts"
-        ],
-        "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
-          "saccade",
-          "devenv",
-          "nixpkgs"
-        ],
-        "treefmt-nix": "treefmt-nix_18"
-      },
-      "locked": {
-        "lastModified": 1788165251,
-        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
-        "owner": "nix-community",
-        "repo": "nixd",
-        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "nixd",
-        "type": "github"
-      }
-    },
     "nixd_15": {
       "inputs": {
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -8474,8 +10669,10 @@
     "nixd_16": {
       "inputs": {
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8483,8 +10680,10 @@
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8510,8 +10709,10 @@
     "nixd_17": {
       "inputs": {
         "flake-parts": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8520,8 +10721,10 @@
           "flake-parts"
         ],
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8549,14 +10752,10 @@
       "inputs": {
         "flake-parts": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -8582,14 +10781,10 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -8644,15 +10839,11 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -8680,16 +10871,12 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -8718,8 +10905,6 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8727,8 +10912,6 @@
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -8758,8 +10941,6 @@
         "flake-parts": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -8768,8 +10949,6 @@
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -8801,14 +10980,10 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -8838,14 +11013,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "flake-parts"
         ],
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -8876,6 +11047,121 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_34"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_27": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_35"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_28": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_36"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_29": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -8887,13 +11173,14 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
         ],
-        "treefmt-nix": "treefmt-nix_34"
+        "treefmt-nix": "treefmt-nix_37"
       },
       "locked": {
         "lastModified": 1788165251,
@@ -8924,6 +11211,120 @@
           "nixpkgs"
         ],
         "treefmt-nix": "treefmt-nix_3"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_30": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_40"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_31": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_41"
+      },
+      "locked": {
+        "lastModified": 1788165251,
+        "narHash": "sha256-ITHt6eU6DuwQqlNV1/wehvKYPE6J8sZIlv75CpDjcHI=",
+        "owner": "nix-community",
+        "repo": "nixd",
+        "rev": "e2ca72c353cfbc3d63e942fe9aeae4ec497863bf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixd",
+        "type": "github"
+      }
+    },
+    "nixd_32": {
+      "inputs": {
+        "flake-parts": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix_42"
       },
       "locked": {
         "lastModified": 1788165251,
@@ -9188,6 +11589,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-client_10": {
+      "locked": {
+        "lastModified": 1790822859,
+        "narHash": "sha256-69xHQhAeMAD2wDXO7T2pcOZIF9Sga2W+JkmY2a11Ops=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      }
+    },
     "nixpkgs-client_2": {
       "locked": {
         "lastModified": 1790822859,
@@ -9300,7 +11717,39 @@
         "type": "github"
       }
     },
+    "nixpkgs-client_9": {
+      "locked": {
+        "lastModified": 1790822859,
+        "narHash": "sha256-69xHQhAeMAD2wDXO7T2pcOZIF9Sga2W+JkmY2a11Ops=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      }
+    },
     "nixpkgs-darwin-x64": {
+      "locked": {
+        "lastModified": 1788334797,
+        "narHash": "sha256-nskSa8kDimM7F0VFSP8IdoSNo4G0vKzOtxwvOFpoGDI=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c19db427a1fdfc7591c0b0baeb4665dcef2c61da",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-26.05-darwin",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-darwin-x64_10": {
       "locked": {
         "lastModified": 1788334797,
         "narHash": "sha256-nskSa8kDimM7F0VFSP8IdoSNo4G0vKzOtxwvOFpoGDI=",
@@ -9413,6 +11862,22 @@
       }
     },
     "nixpkgs-darwin-x64_8": {
+      "locked": {
+        "lastModified": 1788334797,
+        "narHash": "sha256-nskSa8kDimM7F0VFSP8IdoSNo4G0vKzOtxwvOFpoGDI=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c19db427a1fdfc7591c0b0baeb4665dcef2c61da",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-26.05-darwin",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-darwin-x64_9": {
       "locked": {
         "lastModified": 1788334797,
         "narHash": "sha256-nskSa8kDimM7F0VFSP8IdoSNo4G0vKzOtxwvOFpoGDI=",
@@ -9751,7 +12216,109 @@
         "type": "github"
       }
     },
+    "nixpkgs-src_27": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-src_28": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-src_29": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs-src_3": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-src_30": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-src_31": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787394516,
+        "narHash": "sha256-pRGOQSClnXNI2iLUG6DYpsGvYcuw0drOutVZFTJNw90=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c8f90650c15282fa8656a041bfbbd2403997a9a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-src_32": {
       "flake": false,
       "locked": {
         "lastModified": 1787394516,
@@ -9889,7 +12456,256 @@
         "type": "github"
       }
     },
+    "nixpkgs_100": {
+      "locked": {
+        "lastModified": 1744536153,
+        "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "18dd725c29603f582cf1900e0d25f9f1063dbf11",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_101": {
+      "locked": {
+        "lastModified": 1789960332,
+        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_102": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_103": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_30"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_104": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_105": {
+      "locked": {
+        "lastModified": 1788316716,
+        "narHash": "sha256-bc7rSpXIdn9QWGNqfWcPZWOhEVF8NoeAZkWq0XWnf/k=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3ed67ec0a4d3c7ab4ae1f04f8ee8df07bfa506a2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_106": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_31"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_107": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_108": {
+      "locked": {
+        "lastModified": 1744536153,
+        "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "18dd725c29603f582cf1900e0d25f9f1063dbf11",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_109": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_32"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs_11": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_110": {
+      "locked": {
+        "lastModified": 1789960332,
+        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_111": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_112": {
+      "locked": {
+        "lastModified": 1744536153,
+        "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "18dd725c29603f582cf1900e0d25f9f1063dbf11",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_113": {
+      "locked": {
+        "lastModified": 1789960332,
+        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_114": {
       "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
@@ -10328,22 +13144,6 @@
     },
     "nixpkgs_35": {
       "locked": {
-        "lastModified": 1789960332,
-        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixpkgs-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_36": {
-      "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
         "owner": "NixOS",
@@ -10358,7 +13158,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_37": {
+    "nixpkgs_36": {
       "locked": {
         "lastModified": 1744536153,
         "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
@@ -10374,29 +13174,48 @@
         "type": "github"
       }
     },
-    "nixpkgs_38": {
+    "nixpkgs_37": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_12"
+      },
       "locked": {
-        "lastModified": 1789960332,
-        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
-        "ref": "nixpkgs-unstable",
-        "repo": "nixpkgs",
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
         "type": "github"
       }
     },
-    "nixpkgs_39": {
+    "nixpkgs_38": {
       "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
         "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_39": {
+      "locked": {
+        "lastModified": 1788316716,
+        "narHash": "sha256-bc7rSpXIdn9QWGNqfWcPZWOhEVF8NoeAZkWq0XWnf/k=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3ed67ec0a4d3c7ab4ae1f04f8ee8df07bfa506a2",
         "type": "github"
       },
       "original": {
@@ -10427,7 +13246,7 @@
     },
     "nixpkgs_40": {
       "inputs": {
-        "nixpkgs-src": "nixpkgs-src_12"
+        "nixpkgs-src": "nixpkgs-src_13"
       },
       "locked": {
         "lastModified": 1787753358,
@@ -10462,57 +13281,6 @@
     },
     "nixpkgs_42": {
       "locked": {
-        "lastModified": 1788316716,
-        "narHash": "sha256-bc7rSpXIdn9QWGNqfWcPZWOhEVF8NoeAZkWq0XWnf/k=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "3ed67ec0a4d3c7ab4ae1f04f8ee8df07bfa506a2",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_43": {
-      "inputs": {
-        "nixpkgs-src": "nixpkgs-src_13"
-      },
-      "locked": {
-        "lastModified": 1787753358,
-        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
-        "owner": "cachix",
-        "repo": "devenv-nixpkgs",
-        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "cachix",
-        "ref": "rolling",
-        "repo": "devenv-nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_44": {
-      "locked": {
-        "lastModified": 1790046670,
-        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_45": {
-      "locked": {
         "lastModified": 1744536153,
         "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
         "owner": "NixOS",
@@ -10527,7 +13295,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_46": {
+    "nixpkgs_43": {
       "inputs": {
         "nixpkgs-src": "nixpkgs-src_14"
       },
@@ -10546,7 +13314,23 @@
         "type": "github"
       }
     },
-    "nixpkgs_47": {
+    "nixpkgs_44": {
+      "locked": {
+        "lastModified": 1789960332,
+        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_45": {
       "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
@@ -10562,7 +13346,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_48": {
+    "nixpkgs_46": {
       "locked": {
         "lastModified": 1744536153,
         "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
@@ -10574,6 +13358,38 @@
       "original": {
         "owner": "NixOS",
         "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_47": {
+      "locked": {
+        "lastModified": 1789960332,
+        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_48": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -11323,16 +14139,16 @@
     },
     "nixpkgs_89": {
       "locked": {
-        "lastModified": 1789960332,
-        "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "35e212742ceab4ae1dcfbfd9039a39215c816e8e",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixpkgs-unstable",
+        "ref": "nixos-unstable",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -11355,6 +14171,41 @@
     },
     "nixpkgs_90": {
       "locked": {
+        "lastModified": 1744536153,
+        "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "18dd725c29603f582cf1900e0d25f9f1063dbf11",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_91": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_27"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_92": {
+      "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
         "owner": "NixOS",
@@ -11369,7 +14220,58 @@
         "type": "github"
       }
     },
-    "nixpkgs_91": {
+    "nixpkgs_93": {
+      "locked": {
+        "lastModified": 1788316716,
+        "narHash": "sha256-bc7rSpXIdn9QWGNqfWcPZWOhEVF8NoeAZkWq0XWnf/k=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3ed67ec0a4d3c7ab4ae1f04f8ee8df07bfa506a2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_94": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_28"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_95": {
+      "locked": {
+        "lastModified": 1790046670,
+        "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6774f7bc253789b113a4f39285dc0fa100abeacc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_96": {
       "locked": {
         "lastModified": 1744536153,
         "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
@@ -11385,7 +14287,26 @@
         "type": "github"
       }
     },
-    "nixpkgs_92": {
+    "nixpkgs_97": {
+      "inputs": {
+        "nixpkgs-src": "nixpkgs-src_29"
+      },
+      "locked": {
+        "lastModified": 1787753358,
+        "narHash": "sha256-Tl77VbWyAKrOfRNQhL6JbQtb/MLzbYa/1RG1gWWfICk=",
+        "owner": "cachix",
+        "repo": "devenv-nixpkgs",
+        "rev": "256551e45f6303e142ab4a98be1bf243feb77dc0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "ref": "rolling",
+        "repo": "devenv-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_98": {
       "locked": {
         "lastModified": 1789960332,
         "narHash": "sha256-MQ5my6vvo0z2iVQcKqrysutFWvsNw3/ynNxzjJon4yc=",
@@ -11401,7 +14322,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_93": {
+    "nixpkgs_99": {
       "locked": {
         "lastModified": 1790046670,
         "narHash": "sha256-MYiI+CzL0tuWgRPjGsKCDHqYs2T3OzMlMQWOYWG0qso=",
@@ -11437,6 +14358,25 @@
         "type": "github"
       }
     },
+    "pi_10": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_105",
+        "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_10"
+      },
+      "locked": {
+        "lastModified": 1791908251,
+        "narHash": "sha256-67/ovLvVziA+MkAIaSJWZdXTkESdcqvrJc7XsSwsMsg=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "3daa20280f6a7c7cbe0935680c9a38fdc3863005",
+        "type": "github"
+      },
+      "original": {
+        "owner": "earendil-works",
+        "repo": "pi",
+        "type": "github"
+      }
+    },
     "pi_2": {
       "inputs": {
         "nixpkgs": "nixpkgs_18",
@@ -11462,25 +14402,6 @@
         "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_3"
       },
       "locked": {
-        "lastModified": 1791908251,
-        "narHash": "sha256-67/ovLvVziA+MkAIaSJWZdXTkESdcqvrJc7XsSwsMsg=",
-        "owner": "earendil-works",
-        "repo": "pi",
-        "rev": "3daa20280f6a7c7cbe0935680c9a38fdc3863005",
-        "type": "github"
-      },
-      "original": {
-        "owner": "earendil-works",
-        "repo": "pi",
-        "type": "github"
-      }
-    },
-    "pi_4": {
-      "inputs": {
-        "nixpkgs": "nixpkgs_42",
-        "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_4"
-      },
-      "locked": {
         "lastModified": 1794312108,
         "narHash": "sha256-0dKtABQqfvCLF0WOydu5rpycMqC+N8Pc9Ex4BWKElyw=",
         "owner": "earendil-works",
@@ -11491,6 +14412,25 @@
       "original": {
         "owner": "earendil-works",
         "ref": "v1.5.2",
+        "repo": "pi",
+        "type": "github"
+      }
+    },
+    "pi_4": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_39",
+        "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_4"
+      },
+      "locked": {
+        "lastModified": 1791908251,
+        "narHash": "sha256-67/ovLvVziA+MkAIaSJWZdXTkESdcqvrJc7XsSwsMsg=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "3daa20280f6a7c7cbe0935680c9a38fdc3863005",
+        "type": "github"
+      },
+      "original": {
+        "owner": "earendil-works",
         "repo": "pi",
         "type": "github"
       }
@@ -11559,6 +14499,26 @@
         "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_8"
       },
       "locked": {
+        "lastModified": 1794312108,
+        "narHash": "sha256-0dKtABQqfvCLF0WOydu5rpycMqC+N8Pc9Ex4BWKElyw=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "b4afdddf44e059c67ccf5097e5317d913521b470",
+        "type": "github"
+      },
+      "original": {
+        "owner": "earendil-works",
+        "ref": "v1.5.2",
+        "repo": "pi",
+        "type": "github"
+      }
+    },
+    "pi_9": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_93",
+        "nixpkgs-darwin-x64": "nixpkgs-darwin-x64_9"
+      },
+      "locked": {
         "lastModified": 1791908251,
         "narHash": "sha256-67/ovLvVziA+MkAIaSJWZdXTkESdcqvrJc7XsSwsMsg=",
         "owner": "earendil-works",
@@ -11583,7 +14543,7 @@
         "nixpkgs-client": "nixpkgs-client",
         "rust-overlay": "rust-overlay_2",
         "saccade": "saccade",
-        "wrapped-pi": "wrapped-pi_6"
+        "wrapped-pi": "wrapped-pi_9"
       }
     },
     "rust-overlay": {
@@ -11822,7 +14782,7 @@
     },
     "rust-overlay_19": {
       "inputs": {
-        "nixpkgs": "nixpkgs_37"
+        "nixpkgs": "nixpkgs_36"
       },
       "locked": {
         "lastModified": 1790062494,
@@ -11859,6 +14819,12 @@
     "rust-overlay_20": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "devenv",
           "nixpkgs"
@@ -11881,6 +14847,12 @@
     "rust-overlay_21": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -11903,7 +14875,7 @@
     },
     "rust-overlay_22": {
       "inputs": {
-        "nixpkgs": "nixpkgs_45"
+        "nixpkgs": "nixpkgs_42"
       },
       "locked": {
         "lastModified": 1790062494,
@@ -11922,6 +14894,12 @@
     "rust-overlay_23": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -11945,7 +14923,7 @@
     },
     "rust-overlay_24": {
       "inputs": {
-        "nixpkgs": "nixpkgs_48"
+        "nixpkgs": "nixpkgs_46"
       },
       "locked": {
         "lastModified": 1790062494,
@@ -11964,8 +14942,10 @@
     "rust-overlay_25": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -11989,8 +14969,10 @@
     "rust-overlay_26": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12033,8 +15015,10 @@
     "rust-overlay_28": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12101,8 +15085,6 @@
       "inputs": {
         "nixpkgs": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -12124,8 +15106,6 @@
     "rust-overlay_31": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -12167,8 +15147,6 @@
     "rust-overlay_33": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -12213,8 +15191,6 @@
         "nixpkgs": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -12238,8 +15214,6 @@
     "rust-overlay_36": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -12284,8 +15258,6 @@
     "rust-overlay_38": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -12352,8 +15324,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -12375,8 +15345,6 @@
     "rust-overlay_41": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -12424,8 +15392,6 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -12447,7 +15413,127 @@
     },
     "rust-overlay_44": {
       "inputs": {
-        "nixpkgs": "nixpkgs_91"
+        "nixpkgs": "nixpkgs_90"
+      },
+      "locked": {
+        "lastModified": 1790062494,
+        "narHash": "sha256-Mds1vuoczq1fRm1rf+Iar8IKDBHNjOMo2JqqPWJUlng=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b88764907c1b2de6c0e206d8d9d9634d91c81334",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_45": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_46": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_47": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_96"
+      },
+      "locked": {
+        "lastModified": 1790062494,
+        "narHash": "sha256-Mds1vuoczq1fRm1rf+Iar8IKDBHNjOMo2JqqPWJUlng=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b88764907c1b2de6c0e206d8d9d9634d91c81334",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_48": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_49": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_100"
       },
       "locked": {
         "lastModified": 1790062494,
@@ -12478,6 +15564,123 @@
         "owner": "oxalica",
         "repo": "rust-overlay",
         "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_50": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_51": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_52": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_108"
+      },
+      "locked": {
+        "lastModified": 1790062494,
+        "narHash": "sha256-Mds1vuoczq1fRm1rf+Iar8IKDBHNjOMo2JqqPWJUlng=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b88764907c1b2de6c0e206d8d9d9634d91c81334",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_53": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788332415,
+        "narHash": "sha256-BTFrmyh0oaVDsvA9NNw0YpbbeppTwU0t70iVx672Ew8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "860d7c835ab91bfc8972b67092f5f2db8e9390a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_54": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_112"
+      },
+      "locked": {
+        "lastModified": 1790062494,
+        "narHash": "sha256-Mds1vuoczq1fRm1rf+Iar8IKDBHNjOMo2JqqPWJUlng=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b88764907c1b2de6c0e206d8d9d9634d91c81334",
         "type": "github"
       },
       "original": {
@@ -12587,11 +15790,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1794856160,
-        "narHash": "sha256-nnty2qrTJPfZIj0pjUL8pWkHuFVCytL8xZE08DVNseo=",
+        "lastModified": 1794880950,
+        "narHash": "sha256-22JGtw+2GKBAQXKfEuJP8YmNYSDluYciW5J1zVrGi+c=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "57430a6a0134624d4250d6879670d24487651051",
+        "rev": "69756adef341e6e2eb236e2722f84c4b8e7af6e0",
         "type": "github"
       },
       "original": {
@@ -12629,8 +15832,10 @@
         "nixpkgs": "nixpkgs_57",
         "rust-overlay": "rust-overlay_29",
         "saccade": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12656,8 +15861,6 @@
         "claude-code-aarch64-linux": "claude-code-aarch64-linux_7",
         "claude-code-x86_64-linux": "claude-code-x86_64-linux_7",
         "devenv": "devenv_19",
-        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_4",
-        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_4",
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_7",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_7",
         "nixpkgs": "nixpkgs_65",
@@ -12667,11 +15870,11 @@
         "wrapped-pi": "wrapped-pi_12"
       },
       "locked": {
-        "lastModified": 1794756712,
-        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
+        "lastModified": 1794856160,
+        "narHash": "sha256-nnty2qrTJPfZIj0pjUL8pWkHuFVCytL8xZE08DVNseo=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
+        "rev": "57430a6a0134624d4250d6879670d24487651051",
         "type": "github"
       },
       "original": {
@@ -12685,8 +15888,8 @@
         "claude-code-aarch64-linux": "claude-code-aarch64-linux_8",
         "claude-code-x86_64-linux": "claude-code-x86_64-linux_8",
         "devenv": "devenv_20",
-        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_5",
-        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_5",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_4",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_4",
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_8",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_8",
         "nixpkgs": "nixpkgs_68",
@@ -12695,18 +15898,16 @@
         "saccade": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade"
         ],
         "wrapped-pi": "wrapped-pi_10"
       },
       "locked": {
-        "lastModified": 1794705856,
-        "narHash": "sha256-vBaVj1SPZxGezlHl79H6TXcwi0BIUh07ffqvqgbsFvM=",
+        "lastModified": 1794756712,
+        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "447cd4cb453a2b8d55be10bd01c34c14e5531739",
+        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
         "type": "github"
       },
       "original": {
@@ -12746,8 +15947,6 @@
         "saccade": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12770,11 +15969,75 @@
     },
     "saccade_16": {
       "inputs": {
+        "claude-code-aarch64-linux": "claude-code-aarch64-linux_9",
+        "claude-code-x86_64-linux": "claude-code-x86_64-linux_9",
         "devenv": "devenv_25",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_5",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_5",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_9",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_9",
         "nixpkgs": "nixpkgs_86",
+        "nixpkgs-client": "nixpkgs-client_9",
         "rust-overlay": "rust-overlay_42",
         "saccade": "saccade_17",
+        "wrapped-pi": "wrapped-pi_15"
+      },
+      "locked": {
+        "lastModified": 1794756712,
+        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_17": {
+      "inputs": {
+        "claude-code-aarch64-linux": "claude-code-aarch64-linux_10",
+        "claude-code-x86_64-linux": "claude-code-x86_64-linux_10",
+        "devenv": "devenv_26",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_6",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_6",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_10",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_10",
+        "nixpkgs": "nixpkgs_89",
+        "nixpkgs-client": "nixpkgs-client_10",
+        "rust-overlay": "rust-overlay_44",
+        "saccade": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade"
+        ],
         "wrapped-pi": "wrapped-pi_13"
+      },
+      "locked": {
+        "lastModified": 1794705856,
+        "narHash": "sha256-vBaVj1SPZxGezlHl79H6TXcwi0BIUh07ffqvqgbsFvM=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "447cd4cb453a2b8d55be10bd01c34c14e5531739",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_18": {
+      "inputs": {
+        "devenv": "devenv_28",
+        "nixpkgs": "nixpkgs_95",
+        "rust-overlay": "rust-overlay_47",
+        "saccade": "saccade_19",
+        "wrapped-pi": "wrapped-pi_14"
       },
       "locked": {
         "lastModified": 1791906619,
@@ -12790,16 +16053,17 @@
         "type": "github"
       }
     },
-    "saccade_17": {
+    "saccade_19": {
       "inputs": {
-        "devenv": "devenv_26",
+        "devenv": "devenv_29",
         "llm-agents": "llm-agents_9",
-        "nixpkgs": "nixpkgs_90",
-        "rust-overlay": "rust-overlay_44",
+        "nixpkgs": "nixpkgs_99",
+        "rust-overlay": "rust-overlay_49",
         "saccade": [
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12825,8 +16089,6 @@
         "claude-code-aarch64-linux": "claude-code-aarch64-linux_3",
         "claude-code-x86_64-linux": "claude-code-x86_64-linux_3",
         "devenv": "devenv_4",
-        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux",
-        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux",
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_3",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_3",
         "nixpkgs": "nixpkgs_11",
@@ -12836,11 +16098,63 @@
         "wrapped-pi": "wrapped-pi_4"
       },
       "locked": {
-        "lastModified": 1794756712,
-        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
+        "lastModified": 1794856160,
+        "narHash": "sha256-nnty2qrTJPfZIj0pjUL8pWkHuFVCytL8xZE08DVNseo=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
+        "rev": "57430a6a0134624d4250d6879670d24487651051",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_20": {
+      "inputs": {
+        "devenv": "devenv_31",
+        "nixpkgs": "nixpkgs_107",
+        "rust-overlay": "rust-overlay_52",
+        "saccade": "saccade_21",
+        "wrapped-pi": "wrapped-pi_16"
+      },
+      "locked": {
+        "lastModified": 1791906619,
+        "narHash": "sha256-ikijLKDdouuJakjImCt8MXJGUtv8oAq6h3EVG7ubINk=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "f3f1b4553d293d11b5bd1b0d19a35a7dbf92d96f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_21": {
+      "inputs": {
+        "devenv": "devenv_32",
+        "llm-agents": "llm-agents_11",
+        "nixpkgs": "nixpkgs_111",
+        "rust-overlay": "rust-overlay_54",
+        "saccade": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791894153,
+        "narHash": "sha256-P+R1HIXfweIZ7pgJOsvfHOfDi2iS7NfwlRfwuJn/KTI=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "a56aa4bc0ff8278c3d4b577dc33e814b82e2f798",
         "type": "github"
       },
       "original": {
@@ -12854,8 +16168,8 @@
         "claude-code-aarch64-linux": "claude-code-aarch64-linux_4",
         "claude-code-x86_64-linux": "claude-code-x86_64-linux_4",
         "devenv": "devenv_5",
-        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_2",
-        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_2",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux",
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_4",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_4",
         "nixpkgs": "nixpkgs_14",
@@ -12870,11 +16184,11 @@
         "wrapped-pi": "wrapped-pi_2"
       },
       "locked": {
-        "lastModified": 1794705856,
-        "narHash": "sha256-vBaVj1SPZxGezlHl79H6TXcwi0BIUh07ffqvqgbsFvM=",
+        "lastModified": 1794756712,
+        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "447cd4cb453a2b8d55be10bd01c34c14e5531739",
+        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
         "type": "github"
       },
       "original": {
@@ -12937,11 +16251,76 @@
     },
     "saccade_6": {
       "inputs": {
+        "claude-code-aarch64-linux": "claude-code-aarch64-linux_5",
+        "claude-code-x86_64-linux": "claude-code-x86_64-linux_5",
         "devenv": "devenv_10",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_2",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_2",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_5",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_5",
         "nixpkgs": "nixpkgs_32",
+        "nixpkgs-client": "nixpkgs-client_5",
         "rust-overlay": "rust-overlay_17",
         "saccade": "saccade_7",
+        "wrapped-pi": "wrapped-pi_7"
+      },
+      "locked": {
+        "lastModified": 1794756712,
+        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_7": {
+      "inputs": {
+        "claude-code-aarch64-linux": "claude-code-aarch64-linux_6",
+        "claude-code-x86_64-linux": "claude-code-x86_64-linux_6",
+        "devenv": "devenv_11",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_3",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_3",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_6",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_6",
+        "nixpkgs": "nixpkgs_35",
+        "nixpkgs-client": "nixpkgs-client_6",
+        "rust-overlay": "rust-overlay_19",
+        "saccade": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade"
+        ],
         "wrapped-pi": "wrapped-pi_5"
+      },
+      "locked": {
+        "lastModified": 1794705856,
+        "narHash": "sha256-vBaVj1SPZxGezlHl79H6TXcwi0BIUh07ffqvqgbsFvM=",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "rev": "447cd4cb453a2b8d55be10bd01c34c14e5531739",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "saccade",
+        "type": "github"
+      }
+    },
+    "saccade_8": {
+      "inputs": {
+        "devenv": "devenv_13",
+        "nixpkgs": "nixpkgs_41",
+        "rust-overlay": "rust-overlay_22",
+        "saccade": "saccade_9",
+        "wrapped-pi": "wrapped-pi_6"
       },
       "locked": {
         "lastModified": 1791906619,
@@ -12957,15 +16336,18 @@
         "type": "github"
       }
     },
-    "saccade_7": {
+    "saccade_9": {
       "inputs": {
-        "devenv": "devenv_11",
+        "devenv": "devenv_14",
         "llm-agents": "llm-agents_3",
-        "nixpkgs": "nixpkgs_36",
-        "rust-overlay": "rust-overlay_19",
+        "nixpkgs": "nixpkgs_45",
+        "rust-overlay": "rust-overlay_24",
         "saccade": [
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -12978,66 +16360,6 @@
         "owner": "jerrydzhang",
         "repo": "saccade",
         "rev": "a56aa4bc0ff8278c3d4b577dc33e814b82e2f798",
-        "type": "github"
-      },
-      "original": {
-        "owner": "jerrydzhang",
-        "repo": "saccade",
-        "type": "github"
-      }
-    },
-    "saccade_8": {
-      "inputs": {
-        "claude-code-aarch64-linux": "claude-code-aarch64-linux_5",
-        "claude-code-x86_64-linux": "claude-code-x86_64-linux_5",
-        "devenv": "devenv_13",
-        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_5",
-        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_5",
-        "nixpkgs": "nixpkgs_44",
-        "nixpkgs-client": "nixpkgs-client_5",
-        "rust-overlay": "rust-overlay_22",
-        "saccade": "saccade_9",
-        "wrapped-pi": "wrapped-pi_9"
-      },
-      "locked": {
-        "lastModified": 1794856160,
-        "narHash": "sha256-nnty2qrTJPfZIj0pjUL8pWkHuFVCytL8xZE08DVNseo=",
-        "owner": "jerrydzhang",
-        "repo": "saccade",
-        "rev": "57430a6a0134624d4250d6879670d24487651051",
-        "type": "github"
-      },
-      "original": {
-        "owner": "jerrydzhang",
-        "repo": "saccade",
-        "type": "github"
-      }
-    },
-    "saccade_9": {
-      "inputs": {
-        "claude-code-aarch64-linux": "claude-code-aarch64-linux_6",
-        "claude-code-x86_64-linux": "claude-code-x86_64-linux_6",
-        "devenv": "devenv_14",
-        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_3",
-        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_3",
-        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_6",
-        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_6",
-        "nixpkgs": "nixpkgs_47",
-        "nixpkgs-client": "nixpkgs-client_6",
-        "rust-overlay": "rust-overlay_24",
-        "saccade": [
-          "wrapped-pi",
-          "saccade",
-          "saccade"
-        ],
-        "wrapped-pi": "wrapped-pi_7"
-      },
-      "locked": {
-        "lastModified": 1794756712,
-        "narHash": "sha256-foQX+Rs3q4WH0IyR/7ObCAVna6ATDbbmAzAo+zAHm+w=",
-        "owner": "jerrydzhang",
-        "repo": "saccade",
-        "rev": "fc67f8dc0deebbc109d304a5fd6abad857a7a05e",
         "type": "github"
       },
       "original": {
@@ -13062,6 +16384,36 @@
       }
     },
     "systems_10": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_11": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_12": {
       "locked": {
         "lastModified": 1681028828,
         "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
@@ -13336,7 +16688,9 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "wrapped-pi",
+          "devenv",
+          "nixd",
           "nixpkgs"
         ]
       },
@@ -13362,8 +16716,11 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "llm-agents",
+          "saccade",
+          "devenv",
+          "nixd",
           "nixpkgs"
         ]
       },
@@ -13384,7 +16741,15 @@
     "treefmt-nix_16": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "devenv",
           "nixd",
           "nixpkgs"
@@ -13407,10 +16772,16 @@
     "treefmt-nix_17": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
-          "devenv",
-          "nixd",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
           "nixpkgs"
         ]
       },
@@ -13431,11 +16802,16 @@
     "treefmt-nix_18": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
-          "devenv",
-          "nixd",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
@@ -13456,8 +16832,10 @@
     "treefmt-nix_19": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "devenv",
@@ -13505,8 +16883,10 @@
     "treefmt-nix_20": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13532,8 +16912,10 @@
     "treefmt-nix_21": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13560,8 +16942,10 @@
     "treefmt-nix_22": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13587,8 +16971,10 @@
     "treefmt-nix_23": {
       "inputs": {
         "nixpkgs": [
+          "saccade",
           "wrapped-pi",
           "saccade",
+          "wrapped-pi",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13615,8 +17001,6 @@
       "inputs": {
         "nixpkgs": [
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixd",
           "nixpkgs"
@@ -13639,8 +17023,6 @@
     "treefmt-nix_25": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "devenv",
@@ -13667,8 +17049,6 @@
         "nixpkgs": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixd",
@@ -13692,8 +17072,6 @@
     "treefmt-nix_27": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -13722,8 +17100,6 @@
         "nixpkgs": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13749,8 +17125,6 @@
     "treefmt-nix_29": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -13805,8 +17179,6 @@
         "nixpkgs": [
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -13832,8 +17204,6 @@
     "treefmt-nix_31": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "saccade",
@@ -13864,8 +17234,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
-          "wrapped-pi",
           "devenv",
           "nixd",
           "nixpkgs"
@@ -13892,8 +17260,6 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
-          "saccade",
           "devenv",
           "nixd",
           "nixpkgs"
@@ -13916,8 +17282,6 @@
     "treefmt-nix_34": {
       "inputs": {
         "nixpkgs": [
-          "wrapped-pi",
-          "saccade",
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
@@ -13949,10 +17313,10 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "saccade",
-          "saccade",
-          "llm-agents",
+          "devenv",
+          "nixd",
           "nixpkgs"
         ]
       },
@@ -13976,6 +17340,95 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_37": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_38": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_39": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
           "saccade",
           "wrapped-pi",
           "saccade",
@@ -14006,6 +17459,146 @@
           "saccade",
           "devenv",
           "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_40": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "devenv",
+          "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_41": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "devenv",
+          "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_42": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "devenv",
+          "nixd",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_43": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
+          "llm-agents",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786901030,
+        "narHash": "sha256-WSFCsDSE5ffgD2MqzkM2CYjeFiKhRF/dJUN8uedb6YE=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "27b3b12a8e6375f28ebe122f07d230ca5459bbfa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "treefmt-nix_44": {
+      "inputs": {
+        "nixpkgs": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
@@ -14169,11 +17762,11 @@
         "saccade": "saccade_2"
       },
       "locked": {
-        "lastModified": 1794784245,
-        "narHash": "sha256-5DXT5TJFHHhfAZtm8x/wX6b9mappHk5JHnRr9Z6Hyjk=",
+        "lastModified": 1794862982,
+        "narHash": "sha256-RTT3oX2IF0BjipeiRjznjyYpHSkickxRwfc4HHXD+vw=",
         "owner": "jerrydzhang",
         "repo": "wrapped-pi",
-        "rev": "c15d83721f8356a01b8dc27804a00ff4397827ee",
+        "rev": "09a0746039684c716b59bb3bfed4f49b0203ef20",
         "type": "github"
       },
       "original": {
@@ -14230,6 +17823,27 @@
         "saccade": "saccade_16"
       },
       "locked": {
+        "lastModified": 1794784245,
+        "narHash": "sha256-5DXT5TJFHHhfAZtm8x/wX6b9mappHk5JHnRr9Z6Hyjk=",
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "rev": "c15d83721f8356a01b8dc27804a00ff4397827ee",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "type": "github"
+      }
+    },
+    "wrapped-pi_13": {
+      "inputs": {
+        "devenv": "devenv_27",
+        "nixpkgs": "nixpkgs_92",
+        "pi": "pi_9",
+        "saccade": "saccade_18"
+      },
+      "locked": {
         "lastModified": 1792692987,
         "narHash": "sha256-CuJGq3Twm5YPbnV0f4JZ1o+lVFpf0eWx/hNOm1AULHA=",
         "owner": "jerrydzhang",
@@ -14243,10 +17857,50 @@
         "type": "github"
       }
     },
-    "wrapped-pi_13": {
+    "wrapped-pi_14": {
       "inputs": {
         "llm-agents": "llm-agents_10",
-        "nixpkgs": "nixpkgs_93"
+        "nixpkgs": "nixpkgs_102"
+      },
+      "locked": {
+        "lastModified": 1791904968,
+        "narHash": "sha256-BlvCBO1bzk7cU7r5GZNWWXZGcnqKkmbcIjo59U0v8jQ=",
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "rev": "5e0e822d081d8c73d972db063bdd303dae8825a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "type": "github"
+      }
+    },
+    "wrapped-pi_15": {
+      "inputs": {
+        "devenv": "devenv_30",
+        "nixpkgs": "nixpkgs_104",
+        "pi": "pi_10",
+        "saccade": "saccade_20"
+      },
+      "locked": {
+        "lastModified": 1792692987,
+        "narHash": "sha256-CuJGq3Twm5YPbnV0f4JZ1o+lVFpf0eWx/hNOm1AULHA=",
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "rev": "4a77089a44cfbf4efa60c9085f7327dd1811b120",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "type": "github"
+      }
+    },
+    "wrapped-pi_16": {
+      "inputs": {
+        "llm-agents": "llm-agents_12",
+        "nixpkgs": "nixpkgs_114"
       },
       "locked": {
         "lastModified": 1791904968,
@@ -14310,6 +17964,27 @@
         "saccade": "saccade_6"
       },
       "locked": {
+        "lastModified": 1794784245,
+        "narHash": "sha256-5DXT5TJFHHhfAZtm8x/wX6b9mappHk5JHnRr9Z6Hyjk=",
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "rev": "c15d83721f8356a01b8dc27804a00ff4397827ee",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jerrydzhang",
+        "repo": "wrapped-pi",
+        "type": "github"
+      }
+    },
+    "wrapped-pi_5": {
+      "inputs": {
+        "devenv": "devenv_12",
+        "nixpkgs": "nixpkgs_38",
+        "pi": "pi_4",
+        "saccade": "saccade_8"
+      },
+      "locked": {
         "lastModified": 1792692987,
         "narHash": "sha256-CuJGq3Twm5YPbnV0f4JZ1o+lVFpf0eWx/hNOm1AULHA=",
         "owner": "jerrydzhang",
@@ -14323,10 +17998,10 @@
         "type": "github"
       }
     },
-    "wrapped-pi_5": {
+    "wrapped-pi_6": {
       "inputs": {
         "llm-agents": "llm-agents_4",
-        "nixpkgs": "nixpkgs_39"
+        "nixpkgs": "nixpkgs_48"
       },
       "locked": {
         "lastModified": 1791904968,
@@ -14334,27 +18009,6 @@
         "owner": "jerrydzhang",
         "repo": "wrapped-pi",
         "rev": "5e0e822d081d8c73d972db063bdd303dae8825a0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "jerrydzhang",
-        "repo": "wrapped-pi",
-        "type": "github"
-      }
-    },
-    "wrapped-pi_6": {
-      "inputs": {
-        "devenv": "devenv_12",
-        "nixpkgs": "nixpkgs_41",
-        "pi": "pi_4",
-        "saccade": "saccade_8"
-      },
-      "locked": {
-        "lastModified": 1794862982,
-        "narHash": "sha256-RTT3oX2IF0BjipeiRjznjyYpHSkickxRwfc4HHXD+vw=",
-        "owner": "jerrydzhang",
-        "repo": "wrapped-pi",
-        "rev": "09a0746039684c716b59bb3bfed4f49b0203ef20",
         "type": "github"
       },
       "original": {
@@ -14411,11 +18065,11 @@
         "saccade": "saccade_12"
       },
       "locked": {
-        "lastModified": 1794784245,
-        "narHash": "sha256-5DXT5TJFHHhfAZtm8x/wX6b9mappHk5JHnRr9Z6Hyjk=",
+        "lastModified": 1794862982,
+        "narHash": "sha256-RTT3oX2IF0BjipeiRjznjyYpHSkickxRwfc4HHXD+vw=",
         "owner": "jerrydzhang",
         "repo": "wrapped-pi",
-        "rev": "c15d83721f8356a01b8dc27804a00ff4397827ee",
+        "rev": "09a0746039684c716b59bb3bfed4f49b0203ef20",
         "type": "github"
       },
       "original": {
