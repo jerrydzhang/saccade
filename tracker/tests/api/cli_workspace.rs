@@ -2174,9 +2174,13 @@ async fn the_sweep_leaves_a_no_commits_workspace_and_a_named_clean_keeps_its_bra
     let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
     assert!(ok, "the sweep preview refused: {out}{err}");
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 1, "{out}");
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(
+        lines[1], "preview: nothing was cleaned; --yes acts",
+        "{out}"
+    );
     assert!(
-        lines[0].starts_with(&format!("left    w-{seq}  "))
+        lines[0].starts_with(&format!("would leave w-{seq}  "))
             && lines[0].contains(&branch)
             && lines[0].contains("(no commits)"),
         "{out}"
@@ -2432,36 +2436,40 @@ async fn the_sweep_previews_the_sketch_s_lines_and_acts_on_nothing() {
     let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
     assert!(ok, "the sweep preview refused: {out}{err}");
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 6, "{out}");
+    assert_eq!(lines.len(), 7, "{out}");
+    assert_eq!(
+        lines[6], "preview: nothing was cleaned; --yes acts",
+        "{out}"
+    );
     let line_at = |at: usize| lines[at].to_string();
     assert!(
-        line_at(0).starts_with(&format!("cleaned w-{merged_seq}  "))
+        line_at(0).starts_with(&format!("would clean w-{merged_seq}  "))
             && line_at(0).contains(&merged_branch)
             && line_at(0).contains("(merged into main; worktree and branch removed)"),
         "{out}"
     );
     assert!(
-        line_at(1).starts_with(&format!("left    w-{unmerged_seq}  "))
+        line_at(1).starts_with(&format!("would leave w-{unmerged_seq}  "))
             && line_at(1).contains("(unmerged)"),
         "{out}"
     );
     assert!(
-        line_at(2).starts_with(&format!("left    w-{dirty_seq}  "))
+        line_at(2).starts_with(&format!("would leave w-{dirty_seq}  "))
             && line_at(2).contains("(unmerged; dirty)"),
         "{out}"
     );
     assert!(
-        line_at(3).starts_with(&format!("left    w-{mdirty_seq}  "))
+        line_at(3).starts_with(&format!("would leave w-{mdirty_seq}  "))
             && line_at(3).contains("(merged into main; dirty)"),
         "{out}"
     );
     assert!(
-        line_at(4).starts_with(&format!("left    w-{gone_seq}  "))
+        line_at(4).starts_with(&format!("would leave w-{gone_seq}  "))
             && line_at(4).contains("(worktree missing)"),
         "{out}"
     );
     assert!(
-        line_at(5).starts_with(&format!("left    w-{lost_seq}  "))
+        line_at(5).starts_with(&format!("would leave w-{lost_seq}  "))
             && line_at(5).contains("(branch missing)"),
         "{out}"
     );
@@ -2777,14 +2785,19 @@ async fn the_sweep_survives_a_refusal_mid_round_and_reports_it() {
     let (ok, out, err) = rig.sac(&["workspace", "clean", "--merged"]);
     assert!(ok, "the preview refused: {out}{err}");
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines.len(), 3, "{out}");
+    assert_eq!(
+        lines[2], "preview: nothing was cleaned; --yes acts",
+        "{out}"
+    );
     assert!(
-        lines[0].starts_with(&format!("left    w-{c_seq}  "))
+        lines[0].starts_with(&format!("would leave w-{c_seq}  "))
             && lines[0].contains("(worktree missing)"),
         "{out}"
     );
     assert!(
-        lines[1].starts_with(&format!("left    w-{d_seq}  ")) && lines[1].contains("(unmerged)"),
+        lines[1].starts_with(&format!("would leave w-{d_seq}  "))
+            && lines[1].contains("(unmerged)"),
         "{out}"
     );
 

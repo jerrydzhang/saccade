@@ -558,21 +558,39 @@ fn cleaned_reason(reply: &CleanReply) -> String {
     }
 }
 
+/// The footer a preview's text face ends with, so a preview never
+/// reads as an act.
+const SWEEP_PREVIEW_FOOTER: &str = "preview: nothing was cleaned; --yes acts";
+
 /// The sweep's text face, the sketch's shape: the outcome word, the
 /// workspace, the branch, the reason in parens. The outcome word sits
-/// in its own fixed column - the vocabulary's widest, "cleaned" - so
-/// the lines align whatever the round's mix; the other columns pad to
-/// their widest cell, one space after the word, two between the rest.
-fn render_sweep(lines: &[SweepLine]) -> String {
-    let word_width = "cleaned".len();
+/// in its own fixed column - the mode's widest word, "cleaned" for an
+/// act and "would clean" for a preview - so the lines align whatever
+/// the round's mix; the other columns pad to their widest cell, one
+/// space after the word, two between the rest. A preview speaks in
+/// the conditional (would clean, would leave) and ends with the
+/// footer; the json face keeps its outcome words and says `acted`.
+fn render_sweep(lines: &[SweepLine], acted: bool) -> String {
+    let shown = |word: &'static str| -> &'static str {
+        match (acted, word) {
+            (false, "cleaned") => "would clean",
+            (false, "left") => "would leave",
+            _ => word,
+        }
+    };
+    let word_width = if acted {
+        "cleaned".len()
+    } else {
+        "would clean".len()
+    };
     let id_width = lines.iter().map(|l| l.id.len()).max().unwrap_or(0);
     let branch_width = lines.iter().map(|l| l.branch.len()).max().unwrap_or(0);
-    lines
+    let mut out = lines
         .iter()
         .map(|line| {
             format!(
                 "{:<ww$} {:<iw$}  {:<bw$}  ({})",
-                line.word,
+                shown(line.word),
                 line.id,
                 line.branch,
                 line.reason,
@@ -582,7 +600,12 @@ fn render_sweep(lines: &[SweepLine]) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if !acted && !lines.is_empty() {
+        out.push('\n');
+        out.push_str(SWEEP_PREVIEW_FOOTER);
+    }
+    out
 }
 
 /// `sac workspace clean --merged`: the standing rows decide. Without
@@ -644,7 +667,7 @@ pub(super) fn workspace_sweep_door(
         }))
         .expect("lines are plain data"));
     }
-    Ok(render_sweep(&lines))
+    Ok(render_sweep(&lines, yes))
 }
 
 #[cfg(test)]
@@ -1028,13 +1051,22 @@ mod test {
             )),
         ];
         assert_eq!(
-            render_sweep(&lines),
-            "cleaned w-41  t60-phase3b           (merged into main; worktree and branch removed)\n\
-             cleaned w-44  rewrite-parser-split  (merged into rewrite; worktree and branch removed)\n\
-             left    w-47  rewrite-lexer         (unmerged)\n\
-             left    w-48  rewrite-lexer-errors  (unmerged; dirty)\n\
-             left    w-49  fresh-cut             (no commits)"
+            render_sweep(&lines, false),
+            "would clean w-41  t60-phase3b           (merged into main; worktree and branch removed)\n\
+             would clean w-44  rewrite-parser-split  (merged into rewrite; worktree and branch removed)\n\
+             would leave w-47  rewrite-lexer         (unmerged)\n\
+             would leave w-48  rewrite-lexer-errors  (unmerged; dirty)\n\
+             would leave w-49  fresh-cut             (no commits)\n\
+             preview: nothing was cleaned; --yes acts"
         );
+        // the act speaks in the past, no footer: the same rows as acted
+        assert_eq!(
+            render_sweep(&lines[2..3], true),
+            "left    w-47  rewrite-lexer  (unmerged)"
+        );
+        // an empty round prints nothing in either mode
+        assert_eq!(render_sweep(&[], false), "");
+        assert_eq!(render_sweep(&[], true), "");
 
         // a refused clean prints as its outcome line with the
         // refusal's words, whitespace collapsed into the one line
@@ -1062,9 +1094,9 @@ mod test {
                 "code": "workspace_effect",
             })
         );
-        let mut grid = render_sweep(&lines);
+        let mut grid = render_sweep(&lines, true);
         grid.push('\n');
-        grid.push_str(&render_sweep(&[refused]));
+        grid.push_str(&render_sweep(&[refused], true));
         let refused_line = grid.lines().last().unwrap();
         assert!(refused_line.starts_with("refused w-52  "), "{refused_line}");
         assert!(refused_line.ends_with(
