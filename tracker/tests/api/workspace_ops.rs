@@ -907,7 +907,7 @@ fn board_wire_routes_hold_their_contracts() {
     // doors carry; a stranger's refuses; a preflight naming no origin
     // is no browser's
     let preflight = |origin: Option<&str>| {
-        let request = ureq::options(&format!("{url}/api/v1/windows/states"))
+        let request = ureq::options(&format!("{url}/api/v1/boards/commit"))
             .config()
             .http_status_as_error(false)
             .build();
@@ -948,12 +948,17 @@ fn board_wire_routes_hold_their_contracts() {
     // the echo rides writes: a write from an allowed origin carries its
     // origin on the answer, so the client reads the sequence its echo
     // filter and its next settled write need
-    let write = ureq::post(&format!("{url}/api/v1/windows/states"))
+    let write = ureq::post(&format!("{url}/api/v1/command"))
         .config()
         .http_status_as_error(false)
         .build()
         .header("origin", "tauri://localhost")
-        .send_json(json!({"id": "w-cors", "device": "dev-1"}))
+        .send_json(json!({
+            "context": {"actor": "pi", "tier": "agent", "scope": null},
+            "command": {"create_task": {"name": "cors echo task"}},
+            "at": null,
+            "client": "test"
+        }))
         .unwrap();
     assert_eq!(write.status().as_u16(), 200);
     assert_eq!(

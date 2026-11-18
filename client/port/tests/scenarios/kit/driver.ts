@@ -20,10 +20,6 @@ export type SeededTracker = {
   tasks: { cited: string; citing: string; citingChild: string; landing: string };
 };
 
-/** One stored window state as the tracker's window store answers it
- * (client/port/src/lib/windows.ts WindowState, the fields read here). */
-export type WindowStateView = { id: string; location: string | null; attachedHere: boolean; link: string | null };
-
 /** The throwaway tracker's door, mid-scenario (kit/tracker-wire.ts). */
 export interface TrackerDoor {
   createTask(name: string): Promise<string>;
@@ -34,10 +30,6 @@ export interface TrackerDoor {
     message: string,
     files?: readonly { path: string; content: string | Uint8Array }[],
   ): Promise<{ revision: number }>;
-  /** A window state, seen from `device`. */
-  windowState(id: string, device: string): Promise<WindowStateView>;
-  /** Fixture: a window state born and attached on `device`. */
-  attachedWindow(id: string, device: string): Promise<void>;
 }
 
 export type Tracker = SeededTracker & TrackerDoor;

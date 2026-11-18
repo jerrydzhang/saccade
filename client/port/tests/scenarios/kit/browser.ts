@@ -216,13 +216,12 @@ export type Shell = {
   windows(): ShellWindow[];
   /** A window closes: the shell stops listing it. */
   close(label: string): void;
-  /** This app's device id on the window store. */
-  device: string;
 };
 
 export type BridgedOptions = {
-  /** Other live windows besides "main": each is born and attached on
-   * this device's window store, the way its own boot would do it. */
+  /** Other live windows besides "main": plain entries in the shell's
+   * world (t-71@r3: the registry is the one owner, and the run keeps
+   * no window state anywhere else). */
   others?: string[];
   /** The shell's SACCADE_KEY_TRACE (the D1 diagnostic), off by default. */
   keyTrace?: boolean;
@@ -246,22 +245,17 @@ export const test = base.extend<{
     const seeded = inject("tracker");
     await use({ ...seeded, ...trackerDoor(seeded.base) });
   },
-  // the app with a mocked shell: one webview labelled main, a fresh
-  // device id, and the other windows the scenario names
-  bridged: async ({ tracker }, use) => {
+  // the app with a mocked shell: one webview labelled main and the
+  // other windows the scenario names, plain entries in the world
+  // eslint-disable-next-line no-empty-pattern
+  bridged: async ({}, use) => {
     const closers: (() => void)[] = [];
     await use(async (options = {}) => {
-      const device = `suite-device-${crypto.randomUUID()}`;
-      // the app's device id (client/port/src/lib/windows.ts DEVICE_KEY),
-      // fresh per test so no window state crosses tests
-      localStorage.setItem("saccade.device.id", device);
       const windows: ShellWindow[] = [{ label: "main" }];
       for (const label of options.others ?? []) {
-        const stateId = `suite-state-${crypto.randomUUID()}`;
-        await tracker.attachedWindow(stateId, device);
-        windows.push({ label, stateId });
+        windows.push({ label });
       }
-      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
+      const world: ShellWorld = { label: "main", windows, testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
       const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);
@@ -270,9 +264,13 @@ export const test = base.extend<{
         argsOf: (cmd) => world.calls.filter((call) => call.cmd === cmd).map((call) => call.args),
         windows: () => world.windows.map((entry) => ({ ...entry })),
         close: (label) => {
+          // the shell's Destroyed path: the window leaves the world and
+          // every link pointing at its label lapses with it
           world.windows = world.windows.filter((entry) => entry.label !== label);
+          for (const entry of world.windows) {
+            if (entry.link === label) delete entry.link;
+          }
         },
-        device,
       };
       return { app, shell };
     });

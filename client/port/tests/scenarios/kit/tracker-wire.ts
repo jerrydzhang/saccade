@@ -1,9 +1,9 @@
 // The scenarios' door into the running throwaway tracker: plain fetch
 // over its HTTP wire, so both realms use it (the browser test page is
 // an allowed origin; the native project runs in node). Writes commit
-// boards mid-scenario; the window-state read checks what the app
-// stored (a birth location, a link) on the store it really talks to.
-import type { TrackerDoor, WindowStateView } from "./driver.ts";
+// boards mid-scenario; the window states are the app's own now (t-71)
+// and never pass through here.
+import type { TrackerDoor } from "./driver.ts";
 
 const CONTEXT = { actor: "port-suite", tier: "agent", scope: null };
 const CLIENT = "port-suite";
@@ -56,30 +56,6 @@ export function trackerDoor(base: string): TrackerDoor {
         client: CLIENT,
       });
       return { revision: Number(reply.revision) };
-    },
-    async windowState(id, device) {
-      const reply = await call("GET", `/api/v1/windows/states/${encodeURIComponent(id)}?device=${encodeURIComponent(device)}`);
-      // the wire's own names, absent fields left out (the tracker's
-      // StateDoc): the view the scenarios read is mapped, never cast
-      const state = reply.state as { id: string; location?: string | null; attached_here?: boolean; link?: string | null };
-      return {
-        id: state.id,
-        location: state.location ?? null,
-        attachedHere: state.attached_here === true,
-        link: state.link ?? null,
-      } satisfies WindowStateView;
-    },
-    async attachedWindow(id, device) {
-      // a window this device already shows, born and attached the way
-      // a window's own boot does it (client/port/src/lib/windows.ts
-      // create + attach): the shell mock's other windows exist here
-      const created = await fetch(`${base}/api/v1/windows/states`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, device }),
-      });
-      if (created.status !== 200 && created.status !== 409) throw new Error(`window state ${id}: ${created.status}`);
-      await call("POST", `/api/v1/windows/devices/${encodeURIComponent(device)}/attach`, { state: id });
     },
   };
 }

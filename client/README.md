@@ -3,13 +3,16 @@
 The Saccade suite's native app: a Svelte 5 frontend (`port/`) inside a
 Tauri 2 shell (`port-shell/` over the shell library in
 `src-tauri/src/`). Its windows hold the instruments - a board, the task
-list - read from a tracker over its HTTP wire, with each window's state
-kept in the tracker's window store (`/api/v1/windows`): what it shows
-and the part it reads (written once they settle, restored at the next
-open, `port/src/lib/navigation/window-place.ts`), its link, and the
-board's reading layout (the text zoom and the column width,
-`port/src/lib/board/reading-layout.ts`; a tracker before 0.20.2 drops
-the width). The app is the
+list - read from a tracker over its HTTP wire. The app keeps no window
+state between runs (t-71@r3): a launch opens one fresh window, and
+what a run needs - which window is which and each window's link (the
+receiver `o` delivers into) - lives in the shell's memory (the window
+registry, `src-tauri/src/window_registry.rs`), never in any file.
+Zoom and the column width (the board's reading layout,
+`port/src/lib/board/reading-layout.ts`) are per window for the run and
+start at their defaults. Files an earlier build left on a device
+(`window-store.json`, `open-windows.json`, an old `<db>.windows`) sit
+where they are: never read, never cleaned. The app is the
 round 16 prototype's behaviour, built and tested scenario by scenario
 (t-36).
 
@@ -56,7 +59,9 @@ The native test project runs only through the gated session lane:
   declaration and asset commands with path guards, board admission
   through the shared `board-grammar` crate, the suite's window acts
   (`suite.rs`: windows, links, focus, the window jump), the window
-  registry, the look configuration, the key trace's stderr door
+  registry (the run's one memory of its windows), the look
+  configuration, the
+  key trace's stderr door
 - `src-tauri/core-client/` - the pure read-only herdr-core client,
   contract-tested in `check-fast`
 - `fixtures/` - deterministic boards and assets the frontend's fixture

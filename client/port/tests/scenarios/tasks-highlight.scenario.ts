@@ -40,7 +40,15 @@ test("j/k under a resting pointer highlight no row; a pointer move highlights it
   await expect.poll(async () => (await app.readout()).viewport.top).toBeGreaterThan(200);
   // the mark clears on the scroll event, which the engine dispatches a
   // frame after the scroll position the readout already shows: wait for
-  // it, bounded - a mark that never clears still fails here
+  // it, bounded - a mark that never clears still fails here. The bound
+  // carries the read's own cost: one evaluation is a WebDriver round
+  // trip per mounted row (64 rows here; the list does not virtualize),
+  // 834ms on a quiet machine and 1218-1341ms under the lane's load,
+  // while vitest's default 1000ms deadline runs once from the poll's
+  // start - it aborted the single evaluation mid-read even with every
+  // row already back at its baseline look, which was the flake (t-72:
+  // the native lane's failures tracked the machine's day, the dumps
+  // never showed a row marked; the clear itself was never late)
   const changed = async (): Promise<string[]> => {
     const out: string[] = [];
     for (const part of rows) {
@@ -48,5 +56,7 @@ test("j/k under a resting pointer highlight no row; a pointer move highlights it
     }
     return out;
   };
-  await expect.poll(changed, { message: "after a keyboard scroll every row looks as it did with no pointer" }).toEqual([]);
+  await expect
+    .poll(changed, { timeout: 10_000, message: "after a keyboard scroll every row looks as it did with no pointer" })
+    .toEqual([]);
 });

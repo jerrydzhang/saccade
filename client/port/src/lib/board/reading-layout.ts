@@ -1,5 +1,6 @@
 // The board's reading layout: two independent scales the human asked
-// for, held per window and carried by its window state.
+// for, held per window for the run (t-71@r3: they start at their
+// defaults in a new window and nothing writes them anywhere).
 //
 // - zoom (+ - =) scales the board's text. The column grows with it, so
 //   a line keeps its length in characters.
@@ -53,17 +54,6 @@ export function changeReadingLayout(layout: ReadingLayout, change: ReadingLayout
   }
 }
 
-/** A stored layout as the window state carries it: absent or
- * out-of-range values fall back to the default, never refuse. */
-export function readingLayoutOf(stored: { zoom?: number | null; width?: number | null }): ReadingLayout {
-  const valid = (value: number | null | undefined, min: number, max: number, fallback: number): number =>
-    typeof value === "number" && Number.isFinite(value) ? clamp(value, min, max) : fallback;
-  return {
-    zoom: valid(stored.zoom, ZOOM_MIN, ZOOM_MAX, DEFAULT_READING_LAYOUT.zoom),
-    width: valid(stored.width, WIDTH_MIN, WIDTH_MAX, DEFAULT_READING_LAYOUT.width),
-  };
-}
-
 /** The CSS custom properties the board's stylesheet reads
  * (styles/app.css: .port-board-stage, .port-board-view). */
 export function readingLayoutVars(layout: ReadingLayout): Record<string, string> {
@@ -73,64 +63,31 @@ export function readingLayoutVars(layout: ReadingLayout): Record<string, string>
   };
 }
 
-/** The window's holder of its reading layout: the current scales, a
- * key's change applied at once and written once the steps settle
- * (never per key press), and a bound state's stored layout restored
- * unless this window already changed its own - then this window's
- * layout is written to the state instead. The window supplies where
- * the CSS goes and how a write reaches its state. */
+/** The window's holder of its reading layout: the current scales and a
+ * key's change applied at once. The window supplies where the CSS
+ * goes. */
 export interface ReadingLayoutHolder {
   current(): ReadingLayout;
   change(change: ReadingLayoutChange): void;
-  /** The window's state bound (null when the bind read nothing). */
-  bound(stored: { zoom?: number | null; width?: number | null } | null): void;
   /** Re-apply the current layout (a newly attached scroller). */
   apply(): void;
-  destroy(): void;
 }
-
-export const READING_LAYOUT_SETTLE_MS = 400;
 
 export function createReadingLayoutHolder(deps: {
   apply(vars: Record<string, string>): void;
-  /** Write the layout to the window's state; a refusal is the
-   * caller's to swallow (the next change writes again). */
-  write(layout: ReadingLayout): void;
-  schedule(ms: number, run: () => void): number;
-  cancel(id: number): void;
 }): ReadingLayoutHolder {
   let layout: ReadingLayout = DEFAULT_READING_LAYOUT;
-  let changedHere = false;
-  let timer: number | null = null;
 
   function show(next: ReadingLayout): void {
     layout = next;
     deps.apply(readingLayoutVars(layout));
   }
 
-  function scheduleWrite(): void {
-    if (timer !== null) deps.cancel(timer);
-    timer = deps.schedule(READING_LAYOUT_SETTLE_MS, () => {
-      timer = null;
-      deps.write(layout);
-    });
-  }
-
   return {
     current: () => layout,
     change(change) {
-      changedHere = true;
       show(changeReadingLayout(layout, change));
-      scheduleWrite();
-    },
-    bound(stored) {
-      if (changedHere) scheduleWrite();
-      else if (stored !== null) show(readingLayoutOf(stored));
     },
     apply: () => show(layout),
-    destroy() {
-      if (timer !== null) deps.cancel(timer);
-      timer = null;
-    },
   };
 }

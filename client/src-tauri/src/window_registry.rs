@@ -1,11 +1,11 @@
-//! The window binding: which window state each webview window of this
-//! process shows, and - once the window's frontend has bound - where
-//! the window store lives and which device this is, so the shell can detach
-//! the state when the window closes. The registry is the shell's own
-//! memory, one entry per window label; the window store state itself lives on
-//! the tracker's server (t-14, t-24@r20). A window that has not bound
-//! yet answers its label alone, and the frontend binds the state it
-//! created or resumed.
+//! The suite's window registry (t-71@r3): the shell's one memory of
+//! its windows. Window identity is the LABEL. An entry carries the two
+//! facts a run needs - which window this one links to (the receiver
+//! `o` delivers into) and what place it was born to show - and the
+//! registry is their only owner, so two windows can never overwrite
+//! each other. Nothing here is written anywhere and nothing survives
+//! the process: a quit leaves no window state behind, and a launch
+//! reads none.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,20 +17,20 @@ pub struct WindowRegistry {
     entries: Arc<Mutex<HashMap<String, RegistryEntry>>>,
 }
 
-/// One window's pairing: the window store state it shows and, when the
-/// frontend has bound, the server and device its detach needs.
+/// One live window's facts: the label it links to, and the location it
+/// was born to show (the o act's new window births its receiver at the
+/// spec; the launch window was born to no place).
 #[derive(Clone, Default)]
 pub struct RegistryEntry {
-    pub state_id: String,
-    pub server: Option<String>,
-    pub device: Option<String>,
+    pub link: Option<String>,
+    pub opens_at: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct Binding {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub state_id: Option<String>,
+    pub opens_at: Option<String>,
 }
 
 impl WindowRegistry {
@@ -38,93 +38,126 @@ impl WindowRegistry {
         WindowRegistry::default()
     }
 
-    /// The state a window is known to show: a pre-seeded resume or a
-    /// completed binding.
-    pub fn state_id_of(&self, label: &str) -> Option<String> {
+    /// A window is born: its entry exists from the moment the shell
+    /// creates it, so the suite's links and lists can name it at once.
+    pub fn born(&self, label: &str, opens_at: Option<String>) {
+        self.entries
+            .lock()
+            .expect("the window registry holds")
+            .insert(
+                label.to_string(),
+                RegistryEntry {
+                    link: None,
+                    opens_at,
+                },
+            );
+    }
+
+    /// The place a window was born to show; none when it was born to
+    /// no place (the launch window) or is not live.
+    pub fn opens_at_of(&self, label: &str) -> Option<String> {
         self.entries
             .lock()
             .expect("the window registry holds")
             .get(label)
-            .map(|entry| entry.state_id.clone())
+            .and_then(|entry| entry.opens_at.clone())
     }
 
-    /// Pre-seed a window's state before the window exists: a resume
-    /// finds its state at the first binding query.
-    pub fn seed_state(&self, label: &str, state_id: &str) {
+    /// The window this one links to, when it carries a link.
+    pub fn link_of(&self, label: &str) -> Option<String> {
         self.entries
             .lock()
             .expect("the window registry holds")
-            .insert(
-                label.to_string(),
-                RegistryEntry {
-                    state_id: state_id.to_string(),
-                    server: None,
-                    device: None,
-                },
-            );
+            .get(label)
+            .and_then(|entry| entry.link.clone())
     }
 
-    /// Complete a window's binding: the state, where the window store lives,
-    /// which device this is.
-    pub fn bind(&self, label: &str, state_id: &str, server: &str, device: &str) {
-        self.entries
-            .lock()
-            .expect("the window registry holds")
-            .insert(
-                label.to_string(),
-                RegistryEntry {
-                    state_id: state_id.to_string(),
-                    server: Some(server.to_string()),
-                    device: Some(device.to_string()),
-                },
-            );
+    /// Set the from window's link: one out of a window, only to a live
+    /// window, never to itself (the honest refusals name the reason).
+    pub fn set_link(&self, from: &str, to: &str) -> Result<(), String> {
+        if from == to {
+            return Err(format!("a window does not link to itself ({from})"));
+        }
+        let mut entries = self.entries.lock().expect("the window registry holds");
+        if !entries.contains_key(from) {
+            return Err(format!("no live window carries {from}"));
+        }
+        if !entries.contains_key(to) {
+            return Err(format!("no live window carries {to}"));
+        }
+        if let Some(entry) = entries.get_mut(from) {
+            entry.link = Some(to.to_string());
+        }
+        Ok(())
     }
 
-    /// Take a window's binding: the close detach fires once, on the
-    /// destruction that ends the window.
-    pub fn take_binding(&self, label: &str) -> Option<RegistryEntry> {
-        self.entries
+    /// Unlink; unlinking a window that carries no link (or is not
+    /// live) changes nothing.
+    pub fn clear_link(&self, from: &str) {
+        if let Some(entry) = self
+            .entries
             .lock()
             .expect("the window registry holds")
-            .remove(label)
+            .get_mut(from)
+        {
+            entry.link = None;
+        }
+    }
+
+    /// A window is destroyed: its entry goes, and every link pointing
+    /// at its label lapses in the same step - a dead window is no
+    /// receiver (the old detach invariant, shell-side, race-free).
+    /// True when the window carried an entry (it was live).
+    pub fn forget(&self, label: &str) -> bool {
+        let mut entries = self.entries.lock().expect("the window registry holds");
+        let was_live = entries.remove(label).is_some();
+        for entry in entries.values_mut() {
+            if entry.link.as_deref() == Some(label) {
+                entry.link = None;
+            }
+        }
+        was_live
     }
 }
 
-/// The calling window's binding: its label and the window store state it
-/// shows, when one is known.
+/// The calling window's binding: its label and, when it was born to
+/// show a place, the place. Absent opens_at means no birth place - the
+/// window's boot falls through to the test-open channel and the E4
+/// floor.
 #[tauri::command]
 pub fn window_binding(
     registry: tauri::State<'_, WindowRegistry>,
     window: tauri::WebviewWindow,
 ) -> Binding {
     let label = window.label().to_string();
-    let state_id = registry.state_id_of(&label);
+    let opens_at = registry.opens_at_of(&label);
     eprintln!(
         "[bridge] window_binding {}: {}",
         label,
-        state_id
+        opens_at
             .as_deref()
-            .map(|id| format!("bound to {id}"))
-            .unwrap_or_else(|| "unbound".to_string())
+            .map(|place| format!("born at {place}"))
+            .unwrap_or_else(|| "born to no place".to_string())
     );
-    Binding { label, state_id }
+    Binding { label, opens_at }
 }
 
-/// Bind the calling window to the window store state it created or resumed,
-/// naming where the window store lives and which device this is - the facts
-/// the close detach needs.
+/// Set the calling-surface link between two live windows, by label.
 #[tauri::command]
-pub fn bind_window_state(
+pub fn set_window_link(
     registry: tauri::State<'_, WindowRegistry>,
-    window: tauri::WebviewWindow,
-    state_id: String,
-    server: String,
-    device: String,
-) {
-    let label = window.label().to_string();
-    eprintln!("[bridge] bind_window_state {label} -> {state_id}");
-    registry.bind(&label, &state_id, &server, &device);
-    crate::session::bound(&state_id);
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    eprintln!("[bridge] set_window_link {from} -> {to}");
+    registry.set_link(&from, &to)
+}
+
+/// Unlink a window; idempotent.
+#[tauri::command]
+pub fn clear_window_link(registry: tauri::State<'_, WindowRegistry>, from: String) {
+    eprintln!("[bridge] clear_window_link {from}");
+    registry.clear_link(&from);
 }
 
 #[cfg(test)]
@@ -132,21 +165,49 @@ mod test {
     use super::*;
 
     #[test]
-    fn a_window_seeds_binds_and_takes_its_binding_once() {
+    fn a_window_is_born_links_and_lapses_on_close() {
         let registry = WindowRegistry::new();
-        // the resume path: the state is seeded before the window exists
-        registry.seed_state("w-1", "s-9");
-        assert_eq!(registry.state_id_of("w-1").as_deref(), Some("s-9"));
-        // the frontend completes the binding with the detach facts
-        registry.bind("w-1", "s-9", "http://127.0.0.1:8811", "dev-1");
-        let entry = registry.take_binding("w-1").expect("the binding stands");
-        assert_eq!(entry.state_id, "s-9");
-        assert_eq!(entry.server.as_deref(), Some("http://127.0.0.1:8811"));
-        assert_eq!(entry.device.as_deref(), Some("dev-1"));
-        // the take is once: the destruction that ends the window
-        assert!(registry.take_binding("w-1").is_none());
-        assert!(registry.state_id_of("w-1").is_none());
-        // a window that never bound answers none
-        assert!(registry.state_id_of("main").is_none());
+        // the launch window: live from the shell's setup, born to no place
+        registry.born("main", None);
+        // the o act's new window: born at a place
+        registry.born("w-1", Some("host/repo/t-1@r2".into()));
+        assert_eq!(
+            registry.opens_at_of("w-1").as_deref(),
+            Some("host/repo/t-1@r2")
+        );
+        assert_eq!(
+            registry.opens_at_of("main"),
+            None,
+            "the launch window was born to no place"
+        );
+        // the link: between live windows only, never to itself
+        assert!(
+            registry.set_link("main", "w-9").is_err(),
+            "a target no live window carries refuses"
+        );
+        assert!(
+            registry.set_link("w-9", "main").is_err(),
+            "a source no live window carries refuses"
+        );
+        assert!(
+            registry.set_link("main", "main").is_err(),
+            "a window does not link to itself"
+        );
+        registry.set_link("main", "w-1").expect("live windows link");
+        assert_eq!(registry.link_of("main").as_deref(), Some("w-1"));
+        // the close: the entry goes and the link pointing at the
+        // closed window lapses in the same step
+        assert!(registry.forget("w-1"), "the destroyed window was live");
+        assert_eq!(registry.link_of("main"), None, "the dead link lapsed");
+        assert!(!registry.forget("w-1"), "the forget is once");
+        // unlinking without a link changes nothing
+        registry.clear_link("main");
+        assert_eq!(registry.link_of("main"), None);
+        // a link survives its source's own close only in life: while
+        // both windows live, the link stands
+        registry.born("w-2", None);
+        registry.set_link("main", "w-2").expect("live windows link");
+        registry.clear_link("main");
+        assert_eq!(registry.link_of("main"), None);
     }
 }

@@ -35,8 +35,8 @@ export type ReferenceSource = Readonly<{
 export type ReferencePorts = Readonly<{
   open(spec: string, part: string | null): void;
   copy(payload: string): void;
-  /** The elsewhere acts (o/i/w, S18): present only when the window
-   * has bound its window-store state - the acts appear with it. */
+  /** The elsewhere acts (o/i/w, S18): present only when the boot's
+   * binding facts have answered - the acts appear with them. */
   elsewhere?: (spec: string, act: ElsewhereAct) => void;
   /** The figure's enlarge act (S04): opens the window's inspection
    * surface for the part. */

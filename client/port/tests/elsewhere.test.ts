@@ -6,10 +6,7 @@ import { test } from "vitest";
 
 import { assignChips, elsewhereDecision, type SuiteWindow } from "../src/lib/elsewhere.ts";
 
-const two: SuiteWindow[] = [
-  { label: "main", state_id: "s-1" },
-  { label: "w-2", state_id: "s-2" },
-];
+const two: SuiteWindow[] = [{ label: "main" }, { label: "w-2", link: "main" }];
 
 test("o delivers at a remembered link without asking", () => {
   assert.deepEqual(elsewhereDecision("link", { linkLabel: "w-2", windows: two }), {

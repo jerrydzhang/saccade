@@ -1,7 +1,7 @@
 // The elsewhere surface's pure half (S18): which move an OPEN act
 // makes, the ask's chip assignment, and the ask state's shape. The
-// window store, the shell invokes and the delivery ride App.ts - what
-// is here is only what a test can pin without either.
+// shell invokes and the delivery ride App.ts - what is here is only
+// what a test can pin without either.
 
 /** The three OPEN acts (the r90 KINDS order: f follow-here FIRST, then
  * the OPEN acts, then y copy): o delivers at the link (asking when no
@@ -9,10 +9,12 @@
  * always opens a new viewer. */
 export type ElsewhereAct = "link" | "once" | "new";
 
-/** One window the shell can see: its label and, when it carries one,
- * the window-store state it is showing. The shell serializes the
- * state field snake_case (serde default, no rename). */
-export type SuiteWindow = { label: string; state_id?: string | null };
+/** One window the shell can see: its label (the window's identity,
+ * t-71@r3) and, when it carries one, the window it links to (the
+ * receiver `o` delivers into; the shell lapses links to closed
+ * windows itself). The shell serializes the link field snake_case
+ * (serde default, no rename) and skips it when none. */
+export type SuiteWindow = { label: string; link?: string | null };
 
 /** The decision an OPEN act makes given the live world: deliver at the
  * remembered link, open (and possibly become) a new window, or ask

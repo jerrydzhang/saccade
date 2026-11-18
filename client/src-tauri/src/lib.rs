@@ -7,7 +7,6 @@
 pub mod board_validate;
 pub mod commands;
 pub mod look_config;
-pub mod session;
 pub mod shell_probe;
 pub mod suite;
 pub mod window_registry;
@@ -31,7 +30,7 @@ pub fn run() {
         if console_requested { "on" } else { "off" }
     );
 
-    // the registry before the builder: the close detach's hook needs
+    // the registry before the builder: the close forget's hook needs
     // it, and the windows need the same registry managed
     let registry = window_registry::WindowRegistry::new();
     tauri::Builder::default()
@@ -58,7 +57,8 @@ pub fn run() {
             commands::shell_probe_active,
             commands::shell_probe_report,
             window_registry::window_binding,
-            window_registry::bind_window_state,
+            window_registry::set_window_link,
+            window_registry::clear_window_link,
             suite::suite_windows,
             suite::open_suite_window,
             suite::focus_suite_window,
@@ -66,7 +66,6 @@ pub fn run() {
             suite::broadcast_jump_labels_clear,
             suite::open_in_window,
             suite::window_focus_state,
-            session::last_session,
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
@@ -105,9 +104,6 @@ pub fn run() {
                     .unwrap_or_else(|| "unavailable".into())
             );
             look_config::init(dir);
-            // launch restore (t-34@r6 change 4): the windows open at the
-            // last quit, remembered in the app's data directory
-            session::init(app.path().app_data_dir().ok());
             // the app's ONE Herdr event feed (t-24@r22): the socket
             // resolved once here; none, it dials nothing and the
             // instruments read an empty table
@@ -116,8 +112,11 @@ pub fn run() {
                     .map(|path| path.to_path_buf())
                     .map_err(|fail| fail.to_string()),
             );
-            // the window registry: which window state each window shows
-            // (t-19); the shell's own memory, never a record fact
+            // the window registry (t-71@r3): the shell's one memory of
+            // its windows - each label's link and birth place; never a
+            // record fact, never written anywhere. The launch window is
+            // live from here, born to no place.
+            registry.born("main", None);
             app.manage(registry);
             // the shell feasibility probe (t-19): test-only machinery,
             // inert unless the lane sets SAC_APP_SHELL_PROBE

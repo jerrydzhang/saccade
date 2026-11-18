@@ -13,8 +13,10 @@
 // which arguments, and changes the shell's world (a window closing).
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
-/** One live suite window as the shell registry knows it. */
-export type ShellWindow = { label: string; stateId?: string };
+/** One live suite window as the shell registry knows it: the label is
+ * the window's identity, the link names the window it receives `o`
+ * into, opensAt is the place it was born to show. */
+export type ShellWindow = { label: string; link?: string; opensAt?: string };
 
 /** One shell command the app invoked, with its arguments. */
 export type ShellCall = { cmd: string; args: Record<string, unknown> };
@@ -24,8 +26,6 @@ export type ShellWorld = {
   label: string;
   /** Every live suite window, this one included. */
   windows: ShellWindow[];
-  /** The launch restore's memory: taken once, then empty. */
-  lastSession: string[];
   /** The lanes' test-open channel (SAC_APP_TEST_OPEN). */
   testOpen: string | null;
   /** Every invoke, in order. */
@@ -62,8 +62,12 @@ function own(world: ShellWorld): ShellWindow {
 }
 
 // serde's Option skip_serializing_if = "Option::is_none": absent, never null
-function withState(label: string, stateId: string | undefined): { label: string; state_id?: string } {
-  return stateId === undefined ? { label } : { label, state_id: stateId };
+function withLink(label: string, link: string | undefined): { label: string; link?: string } {
+  return link === undefined ? { label } : { label, link: link };
+}
+
+function withOpensAt(label: string, opensAt: string | undefined): { label: string; opens_at?: string } {
+  return opensAt === undefined ? { label } : { label, opens_at: opensAt };
 }
 
 export function installShell(world: ShellWorld): void {
@@ -76,29 +80,36 @@ export function installShell(world: ShellWorld): void {
       // commands.rs test_open() -> Option<String>
       case "test_open":
         return world.testOpen;
-      // window_registry.rs window_binding(window) -> Binding { label, state_id: Option<String> }
+      // window_registry.rs window_binding(window) -> Binding { label, opens_at: Option<String> }
       case "window_binding":
-        return withState(world.label, own(world).stateId);
-      // window_registry.rs bind_window_state(window, state_id, server, device) -> ()
-      case "bind_window_state":
-        own(world).stateId = String(args.stateId);
+        return withOpensAt(world.label, own(world).opensAt);
+      // window_registry.rs set_window_link(registry, from, to) -> Result<(), String>
+      case "set_window_link": {
+        const from = String(args.from);
+        const to = String(args.to);
+        if (from === to) throw `a window does not link to itself (${from})`;
+        if (!world.windows.some((entry) => entry.label === from)) throw `no live window carries ${from}`;
+        if (!world.windows.some((entry) => entry.label === to)) throw `no live window carries ${to}`;
+        const source = world.windows.find((entry) => entry.label === from)!;
+        source.link = to;
         return null;
-      // session.rs last_session() -> Vec<String>, taken once
-      case "last_session": {
-        const last = world.lastSession;
-        world.lastSession = [];
-        return last;
       }
-      // suite.rs suite_windows(app, registry) -> Vec<SuiteWindow { label, state_id }>, label order
+      // window_registry.rs clear_window_link(registry, from) -> ()
+      case "clear_window_link": {
+        const source = world.windows.find((entry) => entry.label === String(args.from));
+        if (source !== undefined) delete source.link;
+        return null;
+      }
+      // suite.rs suite_windows(app, registry) -> Vec<SuiteWindow { label, link }>, label order
       case "suite_windows":
         return [...world.windows]
           .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
-          .map((entry) => withState(entry.label, entry.stateId));
-      // suite.rs open_suite_window(app, registry, state_id: Option<String>) -> Result<String, String>
+          .map((entry) => withLink(entry.label, entry.link));
+      // suite.rs open_suite_window(app, registry, location: Option<String>) -> Result<String, String>
       case "open_suite_window": {
         const label = freshLabel(world);
-        const stateId = typeof args.stateId === "string" ? args.stateId : undefined;
-        world.windows.push(stateId === undefined ? { label } : { label, stateId });
+        const location = typeof args.location === "string" ? args.location : undefined;
+        world.windows.push(location === undefined ? { label } : { label, opensAt: location });
         return label;
       }
       // suite.rs focus_suite_window(app, label) -> Result<(), String>

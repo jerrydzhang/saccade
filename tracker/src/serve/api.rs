@@ -5,7 +5,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -60,35 +60,6 @@ pub fn routes() -> Router<AppState> {
         .route("/view/v1", get(crate::serve::pages::view_root))
         .route("/view/v1/", get(crate::serve::pages::view_root))
         .route("/view/v1/{*location}", get(crate::serve::pages::view_page))
-        // the window store: the suite's window-state door, outside the record
-        // (t-14 ratified, t-24@r20); same edge, same origin policy, the
-        // same conceded write boundary as /api/v1
-        .route("/api/v1/windows", get(crate::serve::windows::windows_root))
-        .route("/api/v1/windows/", get(crate::serve::windows::windows_root))
-        .route(
-            "/api/v1/windows/states",
-            get(crate::serve::windows::window_states)
-                .post(crate::serve::windows::window_state_create),
-        )
-        .route(
-            "/api/v1/windows/states/{id}",
-            get(crate::serve::windows::window_state_get)
-                .patch(crate::serve::windows::window_state_patch)
-                .delete(crate::serve::windows::window_state_discard),
-        )
-        .route(
-            "/api/v1/windows/devices/{device}/attach",
-            post(crate::serve::windows::windows_attach),
-        )
-        .route(
-            "/api/v1/windows/devices/{device}/detach",
-            post(crate::serve::windows::windows_detach),
-        )
-        .route(
-            "/api/v1/windows/devices/{device}/links/{from}",
-            put(crate::serve::windows::window_link_set)
-                .delete(crate::serve::windows::window_link_clear),
-        )
 }
 
 async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
