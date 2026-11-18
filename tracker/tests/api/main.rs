@@ -9,5 +9,4 @@ mod destination;
 mod lifecycle;
 mod pages;
 mod pty_guard;
-mod windows;
 mod workspace_ops;

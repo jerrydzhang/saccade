@@ -120,9 +120,6 @@ pub struct AppState {
     /// time: loopback names and the bind address are always accepted,
     /// anything else is a rebound name and refuses before routing.
     pub(crate) allowed_hosts: Arc<[String]>,
-    /// The suite's window store (t-14, t-24@r20): its own file
-    /// beside the db, opened on first /api/v1/windows use, with its own wake.
-    pub windows_door: crate::serve::windows::WindowsDoor,
 }
 
 pub struct Snapshot {
@@ -196,7 +193,6 @@ impl AppState {
                 .map(|origin| origin.to_string())
                 .collect(),
             allowed_hosts: Arc::from([]),
-            windows_door: crate::serve::windows::WindowsDoor::default(),
         })
     }
 
