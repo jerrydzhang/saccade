@@ -1,7 +1,7 @@
 // The port's real contexts: the window's own surface commands and the
 // Board instrument's reading commands. Every context validates at
-// construction - collisions are errors at load (t-36@r49 standing
-// policy, wired by r65), never silent shadowing.
+// construction - collisions are errors at load (the standing
+// policy), never silent shadowing.
 
 import {
   commandContext,
@@ -19,14 +19,14 @@ import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 // window surface, not a board-content action): space-space opens it,
 // Escape closes the picker only while it is open. Find belongs to
 // the reading instrument, not this window command table: it is `/`
-// alone, bound in the board's reading context (t-59 removed space /).
+// alone, bound in the board's reading context (no space /).
 export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
   pickerIsOpen(): boolean;
   trailBack(): boolean;
   trailForward(): boolean;
-  /** space-h: history mode on the active board (t-49): enter or leave. */
+  /** space-h: history mode on the active board: enter or leave. */
   toggleHistory?(): void;
   /** space-l: the link act - labels over windows, a key sets the
    * link (the prototype's D1 modal shape). */
@@ -60,7 +60,7 @@ export const PINNED_CHORDS: readonly { key: string; ctrl: boolean }[] = [
 ];
 
 // The modifier keys themselves: a bare press is never a command and
-// never consumed (m-536: the trace showed key=Super consumed). The
+// never consumed (the trace showed key=Super consumed). The
 // seam passes them through before any routing.
 export const MODIFIER_KEYS: ReadonlySet<string> = new Set([
   "Shift", "Control", "Alt", "AltGraph", "Meta", "Super", "Hyper", "OS", "CapsLock", "NumLock", "Fn", "FnLock",
@@ -76,7 +76,7 @@ export function isPinnedChord(stroke: {
   return PINNED_CHORDS.some(
     (chord) =>
       stroke.ctrl === chord.ctrl &&
-      // a symbol's character already carries Shift (m-552): Ctrl-+ is
+      // a symbol's character already carries Shift (the shift rule): Ctrl-+ is
       // Ctrl+Shift+= on a US layout; a letter chord never takes Shift
       (!stroke.shift || !/^[a-z]$/.test(chord.key)) &&
       !stroke.alt &&
@@ -130,7 +130,7 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.showHelp(),
       },
       // the character carries its Shift (input-context.ts
-      // strokeMatches, m-552): one spelling for every layout
+      // strokeMatches' shift rule): one spelling for every layout
       keys: [sequence(key("?"))],
     },
     {
@@ -199,7 +199,8 @@ export function inspectionContext(actions: InspectionActions): InputContext {
         action: { id: "inspection.close", label: "close the inspection", run: () => actions.close() },
         keys: [sequence(key("Escape"))],
       },
-      // h/j/k/l move the VIEW as j/k move it over a board (m-550): j
+      // h/j/k/l move the VIEW as j/k move it over a board (the
+      // figure's own mapping): j
       // goes down the figure, so the stage moves up by the step
       {
         action: { id: "inspection.pan-left", label: "pan left", run: () => actions.pan(INSPECTION_PAN_PX, 0) },
@@ -242,7 +243,7 @@ export interface ReadingActions {
   scrollFraction(direction: -1 | 1, fraction: number): void;
   enterSelect(): void;
   enterFind(): void;
-  /** n/N: step the committed search's matches (the r110 ruling);
+  /** n/N: step the committed search's matches;
    * a no-op when none exist. */
   nextMatch(): void;
   prevMatch(): void;
@@ -254,13 +255,13 @@ export interface ReadingActions {
   readingLayout(change: ReadingLayoutChange): void;
   /** h l: step time in history mode; nothing outside it. */
   historyStep?(direction: -1 | 1): void;
-  /** t: track the part at the reading height, or stop (t-57). */
+  /** t: track the part at the reading height, or stop. */
   historyTrack?(): void;
   /** H L: the revision before or after that changed the tracked part. */
   historyWalk?(direction: -1 | 1): void;
 }
 
-// The frame's reading context (t-73): the shared reading keys,
+// The frame's reading context: the shared reading keys,
 // defined ONCE - j k d u f b g G over the viewport and s for select -
 // owned by the frame, never by an instrument. An instrument extends it
 // with bindings of its own (the task list adds `a`); a binding that
@@ -390,7 +391,7 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
   // below is the board's own: find and its stepping, Escape's
   // search-clear, the reading layout's zoom and column chords, and the
   // history keys when history mode exists. The board's select, menu
-  // and targets stay hand-wired until its own task (t-73).
+  // and targets stay hand-wired until its own task.
   return frameReadingContext(
     {
       scrollDown: () => actions.scrollDown(),
@@ -419,7 +420,7 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
           label: "previous match of the committed search",
           run: () => actions.prevMatch(),
         },
-        // N is the character (its case carries Shift, m-552)
+        // N is the character (its case carries Shift)
         keys: [sequence(key("N"))],
       },
       {

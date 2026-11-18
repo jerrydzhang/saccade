@@ -1,5 +1,5 @@
 // The Tasks instrument's controller (svelte-free): the control
-// plane (t-54: the "plane" location, which names no tracker) showing
+// plane (the "plane" location, which names no tracker) showing
 // one project's pipeline page - the project is the window's own state,
 // carried in the plane address's path - served as rows with
 // identities, and the return places scenario 17 needs - the departed
@@ -17,7 +17,7 @@
 // poll re-reads the page and refreshes through the pipeline when its
 // rows changed.
 //
-// The frame presents what this instrument publishes (t-73): select
+// The frame presents what this instrument publishes: select
 // mode over the targets in view, the act menu, the click paths and
 // the shared reading keys are the frame's (lib/frame/presentations.ts,
 // through the buffer access's presentations face). This controller
@@ -27,7 +27,7 @@
 // services), and keeps what is about its own data: the rail's feed,
 // the add field, the return places.
 //
-// The control plane (t-48): beside the list, a rail of the projects
+// The control plane: beside the list, a rail of the projects
 // this device has reached (switching shows a project's tasks here) and,
 // under each, its running agents grouped by Herdr's word (lib/tasks/rail.ts).
 // The rail's entries are published as targets like the rows: s labels
@@ -35,7 +35,7 @@
 // same acts. Rows label first, so a row's label is the one it had
 // before the rail.
 //
-// Registering a project is its own act (t-54, lib/tasks/add.ts): `a`
+// Registering a project is its own act (lib/tasks/add.ts): `a`
 // opens the plane's add field, Enter registers host:port/name and the
 // rail lists it; nothing opens. With no project known, the plane says
 // so and names `a` - an empty plane, never an error. The `a` key is
@@ -133,14 +133,14 @@ export interface TasksUI {
   getSelection(): string | null;
   /** The control plane's rail: projects and their running agents. */
   subscribeRail(observer: (rail: Rail) => void): () => void;
-  /** The add field (t-54): its live view, and the typing path. */
+  /** The add field: its live view, and the typing path. */
   subscribeAdd(observer: (view: AddView) => void): () => void;
   addView(): AddView;
   typeAdd(value: string): void;
 }
 
 /** How often a shown list re-reads its page (a named tunable,
- * t-36@r64; the board follows at the same pace). */
+ * a named tunable; the board follows at the same pace). */
 export const TASKS_FOLLOW_POLL_MS = 3000;
 
 const EMPTY_FRAME: TasksData = {
@@ -190,7 +190,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   });
 
-  // -- the control plane's rail (t-48) ---------------------------------
+  // -- the control plane's rail ----------------------------------------
   const railObservers = new Set<(rail: Rail) => void>();
   let words: WordsSnapshot = NO_WORDS;
   let agentPages: {
@@ -231,7 +231,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     return railOf(projects, words, currentProject(), homeTracker(), known);
   }
 
-  // -- the published targets (t-73) ------------------------------------
+  // -- the published targets -------------------------------------------
   // The frame presents what is published here: every row, then every
   // rail entry (the brief's rule: the rail stays with the task list,
   // its entries published as targets like the rows). The acts resolve
@@ -392,7 +392,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     railTimer = null;
   }
 
-  // -- the add field (t-54): registering opens nothing ----------------
+  // -- the add field: registering opens nothing -----------------------
   const addObservers = new Set<(view: AddView) => void>();
   const add = createAddProject({
     capture: (context) => buffer.interactions.capture(context),
@@ -467,7 +467,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     scope.setAsked(asked);
     if (!isPlane(address)) {
       // this buffer serves the control plane; a tracker's pages are
-      // no location of their own (t-54) - the gap is named, never
+      // no location of their own - the gap is named, never
       // guessed
       return {
         kind: "failed",
@@ -546,7 +546,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       // the plane's address carries the project it shows: Back
       // returns to that project, a relaunch reopens it
       const address: Address = { machine: PLANE_MACHINE, path: scope.frame().project ?? "" };
-      // The reading anchor (the hybrid default, r49): the row the
+      // The reading anchor (the hybrid default): the row the
       // reading position sits inside, named by its durable anchor. A
       // target without an anchor (a rail entry) cannot carry a return
       // place and is skipped, never guessed.
@@ -606,7 +606,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     },
   };
 
-  // The reading keys are the frame's, through the lease (t-73): the
+  // The reading keys are the frame's, through the lease: the
   // shared table serves j/k/d/u/f/b/g/G and s; the task list's one
   // own key is `a` (the add field). The ids are the frame's
   // (frame.*), observed nowhere.

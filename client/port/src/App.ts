@@ -78,11 +78,11 @@ import type { BufferState } from "./lib/contracts/buffer.ts";
 import { createKeyTrace } from "./lib/input/key-trace.ts";
 import { createReadingLayoutHolder } from "./lib/board/reading-layout.ts";
 
-/** The which-key popup delay in ms (the r110 tunable, nvim's
+/** The which-key popup delay in ms (a named tunable, nvim's
  * neighborhood - the human tunes). */
 export const WHICH_KEY_DELAY_MS = 400;
 
-/** Help's column title for each surface's own keys (t-59). */
+/** Help's column title for each surface's own keys. */
 const SURFACE_KEYS_TITLE: Readonly<Record<"board" | "tasks", string>> = {
   board: "this board",
   tasks: "the plane",
@@ -114,7 +114,7 @@ export interface PortWindow {
    * tracker's task list arrives asynchronously). */
   pickerContext(): PickContext;
   subscribePickerContext(observer: (context: PickContext) => void): () => void;
-  /** The which-key surface (r110): the live popup view (null when
+  /** The which-key surface: the live popup view (null when
    * hidden) and the help variant; the observation carries both. */
   whichKeyView(): { pending: boolean; view: unknown } | null;
   /** Help (`?`): every key, grouped by the context it comes from;
@@ -141,7 +141,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const buffers = createBufferFactory(windowId);
   const viewport: SliceBufferViewport = createViewport();
 
-  // The window's instruments, one per claim (t-73): the claims list
+  // The window's instruments, one per claim: the claims list
   // names them and each constructs at assembly through the registry's
   // one path - the definitions carry their own window services, so
   // the assembly never branches per instrument and never casts to an
@@ -232,7 +232,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // through the ONE open funnel below (openSpec). Text-entry
   // semantics: the key seam skips field targets, so typing inside the
   // picker stays native (scenario 10).
-  // Shift+Enter in the picker opens a new window (t-47): the w act's
+  // Shift+Enter in the picker opens a new window: the w act's
   // path, which never touches the link
   const picker = createPickerController(
     (spec) => openSpec(spec),
@@ -325,7 +325,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   // -- the elsewhere surface (S18): the window's o/i/w OPEN acts -----
   // The shell's registry is the one owner of the run's window facts
-  // (t-71@r3): this window's link is the shell's fact about its label,
+  // the shell's registry is the one owner of the run's window facts:
+  // this window's link is the shell's fact about its label,
   // answered beside every window in suite_windows, and the window
   // binding answers once at boot. The app keeps no window state
   // between runs: nothing here reads or writes any file.
@@ -335,7 +336,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let elsewhereNote: string | null = null;
   const askObservers = new Set<(state: AskState | null) => void>();
 
-  // -- the which-key surface (r110): the pending prefix's popup and
+  // -- the which-key surface: the pending prefix's popup and
   // the help variant ---------------------------------------------
   let whichKey: import("./lib/input/key-matcher.ts").WhichKeyView | null = null;
   let whichKeyPending = false;
@@ -512,9 +513,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
   }
 
-  // Opening through the link FOCUSES the receiver (human ruling m-547
-  // (3), reversing t-14's "a new window never asks for focus" for the
-  // elsewhere acts): the platform's activation request, the window
+  // Opening through the link FOCUSES the receiver (the human's
+  // ruling, reversing the old "a new window never asks for focus" for
+  // the elsewhere acts): the platform's activation request, the window
   // jump's own door. A refused request is a note, never a failed open.
   async function focusReceiver(label: string): Promise<void> {
     try {
@@ -644,7 +645,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   /** The controller ports the BOARD still carries by hand (its own
-   * task wires them through its definition, t-73): the citation acts
+   * task wires them through its definition): the citation acts
    * ride the window's one open funnel, the copy observation and the
    * elsewhere surface. The task list's services ride its definition
    * now, so no cast here touches the controller's own type. */
@@ -955,7 +956,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const target = instrumentFor(surface);
     setActive(surface);
     // the plane's part is the project it shows (its window place's
-    // part, t-54): the address carries it, no anchor reveals it
+    // part): the address carries it, no anchor reveals it
     const plane = isPlane(address);
     const place = {
       bufferId: target.id,
@@ -987,7 +988,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // the live select views (the trace's labels and typed buffer while
   // a select session holds the keys). The board's session is its own
   // (its task wires it); the frame's instruments (the tasks since
-  // t-73) hold theirs behind the lease the rendered props carry.
+  // the frame's instruments) hold theirs behind the lease the rendered props carry.
   const selectViews: Record<string, import("./lib/select/session.ts").SelectSessionView | null> = {};
   function watchSelect(surface: string): void {
     const presentation = instruments[surface]?.presentation as
@@ -1166,7 +1167,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       // label and, when it was born to show a place, the place (the o
       // act's new window births its receiver at the spec). The
       // elsewhere surface is ready when the facts have answered; no
-      // window state is read from anywhere (t-71@r3: a launch opens
+      // window state is read from anywhere (a launch opens
       // fresh, and what is on screen is the run's own)
       const binding = (await invoke("window_binding")) as {
         label: string;
@@ -1202,7 +1203,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const requested = await openTestBoard();
     if (!requested) {
       // nothing was asked for (no restore, no test open): the control
-      // plane opens now (t-54), not after the settle below - that
+      // plane opens now, not after the settle below - that
       // wait exists to report on an asked open
       const shown = displayedFrame();
       if (shown.kind === "alive" && shown.content.kind === "empty") openSpec(PLANE_LOCATION);
@@ -1239,7 +1240,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const failure = diagnostics.entries().at(-1);
       console.error(`[viewer] test open board FAILED: ${failure ? failure.message : "no board"}`);
     }
-    // E4 (t-34@r6 change 4, the ratified floor), t-54: a window with
+    // E4 (the ratified floor): a window with
     // nothing opened - a cold profile, a new window, a restore whose
     // saved location no longer parses - opens to the control plane,
     // never a blank page. With no project known yet the plane says how
@@ -1249,8 +1250,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const after = displayedFrame();
     if (after.kind !== "alive" || (after.content.kind !== "available" && after.content.kind !== "unavailable")) {
       // an open was asked for (a restore, the lanes' test open) and
-      // nothing shows: that is the failure worth logging (t-44: the
-      // line sat on the other branch and fired after every open that
+      // nothing shows: that is the failure worth logging (the line
+      // once sat on the other branch and fired after every open that
       // DID show something)
       if (requested) console.error("[viewer] test open board FAILED: no board");
       openSpec(PLANE_LOCATION);
@@ -1258,7 +1259,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     console.log(`[port] observation: ${JSON.stringify(readout())}`);
   }
 
-  // GTK's focus facts for this window (m-537): refreshed in the
+  // GTK's focus facts for this window: refreshed in the
   // background - at boot, on focus and blur, and on each readout -
   // since the readout itself is synchronous
   let focusState: PortObservation["window"]["focus"] = null;
@@ -1372,7 +1373,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     whichKeyView: () => (whichKey !== null ? { pending: whichKeyPending, view: whichKey } : null),
     helpView: () => {
       if (!helpOpen) return null;
-      // help's columns by the context the keys come from (t-59): the
+      // help's columns by the context the keys come from: the
       // active instrument's table, then the window's
       const instrument = instruments[activeSurface];
       return helpGroups([

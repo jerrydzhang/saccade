@@ -1,4 +1,4 @@
-/* The frame's surface (t-73): the stage the frame draws in - the
+/* The frame's surface: the stage the frame draws in - the
  * instrument's content, and above it the select labels and the act
  * menu.
  * A block's stylesheet reads tokens only (tests/theme.test.ts).

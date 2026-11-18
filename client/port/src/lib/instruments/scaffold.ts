@@ -1,4 +1,4 @@
-// The instrument scaffold (t-36 r105, order of work step 1): the
+// The instrument scaffold (order of work step 1): the
 // load-loop scaffolding every instrument was rebuilding by hand.
 // An instrument supplies fetch, model, and acts; the scaffold owns
 // the rest. This module starts with the pure helpers both
@@ -11,7 +11,7 @@ import { SourceUnavailableError } from "../sources.ts";
 
 /** Wrap a prepared domain frame as the buffer's published content:
  * the logical content metadata rides with its data, its targets in
- * the publication's own slot (t-73: an instrument that publishes
+ * the publication's own slot (an instrument that publishes
  * targets passes them here, resolved with its data). */
 export function readyFrame<D extends object>(
   value: Readonly<D>,

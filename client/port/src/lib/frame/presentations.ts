@@ -1,4 +1,4 @@
-// The frame's half of the instrument contract (t-73): the presentation
+// The frame's half of the instrument contract: the presentation
 // of the buffer's published targets. An instrument publishes its
 // targets with its data; this module presents them with no code in the
 // instrument - select mode over the targets in view (the geometry
@@ -39,7 +39,7 @@ export interface TargetPresentationPorts {
   viewport: Viewport;
 }
 
-/** The key a modified click runs (t-47's law, the built mapping in
+/** The key a modified click runs (the built mapping in
  * boardController/hydrate: shift and middle are the `o` act); a kind
  * that declares no `o` act acts nothing - never a hidden default. */
 const MODIFIED_CLICK_KEY = "o";

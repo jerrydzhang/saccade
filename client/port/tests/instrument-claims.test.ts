@@ -1,4 +1,4 @@
-// The claims list (t-73): one place listing which locations each
+// The claims list: one place listing which locations each
 // instrument shows. Tested on fake addresses per claim - the plane's
 // addresses are the task list's, every other address the board's; the
 // first claim that names an address wins; none is null.

@@ -1,4 +1,4 @@
-// The claims list (t-73): which locations an instrument shows, one
+// The claims list: which locations an instrument shows, one
 // place listing the instruments - the window assembly's address test,
 // lifted out of it. This wave lands the list and its tests; the
 // window's own chooser keeps its hard-coded test until the switch, so

@@ -1,4 +1,4 @@
-// The frame's presentation of published targets (t-73, the frame's
+// The frame's presentation of published targets (the frame's
 // half), tested on controlled ports the way the retired window-store
 // tests worked: memory fakes, no DOM, no transport. In-view filtering
 // through the geometry, nested labels per `inside`, the menu built

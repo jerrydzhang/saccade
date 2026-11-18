@@ -20,7 +20,7 @@ import { sourceFor } from "../src/lib/sources.ts";
 import { projectPart } from "../src/lib/tasks/rail.ts";
 
 const MACHINE = "tracker:tasks-test";
-// the control plane showing the project (t-54): the plane address's
+// the control plane showing the project: the plane address's
 // path names the project it shows
 const PLANE = { machine: "plane", path: "tasks-test" };
 
@@ -153,7 +153,7 @@ function harness(t: import("vitest").TestContext, rows: { task: string; title: s
   const opened: string[] = [];
   const elsewhere: [string, ElsewhereAct][] = [];
   const copied: string[] = [];
-  // the window services ride the definition (t-73): the harness hands
+  // the window services ride the definition: the harness hands
   // them at connect, exactly as the window assembly does
   let attachment!: InstrumentAttachment<TasksUI, TaskAnchor>;
   const host = new SliceBufferHost<TasksData, TasksUI, TaskAnchor>({
@@ -175,7 +175,7 @@ function harness(t: import("vitest").TestContext, rows: { task: string; title: s
   const press = (key: string): string =>
     built.host.handleKey({ key, ctrl: false, shift: false, alt: false, meta: false });
   // the select and menu sessions are the frame's, behind the lease
-  // (t-73): the views read off the buffer's presentations
+  // (the frame's face): the views read off the buffer's presentations
   const presentations = (): import("../src/components/Buffer.ts").TargetPresentations | null => {
     const state = built.host.snapshot();
     if (state.kind !== "alive" || state.content.kind !== "available") return null;
@@ -219,7 +219,7 @@ test("the tasks page publishes through the refresh pipeline with its rows", asyn
   if (state.kind === "alive" && state.content.kind === "available") {
     // the host's snapshot is the raw state: the frame is the content
     // frame (the registry's projection wraps it for rendering), its
-    // targets in the publication's own slot (t-73)
+    // targets in the publication's own slot
     const published = state.content.value;
     const frame = published.value;
     assert.equal(frame.status, "loaded");
@@ -227,7 +227,7 @@ test("the tasks page publishes through the refresh pipeline with its rows", asyn
     assert.equal(frame.project, "tasks-test");
     assert.equal(frame.asked, "plane", "the plane's location names no tracker");
     // the rows, then the rail's entries (the shown project publishes
-    // as a target like the rows, t-73)
+    // as a target like the rows)
     assert.equal(published.targets.length, 3);
     assert.equal(published.targets[0]?.anchor, "t-0");
     assert.equal(published.targets[0]?.id, "/content/0/content/0/row/0");
@@ -271,7 +271,7 @@ test("label selection lands on the row and opens its act menu", async (t) => {
   // labels paint while the session is active (it exits on selection)
   const view = h.selectView() as { active: boolean; labels: { part: string; label: string }[] };
   assert.equal(view.active, true);
-  // one namespace, the prototype's home-row order (m-545)
+  // one namespace, the prototype's home-row order
   assert.deepEqual(view.labels.map((entry) => entry.label), ["A", "S"]);
   assert.equal(h.press("a"), "consume");
   assert.equal(h.attachment.presentation.getSelection(), "t-0");
@@ -354,7 +354,7 @@ test("departure capture records the row under the reading position; restore retu
   // the window's trail captures through the buffer's return places
   // (RunningInstrument.places), not the content-places adapter
   const capture = h.built.host.places.capture();
-  // the plane's address carries the project it shows (t-54)
+  // the plane's address carries the project it shows
   assert.equal(capture.address.machine, "plane");
   assert.equal(capture.address.path, "tasks-test");
   if (capture.position.kind !== "anchor") {
@@ -501,7 +501,7 @@ test("the control plane: rail entries are targets - s labels them after the rows
   assert.ok(!after.projects.some((entry) => entry.name === "tasks-test"), "the forgotten shown project leaves the rail");
 });
 
-// -- the plane's own address and the add field (t-54) ----------------
+// -- the plane's own address and the add field ----------------------
 
 import { knownTrackers } from "../src/lib/tracker.ts";
 

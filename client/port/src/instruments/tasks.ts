@@ -1,5 +1,5 @@
 // The Tasks instrument definition: the component binding and the
-// window services' door (t-73). The controller (rows, published
+// window services' door. The controller (rows, published
 // targets, places) lives in tasksController.ts - svelte-free and
 // unit-tested; this module is the one place the component enters and
 // the one place the window's services (the open funnel, the elsewhere

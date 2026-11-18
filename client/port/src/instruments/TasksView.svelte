@@ -1,10 +1,10 @@
 <!-- The Tasks instrument's component: renders the published page
 model (groups, tables, task rows) inside the frame's surface - the
-frame (t-73) draws the select labels and the act menu over this
+frame draws the select labels and the act menu over this
 content from the TargetPresentations lease the props carry, and
 forwards the pointer's gestures on the marked elements. The view keeps
 what is about its own data: the rail, the add field, and the row
-highlight (m-547 (4)): it follows the POINTER'S OWN MOVEMENT, never a
+highlight: it follows the POINTER'S OWN MOVEMENT, never a
 row that scrolls under a resting pointer; a move that changes the
 pointer's coordinates marks the row under it; any scroll clears the
 mark. Row identity and the row's link ride the port's own
@@ -41,7 +41,7 @@ return anchor's identity), data-port-open names the row's link. -->
   }));
 
   // The row highlight follows the POINTER'S OWN MOVEMENT, never a row
-  // that scrolls under a resting pointer (m-547 (4); CSS :hover did
+  // that scrolls under a resting pointer; CSS :hover did
   // exactly that as j/k scrolled). A move that changes the pointer's
   // coordinates marks the row under it; any scroll clears the mark.
   // A rail entry is pointed the same way.
@@ -78,7 +78,7 @@ return anchor's identity), data-port-open names the row's link. -->
 
 <FrameSurface presentations={targets}>
   <!-- the stage's pointer handling is the row highlight only: the
-  gestures that run acts are the frame surface's (t-73) -->
+  gestures that run acts are the frame surface's -->
   <div
     class="port-tasks-stage"
     role="presentation"

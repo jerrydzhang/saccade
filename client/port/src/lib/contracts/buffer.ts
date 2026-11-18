@@ -2,7 +2,7 @@
 // diagnostics and the latest-intent publication mechanism. No DOM,
 // Svelte or transport imports.
 //
-// Port carry of the ratified contract shapes (t-36 r47-r51): the type
+// Port carry of the ratified contract shapes: the type
 // declarations come from the reviewed contract drafts. The container
 // implementation itself lives beside this contract in
 // components/Buffer.ts; the host-facing controller interfaces that the
@@ -105,9 +105,9 @@ export type BufferState<T extends object> =
   | Readonly<{ kind: "destroyed" }>;
 
 // Logical content metadata is published with its data. Both types
-// relocated here (r105) so lib never imports components for a type
+// relocated here so lib never imports components for a type
 // (audit defect e); components/Buffer re-exports them. The target
-// shape is the brief's fixed one (t-73): one published target carries
+// shape is the brief's fixed one: one published target carries
 // identity, kind, label, nesting, ordered acts and a durable anchor.
 export type TargetAct = Readonly<{ key: string; action: Action }>;
 export type TargetDefinition = Readonly<{
@@ -123,8 +123,8 @@ export type TargetDefinition = Readonly<{
    * level. */
   inside: string | null;
   /** The acts, in order. The FIRST is the primary - what a plain click
-   * and Enter run; a modified click runs the act its key names (t-47:
-   * shift/middle is the `o` act). The ratified fields (primary,
+   * and Enter run; a modified click runs the act its key names (the
+   * modified-click law: shift/middle is the `o` act). The ratified fields (primary,
    * commands, plainClick, modifiedClick) all read off this list. Acts
    * depend on window services and live state: resolved when asked
    * for, never frozen at publication. */
@@ -141,7 +141,7 @@ export type TargetDefinition = Readonly<{
 export type ReadingAnchor =
   | Readonly<{ kind: "default" }>
   | Readonly<{ kind: "anchor"; anchor: string; bounds: Bounds }>;
-// The frame's presentation of a published frame's targets (t-36 r49's
+// The frame's presentation of a published frame's targets (the ratified
 // container contracts, carried beside them so lib implements the
 // frame without importing components).
 export interface TargetPresentation {
@@ -156,7 +156,7 @@ export interface TargetPresentations {
   // (the instruments' own sessions read their targets live too), and
   // a lease whose element the gesture cannot measure acts nothing.
   presentTarget(id: string, measure: () => Bounds | null): TargetPresentation;
-  // The frame surface's face (t-73): what the frame's components
+  // The frame surface's face: what the frame's components
   // render from the leases the instrument's view receives - the select
   // session's labels, the act menu's view, session and input context,
   // the frame's reading context (the shared keys, defined once), the

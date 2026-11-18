@@ -1,4 +1,4 @@
-<!-- The frame's surface (t-73): the drawing the frame owns, hosted
+<!-- The frame's surface: the drawing the frame owns, hosted
 above the instrument's content - the select labels over the targets in
 view and the act menu - composed from the shared components the
 instruments paint through today (LabelOverlay, ActMenu). It renders
@@ -65,7 +65,7 @@ story. Presentation only - the sessions live behind the presentations. -->
     if (presentations === null) return;
     const part = partOf(event);
     if (part === null) return;
-    // a shifted or middle click is the modified click (t-47): the act
+    // a shifted or middle click is the modified click: the act
     // its key names - `o`, open elsewhere - never a second mode
     const modified = event.shiftKey || event.button === 1;
     presentations.presentTarget(part, () => measurePart(part)).activatePointer(modified ? "modified" : "plain");
