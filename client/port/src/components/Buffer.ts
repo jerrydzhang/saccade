@@ -19,7 +19,7 @@
 //   machinery yet), key matching (no bindings installed; handleKey
 //   answers allow-default), anchor capture/reveal (capture records
 //   default positions only). Each reports what it cannot yet do
-//   instead of pretending. Target presentations stopped waiting in
+//   instead of pretending. Target presentations stopped waiting:
 //   published targets get the frame's real presentation (lib/
 //   frame/presentations.ts), and the task list publishes its targets.
 

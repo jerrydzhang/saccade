@@ -58,6 +58,7 @@ export interface BufferDiagnostics {
 }
 
 import type { Action, CommandBinding, InputContext } from "./input.ts";
+import type { AnchorLocation } from "./places.ts";
 import type { SelectSessionView } from "../select/session.ts";
 import type { MenuSession, MenuView } from "../menu/session.ts";
 
@@ -167,7 +168,11 @@ export interface TargetPresentations {
   subscribe(observer: () => void): Unsubscribe;
   readingContext(extra?: readonly CommandBinding[]): InputContext;
   readingAnchor(): ReadingAnchor;
-  locateAnchor(anchor: string): Bounds | null;
+  /** Where a published anchor sits: found with its bounds, missing
+   * when no published target carries it, pending when the target is
+   * published but its geometry is not usable yet - the restoration's
+   * own three answers, from the frame. */
+  locateAnchor(anchor: string): import("./places.ts").AnchorLocation;
   /** The anchor of the label-selected target (a row's task), while a
    * published target still carries it: what selection follows across
    * a refresh. Null when the selection is anchor-less or its anchor

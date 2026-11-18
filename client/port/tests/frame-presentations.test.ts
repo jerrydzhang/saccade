@@ -197,7 +197,7 @@ test("a plain click runs the first act; a modified click runs the act its key na
   assert.equal(lease.activatePointer("plain"), true);
   assert.deepEqual(runs, ["cite.follow"], "plain click means the first act");
   assert.equal(lease.activatePointer("modified"), true);
-  assert.deepEqual(runs, ["cite.follow", "cite.open"], "shift/middle is the o act (t-47)");
+  assert.deepEqual(runs, ["cite.follow", "cite.open"], "shift/middle is the o act - the modified click's law");
 });
 
 test("a modified click on a kind with no o act acts nothing", () => {
@@ -331,11 +331,17 @@ test("targets without an anchor cannot carry a return place; none in view is the
 });
 
 test("the anchor's place locates through the published targets", () => {
-  const defs = [plain({ id: "b", anchor: "t-9", acts: () => [] })];
+  const defs = [
+    plain({ id: "b", anchor: "t-9", acts: () => [] }),
+    plain({ id: "unpainted", anchor: "t-2", acts: () => [] }),
+  ];
   const geometry = new Map([["b", box(50, 80)]]);
   const { presentations } = harness(defs, geometry);
-  assert.deepEqual(presentations.locateAnchor("t-9"), box(50, 80));
-  assert.equal(presentations.locateAnchor("t-404"), null);
+  assert.deepEqual(presentations.locateAnchor("t-9"), { kind: "found", bounds: box(50, 80) });
+  // the target is published but its geometry is not usable yet: the
+  // restore waits, it does not guess
+  assert.deepEqual(presentations.locateAnchor("t-2"), { kind: "pending" });
+  assert.deepEqual(presentations.locateAnchor("t-404"), { kind: "missing" });
 });
 
 test("the reading context's keys drive the viewport; s captures input for the labels", () => {

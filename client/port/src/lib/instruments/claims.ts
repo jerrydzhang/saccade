@@ -1,8 +1,6 @@
 // The claims list: which locations an instrument shows, one
-// place listing the instruments - the window assembly's address test,
-// lifted out of it. This wave lands the list and its tests; the
-// window's own chooser keeps its hard-coded test until the switch, so
-// this module is read by nothing else yet - by design, not omission.
+// place listing the instruments - the window assembly reads it
+// instead of a hard-coded choice between two.
 
 import type { Address } from "../contracts/places.ts";
 import { isPlane } from "../location.ts";

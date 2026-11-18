@@ -47,7 +47,7 @@
 // scrolling, the scenario 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
-import { createLoadScope, failureIssue, readyFrame } from "../lib/instruments/scaffold.ts";
+import { createLoadScope, failureIssue } from "../lib/instruments/scaffold.ts";
 import type { ContentFrame, TargetDefinition } from "../lib/contracts/buffer.ts";
 import type {
   Point,
@@ -64,7 +64,6 @@ import type {
 } from "../lib/contracts/places.ts";
 import type { AnchorData, AnchorLocation, ViewportMetrics } from "../lib/contracts/places.ts";
 export type { TaskAnchor };
-import type { InstrumentProps } from "../lib/instruments/contract.ts";
 import type { StructuredIssue } from "../lib/board/errors.ts";
 import { PLANE_MACHINE, formatLocation, isPlane } from "../lib/location.ts";
 import { createAddProject, type AddView } from "../lib/tasks/add.ts";
@@ -289,18 +288,6 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     buffer.updates.updateDisplayed((current) => ({ ...current, targets: next }));
   }
 
-  /** The shown publication's targets: the acts and the places read
-   * them live, exactly as the frame's presentation does. */
-  function shownTargets(): readonly TargetDefinition[] {
-    const state = buffer.snapshot();
-    if (state.kind !== "alive" || state.content.kind !== "available") return [];
-    return state.content.value.targets;
-  }
-
-  function railTarget(part: string): RailTarget | undefined {
-    return railTargetsOf(railNow()).find((target) => target.part === part);
-  }
-
   function forget(project: string): void {
     forgetTracker(project);
     forgotten.add(project);
@@ -492,7 +479,6 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     if (project === null) {
       shownSignature = null;
       startRail();
-      const targets = [...railTargetDefs()];
       return publish(base(null, null));
     }
     const location: Location = { machine: `tracker:${project}`, path: "tasks" };
@@ -541,28 +527,28 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       });
   }
 
+  // The frame's presentation: the places below read its anchors (the
+  // reading position's, and the restore's) instead of walking the
+  // targets themselves - the same walk in any instrument is the
+  // frame's, not this controller's. The reading keys ride the same
+  // face.
+  const presentations = buffer.presentations();
+
   const places: ContentPlaces<TaskAnchor> = {
-    captureDisplayed(viewport: ViewportMetrics): ContentCapture<TaskAnchor> {
+    captureDisplayed(_viewport: ViewportMetrics): ContentCapture<TaskAnchor> {
       // the plane's address carries the project it shows: Back
-      // returns to that project, a relaunch reopens it
+      // returns to that project, a relaunch reopens it. The anchor is
+      // the frame's: the published target the reading position sits
+      // inside, named by its durable anchor; a target without an
+      // anchor (a rail entry) cannot carry a return place and is
+      // skipped, never guessed.
       const address: Address = { machine: PLANE_MACHINE, path: scope.frame().project ?? "" };
-      // The reading anchor (the hybrid default): the row the
-      // reading position sits inside, named by its durable anchor. A
-      // target without an anchor (a rail entry) cannot carry a return
-      // place and is skipped, never guessed.
-      const viewTop = viewport.position.top;
-      for (const target of shownTargets()) {
-        if (target.anchor === null) continue;
-        const bounds = buffer.geometry.bounds(target.id);
-        if (bounds === null) continue;
-        if (viewTop >= bounds.top && viewTop < bounds.bottom) {
-          return {
-            address,
-            position: { kind: "anchor", anchor: { kind: "task", task: target.anchor }, bounds },
-          };
-        }
-      }
-      return { address, position: { kind: "default" } };
+      const reading = presentations.readingAnchor();
+      if (reading.kind === "default") return { address, position: { kind: "default" } };
+      return {
+        address,
+        position: { kind: "anchor", anchor: { kind: "task", task: reading.anchor }, bounds: reading.bounds },
+      };
     },
     async request(address: Address): Promise<RefreshOutcome> {
       // an explicit open (or a trail restore) ends any running follow
@@ -588,15 +574,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
         (data as { kind?: unknown }).kind === "task" &&
         typeof (data as { task?: unknown }).task === "string" &&
         // the anchor must name a target of THIS frame's publication
-        shownTargets().some((target) => target.anchor === (data as { task: string }).task)
+        presentations.locateAnchor((data as { task: string }).task).kind !== "missing"
       );
     },
     revealAnchor(anchor: TaskAnchor): AnchorLocation {
-      const target = shownTargets().find((entry) => entry.anchor === anchor.task);
-      if (target === undefined) return { kind: "missing" };
-      const bounds = buffer.geometry.bounds(target.id);
-      if (bounds === null) return { kind: "pending" };
-      return { kind: "found", bounds };
+      return presentations.locateAnchor(anchor.task);
     },
     defaultPosition(_viewport: ViewportMetrics): Point {
       return { left: 0, top: 0 };
@@ -606,11 +588,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     },
   };
 
-  // The reading keys are the frame's, through the lease: the
-  // shared table serves j/k/d/u/f/b/g/G and s; the task list's one
-  // own key is `a` (the add field). The ids are the frame's
-  // (frame.*), observed nowhere.
-  const reading = buffer.presentations().readingContext([
+  const reading = presentations.readingContext([
     {
       action: {
         id: "tasks.add-project",

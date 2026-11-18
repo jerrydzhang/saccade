@@ -23,6 +23,7 @@
 
 import type { Bounds, Point, ReadingAnchor, TargetDefinition, TargetPresentations, Unsubscribe, Viewport } from "../contracts/buffer.ts";
 import type { CommandBinding, InputContext } from "../contracts/input.ts";
+import type { AnchorLocation } from "../contracts/places.ts";
 import { frameReadingContext } from "../input/contexts.ts";
 import { createSelectSession, type SelectableTarget, type SelectSessionView } from "../select/session.ts";
 import { createActMenu, type ActMenu } from "../menu/create.ts";
@@ -207,10 +208,12 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
       return { kind: "default" };
     },
 
-    locateAnchor(anchor: string): Bounds | null {
+    locateAnchor(anchor: string): AnchorLocation {
       const def = ports.targets().find((entry) => entry.anchor === anchor);
-      if (def === undefined) return null;
-      return ports.bounds(def.id);
+      if (def === undefined) return { kind: "missing" };
+      const box = ports.bounds(def.id);
+      if (box === null) return { kind: "pending" };
+      return { kind: "found", bounds: box };
     },
 
     selectedAnchor(): string | null {
