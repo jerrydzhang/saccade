@@ -59,6 +59,8 @@ test("history shows a revision's changes, steps time, and leaves in place", asyn
   await app.press("l");
   await expect.poll(async () => (await app.readout()).board.history?.revision ?? null).toBe(2);
   await app.press("l");
+  // an absence: held over a window, as H past r1 and L past r4 are
+  await new Promise((resolve) => setTimeout(resolve, 300));
   expect((await app.readout()).board.history?.revision).toBe(2);
   // n: the first change
   await app.press("n");

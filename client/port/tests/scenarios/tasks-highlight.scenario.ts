@@ -38,9 +38,15 @@ test("j/k under a resting pointer highlight no row; a pointer move highlights it
   // then the keyboard scrolls the list under the resting pointer
   await app.press("j", "j", "j", "j", "j");
   await expect.poll(async () => (await app.readout()).viewport.top).toBeGreaterThan(200);
-  const changed: string[] = [];
-  for (const part of rows) {
-    if (JSON.stringify(await app.partLook(part)) !== baseline.get(part)) changed.push(part);
-  }
-  expect(changed, "after a keyboard scroll every row looks as it did with no pointer").toEqual([]);
+  // the mark clears on the scroll event, which the engine dispatches a
+  // frame after the scroll position the readout already shows: wait for
+  // it, bounded - a mark that never clears still fails here
+  const changed = async (): Promise<string[]> => {
+    const out: string[] = [];
+    for (const part of rows) {
+      if (JSON.stringify(await app.partLook(part)) !== baseline.get(part)) out.push(part);
+    }
+    return out;
+  };
+  await expect.poll(changed, { message: "after a keyboard scroll every row looks as it did with no pointer" }).toEqual([]);
 });
