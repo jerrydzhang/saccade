@@ -8,6 +8,7 @@ import {
   ctrl,
   key,
   sequence,
+  type CommandBinding,
   type InputContext,
 } from "./input-context.ts";
 import { validateNoCollisions } from "./key-matcher.ts";
@@ -373,6 +374,122 @@ export function tasksReadingContext(actions: TasksReadingActions): InputContext 
       },
       keys: [sequence(key("a"))],
     },
+  ]);
+  validateNoCollisions(context);
+  return context;
+}
+
+// The frame's reading context (t-73): the shared reading keys,
+// defined ONCE - j k d u f b g G over the viewport and s for select -
+// owned by the frame, never by an instrument. An instrument extends it
+// with bindings of its own (the task list adds `a`); a binding that
+// names a frame key is a collision and fails at construction (the
+// standing policy), never a silent rebinding. Until an instrument
+// switches (t-73's next wave), the board's and the task list's own
+// contexts still install their copies of these keys.
+export interface FrameReadingActions {
+  scrollDown(): void;
+  scrollUp(): void;
+  scrollToTop(): void;
+  scrollToBottom(): void;
+  scrollFraction(direction: -1 | 1, fraction: number): void;
+  enterSelect(): void;
+}
+
+export function frameReadingContext(
+  actions: FrameReadingActions,
+  extra: readonly CommandBinding[] = [],
+): InputContext {
+  const context = commandContext(() => [
+    {
+      action: {
+        id: "frame.scroll-down",
+        label: "scroll down a line",
+        run: () => actions.scrollDown(),
+      },
+      keys: [sequence(key("j"))],
+    },
+    {
+      action: {
+        id: "frame.scroll-up",
+        label: "scroll up a line",
+        run: () => actions.scrollUp(),
+      },
+      keys: [sequence(key("k"))],
+    },
+    {
+      action: {
+        id: "frame.scroll-top",
+        label: "scroll to the top",
+        run: () => actions.scrollToTop(),
+      },
+      keys: [sequence(key("g"), key("g"))],
+    },
+    {
+      action: {
+        id: "frame.scroll-bottom",
+        label: "scroll to the bottom",
+        run: () => actions.scrollToBottom(),
+      },
+      keys: [sequence(key("G"))],
+    },
+    {
+      action: {
+        id: "frame.page-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(key("d"))],
+    },
+    {
+      action: {
+        id: "frame.page-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(key("u"))],
+    },
+    {
+      action: {
+        id: "frame.page-mostly-down",
+        label: "page down most of the view",
+        run: () => actions.scrollFraction(1, 0.9),
+      },
+      keys: [sequence(ctrl("f"))],
+    },
+    {
+      action: {
+        id: "frame.page-mostly-up",
+        label: "page up most of the view",
+        run: () => actions.scrollFraction(-1, 0.9),
+      },
+      keys: [sequence(ctrl("b"))],
+    },
+    {
+      action: {
+        id: "frame.page-ctrl-half-down",
+        label: "page down half the view",
+        run: () => actions.scrollFraction(1, 0.5),
+      },
+      keys: [sequence(ctrl("d"))],
+    },
+    {
+      action: {
+        id: "frame.page-ctrl-half-up",
+        label: "page up half the view",
+        run: () => actions.scrollFraction(-1, 0.5),
+      },
+      keys: [sequence(ctrl("u"))],
+    },
+    {
+      action: {
+        id: "frame.select",
+        label: "select a target by label",
+        run: () => actions.enterSelect(),
+      },
+      keys: [sequence(key("s"))],
+    },
+    ...extra,
   ]);
   validateNoCollisions(context);
   return context;

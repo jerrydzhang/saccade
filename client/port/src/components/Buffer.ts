@@ -15,11 +15,13 @@
 //   window's presentation attaches; a slice-1 named constant
 //   SCROLL_LINE_PX stands in for the line height (a tunable default
 //   per r49: later tasks change the VALUE mechanically).
-// - waiting for later slices: target presentations (no targets exist
-//   yet), the geometry service (no measurement machinery yet), key
-//   matching (no bindings installed; handleKey answers allow-default),
-//   anchor capture/reveal (capture records default positions only).
-//   Each reports what it cannot yet do instead of pretending.
+// - waiting for later slices: the geometry service (no measurement
+//   machinery yet), key matching (no bindings installed; handleKey
+//   answers allow-default), anchor capture/reveal (capture records
+//   default positions only). Each reports what it cannot yet do
+//   instead of pretending. Target presentations stopped waiting in
+//   t-73: published targets get the frame's real presentation (lib/
+//   frame/presentations.ts) - no instrument publishes targets yet.
 
 import type {
   Bounds,
@@ -37,10 +39,11 @@ import type {
   PreparedContent,
   RefreshOutcome,
   TargetDefinition,
+  TargetGeometry,
   Unsubscribe,
   Viewport,
 } from "../lib/contracts/buffer.ts";
-import { knownIssue } from "../lib/contracts/buffer.ts";
+import { knownIssue, type TargetPresentations } from "../lib/contracts/buffer.ts";
 import type {
   Action,
   InputContext,
@@ -60,22 +63,16 @@ import type {
 import type { Component } from "svelte";
 import { createHostMatcher, type HostMatcher } from "../lib/input/host.ts";
 
-export type { ContentFrame, TargetDefinition } from "../lib/contracts/buffer.ts";
-export interface TargetPresentation {
-  activatePrimary(): void;
-  activatePointer(kind: "plain" | "modified"): boolean;
-  showActions(at: Point): void;
-  release(): void;
-}
-export interface TargetPresentations {
-  // Scoped to one published frame. Shared machinery resolves identity/actions
-  // and schedules measurement together; caller doesn't patch later geometry.
-  presentTarget(id: string, measure: () => Bounds | null): TargetPresentation;
-}
-export interface TargetGeometry {
-  bounds(id: string): Bounds | null;
-  subscribeChanges(observer: () => void): Unsubscribe;
-}
+export type {
+  ContentFrame,
+  ReadingAnchor,
+  TargetAct,
+  TargetDefinition,
+  TargetGeometry,
+  TargetPresentation,
+  TargetPresentations,
+} from "../lib/contracts/buffer.ts";
+import { createTargetPresentations } from "../lib/frame/presentations.ts";
 export interface InputCapture {
   capture(context: InputContext): InputLease;
 }
@@ -521,21 +518,18 @@ export class SliceBufferHost<
   presentationsFor(frame: ContentFrame<T>): TargetPresentations {
     const existing = this.framePresentations.get(frame);
     if (existing) return existing;
-    const presentations: TargetPresentations = {
-      presentTarget: (id, _measure) => {
-        // No target machinery exists in slice 1: an instrument that
-        // presents a target reports the gap, and the presentation
-        // activation stays inert - never a silently wrong act.
-        this.diagnostics.report(
-          this.context,
-          knownIssue({
-            code: "target-unavailable",
-            message: `no target presentation exists in this build (target '${id}')`,
-          }),
-        );
-        return inertPresentation();
-      },
-    };
+    // The frame's presentation of THIS frame's targets (t-73): select
+    // over the targets in view, the act menu, the click paths, the
+    // reading context and the reading anchor. One per published frame,
+    // dead with it; a repeat query is the same object (the registry
+    // packs it into the props the frame's components render from).
+    const presentations: TargetPresentations = createTargetPresentations({
+      targets: () => frame.targets,
+      bounds: (id) => this.geometry().bounds(id),
+      capture: (context) => this.interactions().capture(context),
+      report: (issue) => this.diagnostics.report(this.context, issue),
+      viewport: this.viewport,
+    });
     this.framePresentations.set(frame, presentations);
     return presentations;
   }
@@ -899,17 +893,6 @@ class RestoreJobImpl implements RestoringPlace {
     this.observers.clear();
     this.onDone();
   }
-}
-
-function inertPresentation(): TargetPresentation {
-  return {
-    activatePrimary() {},
-    activatePointer() {
-      return false;
-    },
-    showActions() {},
-    release() {},
-  };
 }
 
 function isPromise<T>(value: T | Promise<T>): value is Promise<T> {

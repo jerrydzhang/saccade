@@ -1,0 +1,14 @@
+/* The frame's surface (t-73): the stage the frame draws in - the
+ * instrument's content, and above it the select labels and the act
+ * menu.
+ * A block's stylesheet reads tokens only (tests/theme.test.ts).
+ *
+ * The stage positions the overlay (labels.css's inset-0 layer, whose
+ * parent must position:relative) and holds the menu's placement
+ * (menu.css, placed in this stage beside its target). Wave 1 hosts no
+ * instrument on it yet: an instrument that publishes no targets gets
+ * no surface, so no window shows this until one publishes. */
+
+.port-frame-stage {
+  position: relative;
+}
