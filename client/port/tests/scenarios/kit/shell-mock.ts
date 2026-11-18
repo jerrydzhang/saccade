@@ -38,6 +38,12 @@ export type ShellWorld = {
   words?: { generation: number; words: Record<string, Record<string, unknown>>; connected: boolean };
 };
 
+/** The app's window-store document, in this realm's localStorage
+ * (the app origin's own storage, as the real file is the app data
+ * directory's). Unused until a later wave wires the app to the
+ * commands. */
+export const WINDOW_STORE_KEY = "saccade.window-store";
+
 export const SHELL_WORLD_KEY = "__portSuiteShell";
 
 type PortGlobals = Window & {
@@ -132,6 +138,16 @@ export function installShell(world: ShellWorld): void {
       // one focused window
       case "window_focus_state":
         return { accepts_focus: true, focus_on_map: true, is_active: true, focus_widget: "WebKitWebView" };
+      // window_store.rs window_store_load() -> Option<String>: the stored
+      // document's text, null when there is no file yet
+      case "window_store_load":
+        return window.localStorage.getItem(WINDOW_STORE_KEY);
+      // window_store.rs window_store_save(text: String) -> (): the document's
+      // text lands whole or not at all (the Rust side writes a temp file in
+      // the same directory, then renames); setItem is that atomic write here
+      case "window_store_save":
+        window.localStorage.setItem(WINDOW_STORE_KEY, String(args.text));
+        return null;
       // commands.rs machine_id() -> Option<String> (/etc/machine-id): no machine id here,
       // so no tracker is ever proven to be this machine
       case "machine_id":

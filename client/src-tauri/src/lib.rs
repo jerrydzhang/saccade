@@ -11,6 +11,7 @@ pub mod session;
 pub mod shell_probe;
 pub mod suite;
 pub mod window_registry;
+pub mod window_store;
 pub mod words;
 
 pub fn run() {
@@ -59,6 +60,8 @@ pub fn run() {
             commands::shell_probe_report,
             window_registry::window_binding,
             window_registry::bind_window_state,
+            window_store::window_store_load,
+            window_store::window_store_save,
             suite::suite_windows,
             suite::open_suite_window,
             suite::focus_suite_window,
@@ -108,6 +111,10 @@ pub fn run() {
             // launch restore (t-34@r6 change 4): the windows open at the
             // last quit, remembered in the app's data directory
             session::init(app.path().app_data_dir().ok());
+            // the window store (t-71): the app's device-local window
+            // state document, beside the session memory in the data
+            // directory
+            window_store::init(app.path().app_data_dir().ok());
             // the app's ONE Herdr event feed (t-24@r22): the socket
             // resolved once here; none, it dials nothing and the
             // instruments read an empty table
