@@ -1,8 +1,9 @@
 // The app's device-local window store (t-71): window state belongs to
 // the app and lives on the device it runs on, in one document the
-// backend holds. This revises the tracker store's shape (the old
-// module windows.ts, the tracker's api/v1/windows; it retires in a
-// later wave): the store is single-device and local, so there is no
+// backend holds. This revises the tracker store's shape (the
+// tracker's api/v1/windows; the client of it, the old windows.ts,
+// retired when the app switched): the store is single-device and
+// local, so there is no
 // device id, no lastDevice, no changed counter and no stored attach
 // set - attachedHere is derived, answered from the states bound to
 // live windows of this app instance - and a window's link lives on
@@ -56,6 +57,13 @@ type StoredEntry = {
 type StoredDocument = { schema: number; states: Record<string, StoredEntry> };
 
 const SCHEMA = 1;
+
+/** The store document's key, wherever this origin keeps text: the
+ * bridge's file is <app-data-dir>/window-store.json (window_store.rs);
+ * a realm with no bridge and the mocked shell keep it in localStorage
+ * under this key. Exported for them - the kit may import app code,
+ * never the reverse. */
+export const WINDOW_STORE_KEY = "saccade.window-store";
 
 /** The one boundary between the stored text and the store: every read
  * passes here, so a document that parses but lies about its shape

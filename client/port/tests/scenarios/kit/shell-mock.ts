@@ -13,6 +13,8 @@
 // which arguments, and changes the shell's world (a window closing).
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
+import { WINDOW_STORE_KEY } from "../../../src/lib/window-store.ts";
+
 /** One live suite window as the shell registry knows it. */
 export type ShellWindow = { label: string; stateId?: string };
 
@@ -38,11 +40,10 @@ export type ShellWorld = {
   words?: { generation: number; words: Record<string, Record<string, unknown>>; connected: boolean };
 };
 
-/** The app's window-store document, in this realm's localStorage
- * (the app origin's own storage, as the real file is the app data
- * directory's). Unused until a later wave wires the app to the
- * commands. */
-export const WINDOW_STORE_KEY = "saccade.window-store";
+/** The app's window-store document, in this realm's localStorage (the
+ * app origin's own storage) under the store's own exported key - the
+ * app's bridge backend calls these commands, and this realm is its
+ * file. */
 
 export const SHELL_WORLD_KEY = "__portSuiteShell";
 
@@ -85,7 +86,7 @@ export function installShell(world: ShellWorld): void {
       // window_registry.rs window_binding(window) -> Binding { label, state_id: Option<String> }
       case "window_binding":
         return withState(world.label, own(world).stateId);
-      // window_registry.rs bind_window_state(window, state_id, server, device) -> ()
+      // window_registry.rs bind_window_state(window, state_id) -> ()
       case "bind_window_state":
         own(world).stateId = String(args.stateId);
         return null;

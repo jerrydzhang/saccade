@@ -1,11 +1,10 @@
 //! The window binding: which window state each webview window of this
-//! process shows, and - once the window's frontend has bound - where
-//! the window store lives and which device this is, so the shell can detach
-//! the state when the window closes. The registry is the shell's own
-//! memory, one entry per window label; the window store state itself lives on
-//! the tracker's server (t-14, t-24@r20). A window that has not bound
-//! yet answers its label alone, and the frontend binds the state it
-//! created or resumed.
+//! process shows. The registry is the shell's own memory, one entry
+//! per window label; the window state itself lives in the app's own
+//! device-local store (t-71, revising t-14's tracker-side placement),
+//! reached by the frontend through the store's two commands. A window
+//! that has not bound yet answers its label alone, and the frontend
+//! binds the state it created or resumed.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,13 +16,10 @@ pub struct WindowRegistry {
     entries: Arc<Mutex<HashMap<String, RegistryEntry>>>,
 }
 
-/// One window's pairing: the window store state it shows and, when the
-/// frontend has bound, the server and device its detach needs.
+/// One window's pairing: the window store state it shows.
 #[derive(Clone, Default)]
 pub struct RegistryEntry {
     pub state_id: String,
-    pub server: Option<String>,
-    pub device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -58,15 +54,12 @@ impl WindowRegistry {
                 label.to_string(),
                 RegistryEntry {
                     state_id: state_id.to_string(),
-                    server: None,
-                    device: None,
                 },
             );
     }
 
-    /// Complete a window's binding: the state, where the window store lives,
-    /// which device this is.
-    pub fn bind(&self, label: &str, state_id: &str, server: &str, device: &str) {
+    /// Complete a window's binding: the state it created or resumed.
+    pub fn bind(&self, label: &str, state_id: &str) {
         self.entries
             .lock()
             .expect("the window registry holds")
@@ -74,13 +67,11 @@ impl WindowRegistry {
                 label.to_string(),
                 RegistryEntry {
                     state_id: state_id.to_string(),
-                    server: Some(server.to_string()),
-                    device: Some(device.to_string()),
                 },
             );
     }
 
-    /// Take a window's binding: the close detach fires once, on the
+    /// Take a window's binding: the close forget fires once, on the
     /// destruction that ends the window.
     pub fn take_binding(&self, label: &str) -> Option<RegistryEntry> {
         self.entries
@@ -110,20 +101,18 @@ pub fn window_binding(
     Binding { label, state_id }
 }
 
-/// Bind the calling window to the window store state it created or resumed,
-/// naming where the window store lives and which device this is - the facts
-/// the close detach needs.
+/// Bind the calling window to the window store state it created or
+/// resumed; the state lives in the app's own store (t-71), and the
+/// binding is what suite_windows and the close forget read.
 #[tauri::command]
 pub fn bind_window_state(
     registry: tauri::State<'_, WindowRegistry>,
     window: tauri::WebviewWindow,
     state_id: String,
-    server: String,
-    device: String,
 ) {
     let label = window.label().to_string();
     eprintln!("[bridge] bind_window_state {label} -> {state_id}");
-    registry.bind(&label, &state_id, &server, &device);
+    registry.bind(&label, &state_id);
     crate::session::bound(&state_id);
 }
 
@@ -137,12 +126,10 @@ mod test {
         // the resume path: the state is seeded before the window exists
         registry.seed_state("w-1", "s-9");
         assert_eq!(registry.state_id_of("w-1").as_deref(), Some("s-9"));
-        // the frontend completes the binding with the detach facts
-        registry.bind("w-1", "s-9", "http://127.0.0.1:8811", "dev-1");
+        // the frontend completes the binding
+        registry.bind("w-1", "s-9");
         let entry = registry.take_binding("w-1").expect("the binding stands");
         assert_eq!(entry.state_id, "s-9");
-        assert_eq!(entry.server.as_deref(), Some("http://127.0.0.1:8811"));
-        assert_eq!(entry.device.as_deref(), Some("dev-1"));
         // the take is once: the destruction that ends the window
         assert!(registry.take_binding("w-1").is_none());
         assert!(registry.state_id_of("w-1").is_none());

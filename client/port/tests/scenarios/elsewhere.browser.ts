@@ -2,15 +2,17 @@
 // shell (kit/shell-mock.ts): the link state and the strip, the o/i/w
 // decision (src/lib/elsewhere.ts elsewhereDecision), the dead-link
 // fallback, and which shell command fires with which arguments. The
-// window store is the real throwaway tracker's. What needs a second
-// LIVE webview (the receiver's boot, the delivery landing there, the
-// link a new window completes once it attaches) is the native
-// project's: s18-linked-delivery.scenario.ts.
+// window store is the app's own (t-71), read through the app's
+// WindowStore over the mocked realm's document (kit/app-store.ts).
+// What needs a second LIVE webview (the receiver's boot, the delivery
+// landing there, the link a new window completes once it binds) is
+// the native project's: s18-linked-delivery.scenario.ts.
 // Sources: t36_checks._s18_port, t36_differential._s17_port.
 import { expect, test } from "./kit/browser.ts";
 import { answerAsk, citationAct, openLocation, spec, whenBound, openPlane } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 import type { Shell } from "./kit/browser.ts";
+import { appWindowStore } from "./kit/app-store.ts";
 
 // the citing seed's incorporation names the cited board at r1
 const citedAt = (tracker: Tracker): string => `${tracker.repo}/${tracker.tasks.cited}@r1`;
@@ -46,7 +48,7 @@ test("one window, no link: o opens a new window born at the citation", async ({ 
   const stateId = shell.argsOf("open_suite_window")[0]!.stateId as string;
   // the delivery rides the new state's birth location, never an eval
   // into the new webview (App.ts openInNewWindow)
-  expect((await tracker.windowState(stateId, shell.device)).location).toBe(citedAt(tracker));
+  expect((await appWindowStore().getState(stateId)).location).toBe(citedAt(tracker));
   expect(shell.windows().map((entry) => entry.label)).toHaveLength(2);
   expect(shell.argsOf("open_in_window")).toEqual([]);
   expect(shell.argsOf("broadcast_jump_labels")).toEqual([]);
@@ -75,7 +77,7 @@ test("several windows, no link: o asks; the answer delivers there and becomes th
   expect((await app.strip()).link).toBe("linked to w-b");
   // the link is the store's fact: this window's state points at w-b's
   const receiver = shell.windows().find((entry) => entry.label === "w-b")!.stateId;
-  expect((await tracker.windowState(ownState(shell), shell.device)).link).toBe(receiver);
+  expect((await appWindowStore().getState(ownState(shell))).link).toBe(receiver);
 });
 
 test("a live link: o delivers without asking; i asks and leaves the link; w opens a new viewer", async ({ bridged, tracker }) => {
@@ -104,7 +106,7 @@ test("a live link: o delivers without asking; i asks and leaves the link; w open
   await citationAct(app, "w");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
   const born = shell.argsOf("open_suite_window")[0]!.stateId as string;
-  expect((await tracker.windowState(born, shell.device)).location).toBe(spec);
+  expect((await appWindowStore().getState(born)).location).toBe(spec);
   expect((await app.readout()).window.link).toBe("w-b");
   expect((await app.strip()).link).toBe("linked to w-b");
 });
@@ -165,7 +167,7 @@ test("S17 the task row's Enter delivers through the link and the list holds its 
   await app.press("Enter");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
   const born = shell.argsOf("open_suite_window")[0]!.stateId as string;
-  expect((await tracker.windowState(born, shell.device)).location).toContain(`/${row.task}`);
+  expect((await appWindowStore().getState(born)).location).toContain(`/${row.task}`);
   const obs = await app.readout();
   expect(obs.surface).toBe("tasks");
   expect(obs.trail.entries.map((entry) => entry.location).join(" ")).not.toContain(`/${row.task}@`);

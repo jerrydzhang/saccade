@@ -57,8 +57,8 @@ import {
   type ElsewhereAct,
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
-import { WindowStore } from "./lib/windows.ts";
-import { serverBase, TrackerSource } from "./lib/tracker.ts";
+import { WindowStore, WINDOW_STORE_KEY } from "./lib/window-store.ts";
+import { TrackerSource } from "./lib/tracker.ts";
 import { formatLocation } from "./lib/location.ts";
 import { sourceFor } from "./lib/sources.ts";
 import { tasksPageOf } from "./lib/tasks/page.ts";
@@ -321,10 +321,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
 
   // -- the elsewhere surface (S18): the window's o/i/w OPEN acts -----
-  // The window binds a window-store state on the home tracker (the
-  // state carries this window's link - the o act's remembered
-  // receiver); binding happens when a tracker is first reached (the
-  // store lives there, and at boot none is known yet).
+  // The window binds a window-store state in the app's OWN store, on
+  // this device (t-71, revising t-14's tracker-side placement): the
+  // state carries this window's link, the o act's remembered receiver.
+  // Binding happens at boot, when the bridge is here - the store and
+  // the live-window set are the shell's to answer.
   let windowStore: WindowStore | null = null;
   let windowStateId: string | null = null;
   let linkLabel: string | null = null;
@@ -523,41 +524,81 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (windowStore !== null) return null;
     let restored: { location: string; part: string | null } | null = null;
     try {
-      const base = serverBase();
-      const invoke = tauriInvoke();
+      // the bridge when present: the document rides the shell's two
+      // commands (window_store.rs, <app-data-dir>/window-store.json);
+      // a realm with no bridge keeps it in this origin's localStorage
+      // under the store's own key - serialization and schema live in
+      // the store either way
+      let invoke: ReturnType<typeof tauriInvoke> | null = null;
+      try {
+        invoke = tauriInvoke();
+      } catch {
+        invoke = null;
+      }
+      windowStore = new WindowStore({
+        backend:
+          invoke === null
+            ? {
+                load: () => Promise.resolve(localStorage.getItem(WINDOW_STORE_KEY)),
+                save: (text) => {
+                  localStorage.setItem(WINDOW_STORE_KEY, text);
+                  return Promise.resolve();
+                },
+              }
+            : {
+                load: async () => (await invoke("window_store_load")) as string | null,
+                save: async (text) => {
+                  await invoke("window_store_save", { text });
+                },
+              },
+        // the states bound to live windows of THIS app instance, the
+        // shell's registry answered fresh at every read - attachedHere
+        // is derived, never stored
+        liveStates: async () => {
+          if (invoke === null) return new Set<string>();
+          const windows = (await invoke("suite_windows")) as SuiteWindow[];
+          return new Set(
+            windows.map((entry) => entry.state_id).filter((id): id is string => typeof id === "string"),
+          );
+        },
+      });
+      if (invoke === null) {
+        // the binding needs the shell: no bridge is the honest early
+        // refusal, never a fake elsewhere surface
+        throw new Error("no bridge");
+      }
       const binding = (await invoke("window_binding")) as {
         label: string;
         // the shell skips the field when no state is bound (serde
         // skip_serializing_if): absent means unbound, not null
         state_id?: string | null;
       };
-      windowStore = new WindowStore({ base: () => serverBase().toString() });
       const bind = async (id: string): Promise<void> => {
-        await invoke("bind_window_state", {
-          stateId: id,
-          server: base.toString(),
-          device: windowStore!.device,
-        });
+        await invoke("bind_window_state", { stateId: id });
       };
       if (typeof binding.state_id === "string" && binding.state_id.length > 0) {
         windowStateId = binding.state_id;
-        await windowStore.attach(windowStateId).catch(() => {
-          // the store may be unreachable (a relaunch's persisted host is
-          // dead until a location re-tells it): the shell's seed still
-          // binds this window; the store facts catch up on the next
-          // successful reach
-        });
         await bind(windowStateId);
       } else if (binding.label === "main") {
         // the launch restore: the SHELL's memory names the states open
-        // at the last quit; the first is claimed here, each of the rest
-        // opens as its own window (the seed binds it). The windows come
-        // back unconditionally - the memory is the persistence - even
-        // when the store is not yet reachable (their locations restore
-        // through their own boots when it is)
+        // at the last quit; the first one the store KNOWS is claimed
+        // here, each of the rest opens as its own window (the seed
+        // binds it). A memory id the store refuses is skipped, not
+        // reopened - an old open-windows.json names tracker-era ids
+        // this store never held, and the ratified fresh start (t-71)
+        // opens fresh windows after the change
         const last = (await invoke("last_session")) as string[];
+        const known = async (id: string): Promise<boolean> => {
+          try {
+            await windowStore!.getState(id);
+            return true;
+          } catch {
+            return false;
+          }
+        };
         let claimed = false;
         for (const id of last) {
+          if (!(await known(id))) continue;
           if (!claimed) {
             windowStateId = id;
             claimed = true;
@@ -575,7 +616,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
         }
         const claimedId = windowStateId;
         if (claimedId !== null) {
-          await windowStore.attach(claimedId).catch(() => {});
           await bind(claimedId);
         }
       } else {
@@ -586,7 +626,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
             : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         await windowStore.create(fresh, {});
         windowStateId = fresh;
-        await windowStore.attach(fresh).catch(() => {});
         await bind(fresh);
       }
       const boundId = windowStateId;
@@ -659,10 +698,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
     await focusReceiver(label);
     if (becomeLink) {
-      // the store refuses links between windows not both attached on
-      // this device, and the receiver attaches when ITS boot binds -
-      // bounded wait for the attach, then the link (never an unbounded
-      // or dishonest success)
+      // the store refuses links to a state no live window carries, and
+      // the receiver goes live when ITS boot binds - bounded wait for
+      // the binding, then the link (never an unbounded or dishonest
+      // success)
       await setLinkWhenAttached(windowStateId, fresh);
       await refreshLink();
       notifyStrip();
@@ -678,14 +717,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
       } catch {
         const state = await windowStore.getState(to).catch(() => null);
         if (state !== null && state.attachedHere) {
-          // attached on this device and still refused: not a race -
-          // the honest give-up names it
-          throw new Error(`the link could not be set even after ${to} attached`);
+          // live here and still refused: not a race - the honest
+          // give-up names it
+          throw new Error(`the link could not be set even after ${to} went live`);
         }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     }
-    throw new Error(`the receiver ${to} never attached on this device`);
+    throw new Error(`the receiver ${to} never went live on this device`);
   }
 
   async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
@@ -1105,10 +1144,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
       return;
     }
     note = null;
-    // every tracker reach funnels through here, and the parse above is
-    // what registers the tracker the store lives on: the window state
-    // (and with it the elsewhere acts) binds on the first reach (S18)
-    void ensureWindowState();
     // One operation schedules the content request; the refresh
     // pipeline publishes. A citation naming a part anchors the open
     // there (fold reveal rides the placement, scenario 8). The open

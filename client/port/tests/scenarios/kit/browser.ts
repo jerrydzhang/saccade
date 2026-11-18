@@ -11,6 +11,8 @@ import { commands, locators, page, userEvent, type Locator } from "vitest/browse
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
 import { SHELL_WORLD_KEY, type ShellCall, type ShellWindow, type ShellWorld } from "./shell-mock.ts";
 import { trackerDoor } from "./tracker-wire.ts";
+import { appWindowStore } from "./app-store.ts";
+import { WINDOW_STORE_KEY } from "../../../src/lib/window-store.ts";
 
 declare module "vitest/browser" {
   interface LocatorSelectors {
@@ -216,14 +218,15 @@ export type Shell = {
   windows(): ShellWindow[];
   /** A window closes: the shell stops listing it. */
   close(label: string): void;
-  /** This app's device id on the window store. */
-  device: string;
 };
 
 export type BridgedOptions = {
-  /** Other live windows besides "main": each is born and attached on
-   * this device's window store, the way its own boot would do it. */
+  /** Other live windows besides "main": each is born in the app's own
+   * window store, the way its own boot would do it. */
   others?: string[];
+  /** The shell's launch-restore memory: the state ids open at the last
+   * quit (kit/shell-mock.ts last_session, taken once). */
+  lastSession?: string[];
   /** The shell's SACCADE_KEY_TRACE (the D1 diagnostic), off by default. */
   keyTrace?: boolean;
   /** Herdr's words feed (kit/shell-mock.ts ShellWorld.words). */
@@ -247,21 +250,25 @@ export const test = base.extend<{
     await use({ ...seeded, ...trackerDoor(seeded.base) });
   },
   // the app with a mocked shell: one webview labelled main, a fresh
-  // device id, and the other windows the scenario names
-  bridged: async ({ tracker }, use) => {
+  // store document, and the other windows the scenario names
+  // eslint-disable-next-line no-empty-pattern
+  bridged: async ({}, use) => {
     const closers: (() => void)[] = [];
     await use(async (options = {}) => {
-      const device = `suite-device-${crypto.randomUUID()}`;
-      // the app's device id (client/port/src/lib/windows.ts DEVICE_KEY),
-      // fresh per test so no window state crosses tests
-      localStorage.setItem("saccade.device.id", device);
+      // the store document is the app's own (WINDOW_STORE_KEY, the
+      // key the app and the shell mock share): cleared per test so no
+      // state crosses launches, then the other windows seed their
+      // states through the app's WindowStore, the way their own boot
+      // would (kit/app-store.ts reads the same document)
+      localStorage.removeItem(WINDOW_STORE_KEY);
+      const store = appWindowStore();
       const windows: ShellWindow[] = [{ label: "main" }];
       for (const label of options.others ?? []) {
         const stateId = `suite-state-${crypto.randomUUID()}`;
-        await tracker.attachedWindow(stateId, device);
+        await store.create(stateId, {});
         windows.push({ label, stateId });
       }
-      const world: ShellWorld = { label: "main", windows, lastSession: [], testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
+      const world: ShellWorld = { label: "main", windows, lastSession: options.lastSession ?? [], testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
       const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);
@@ -272,7 +279,6 @@ export const test = base.extend<{
         close: (label) => {
           world.windows = world.windows.filter((entry) => entry.label !== label);
         },
-        device,
       };
       return { app, shell };
     });

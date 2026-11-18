@@ -32,7 +32,7 @@ pub fn run() {
         if console_requested { "on" } else { "off" }
     );
 
-    // the registry before the builder: the close detach's hook needs
+    // the registry before the builder: the close forget's hook needs
     // it, and the windows need the same registry managed
     let registry = window_registry::WindowRegistry::new();
     tauri::Builder::default()

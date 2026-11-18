@@ -1,61 +1,28 @@
 //! The suite shell's window acts (t-14 "The suite"): one app, many
 //! first-class windows, the window manager owning all layout. The
 //! shell creates windows (`w`, the ask-once answer's new-window act,
-//! and resuming a detached window state here), focuses one when the
+//! and resuming a stored window state here), focuses one when the
 //! human asks (the window jump) and when the human opens something
 //! through the link (o, i, w, the task row's Enter: the receiver is
 //! focused, human ruling t-36 m-547, reversing t-14's "a new window
 //! never asks for focus" for those acts), always through the
 //! platform's activation request (focus_suite_window), broadcasts the
-//! window jump's labels to every suite window, and detaches a closing
-//! window's state - closing detaches, the state stays (t-24@r20).
-//! Placement is never set: a new window gets whatever the window
-//! manager gives. A window created for any other reason (the launch
-//! restore) does not take focus when mapped.
-
-use std::thread;
-use std::time::Duration;
+//! window jump's labels to every suite window, and forgets a closing
+//! window in the session memory - closing forgets, the state stays in
+//! the app's own store (t-71, revising t-24@r20's tracker-side
+//! detach). Placement is never set: a new window gets whatever the
+//! window manager gives. A window created for any other reason (the
+//! launch restore) does not take focus when mapped.
 
 use serde::Deserialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::window_registry::WindowRegistry;
 
-/// The detach the shell fires when a bound window is destroyed:
-/// fire-and-retry-once, a lost detach logged - the attachment is the
-/// only fact a lost close leaves behind, and the next local act
-/// (attaching again) corrects it.
-fn detach_async(server: String, device: String, state: String) {
-    thread::spawn(move || {
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(3)))
-            .build()
-            .new_agent();
-        let url = format!(
-            "{}/api/v1/windows/devices/{}/detach",
-            server.trim_end_matches('/'),
-            device
-        );
-        let body = serde_json::json!({ "state": state });
-        for attempt in 0..2 {
-            let outcome = agent.post(&url).send_json(&body);
-            match outcome {
-                Ok(_) => return,
-                Err(error) => {
-                    if attempt == 1 {
-                        eprintln!("[shell] detach of {state} failed after the retry: {error}");
-                    }
-                }
-            }
-            thread::sleep(Duration::from_secs(2));
-        }
-    });
-}
-
 /// One window event, hooked for every window of this process: a bound
-/// window's destruction detaches its state on this device. The
-/// binding names the server and the device, so the shell can fire the
-/// detach after the webview is gone.
+/// window's destruction leaves the session memory - the next launch
+/// restores only what stayed open. The state itself is the app's own
+/// (t-71): nothing here reaches any store on close.
 pub fn on_window_event(
     window: &tauri::Window<tauri::Wry>,
     event: &WindowEvent,
@@ -65,7 +32,7 @@ pub fn on_window_event(
         let label = window.label().to_string();
         if let Some(entry) = registry.take_binding(&label) {
             eprintln!(
-                "[shell] window {label} destroyed; detaching {}",
+                "[shell] window {label} destroyed; the session memory forgets {}",
                 entry.state_id
             );
             use tauri::Manager;
@@ -76,14 +43,6 @@ pub fn on_window_event(
                 .filter(|other| *other != label)
                 .count();
             crate::session::closed(&entry.state_id, remaining);
-            if let (Some(server), Some(device)) = (entry.server, entry.device) {
-                detach_async(server, device, entry.state_id);
-            } else {
-                eprintln!(
-                    "[shell] window {label} carried no server or device; its state {} stays attached",
-                    entry.state_id
-                );
-            }
         }
     }
 }
@@ -139,7 +98,8 @@ pub fn suite_windows(
 /// it does not take focus on map (the frontend's elsewhere acts then
 /// request focus for it, m-547), and the state it should resume - when
 /// the caller names one - is pre-seeded so the new window's bootstrap
-/// finds the binding and applies the state.
+/// finds the binding and applies the state (the state itself lives in
+/// the app's own store, t-71).
 #[tauri::command]
 pub fn open_suite_window(
     app: tauri::AppHandle,

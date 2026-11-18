@@ -1,6 +1,6 @@
 [package]
 name = "saccade-app"
-version = "0.2.8"
+version = "0.2.9"
 description = "The Saccade app's binary: the shared Rust shell around the client/port frontend"
 edition = "2021"
 
@@ -31,8 +31,6 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# the close detach: one fire-and-retry POST when a bound window dies
-ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 webkit2gtk = { version = "2" }
 gtk = "0.18"
