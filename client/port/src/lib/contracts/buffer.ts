@@ -2,7 +2,7 @@
 // diagnostics and the latest-intent publication mechanism. No DOM,
 // Svelte or transport imports.
 //
-// Port carry of the ratified contract shapes (t-36 r47-r51): the type
+// Port carry of the ratified contract shapes: the type
 // declarations come from the reviewed contract drafts. The container
 // implementation itself lives beside this contract in
 // components/Buffer.ts; the host-facing controller interfaces that the
@@ -57,7 +57,10 @@ export interface BufferDiagnostics {
   unexpected(context: BufferContext, cause: unknown): DiagnosticId;
 }
 
-import type { Action, ReadCommands } from "./input.ts";
+import type { Action, CommandBinding, InputContext } from "./input.ts";
+import type { AnchorLocation } from "./places.ts";
+import type { SelectSessionView } from "../select/session.ts";
+import type { MenuSession, MenuView } from "../menu/session.ts";
 
 export type Point = Readonly<{ left: number; top: number }>;
 // Bounds are relative to this buffer's scrollable content origin.
@@ -103,16 +106,83 @@ export type BufferState<T extends object> =
   | Readonly<{ kind: "destroyed" }>;
 
 // Logical content metadata is published with its data. Both types
-// relocated here (r105) so lib never imports components for a type
-// (audit defect e); components/Buffer re-exports them.
+// relocated here so lib never imports components for a type
+// (audit defect e); components/Buffer re-exports them. The target
+// shape is the brief's fixed one: one published target carries
+// identity, kind, label, nesting, ordered acts and a durable anchor.
+export type TargetAct = Readonly<{ key: string; action: Action }>;
 export type TargetDefinition = Readonly<{
+  /** The part path (what data-port-part observes): identity, the same
+   * paths the instruments mark today. */
   id: string;
-  primary: Action;
-  commands: ReadCommands;
-  // Pointer bindings reference actions; absence is not a hidden default act.
-  plainClick: Action | null;
-  modifiedClick: Action | null;
+  /** What select mode narrows on. */
+  kind: string;
+  /** What heads the act menu. */
+  label: string;
+  /** The target id this one sits inside, when it has one (a rail
+   * agent in its project): its label draws nested. Null at the top
+   * level. */
+  inside: string | null;
+  /** The acts, in order. The FIRST is the primary - what a plain click
+   * and Enter run; a modified click runs the act its key names (the
+   * modified-click law: shift/middle is the `o` act). The ratified fields (primary,
+   * commands, plainClick, modifiedClick) all read off this list. Acts
+   * depend on window services and live state: resolved when asked
+   * for, never frozen at publication. */
+  acts: () => readonly TargetAct[];
+  /** What survives a refresh when the target has one (a row's task):
+   * what selection follows and what Back returns to, since a part
+   * path changes meaning when rows reorder. Null when none. */
+  anchor: string | null;
 }>;
+/** The reading anchor the frame captures for Back: the published
+ * target the reading position sits inside, named by its durable
+ * anchor; the default when none holds it. The instrument's places
+ * adapter adds the address and feeds the return places. */
+export type ReadingAnchor =
+  | Readonly<{ kind: "default" }>
+  | Readonly<{ kind: "anchor"; anchor: string; bounds: Bounds }>;
+// The frame's presentation of a published frame's targets (the ratified
+// container contracts, carried beside them so lib implements the
+// frame without importing components).
+export interface TargetPresentation {
+  activatePrimary(): void;
+  activatePointer(kind: "plain" | "modified"): boolean;
+  showActions(at: Point): void;
+  release(): void;
+}
+export interface TargetPresentations {
+  // Scoped to the buffer's published frame: the machinery resolves
+  // identity and acts against the CURRENT publication at ask time
+  // (the instruments' own sessions read their targets live too), and
+  // a lease whose element the gesture cannot measure acts nothing.
+  presentTarget(id: string, measure: () => Bounds | null): TargetPresentation;
+  // The frame surface's face: what the frame's components
+  // render from the leases the instrument's view receives - the select
+  // session's labels, the act menu's view, session and input context,
+  // the frame's reading context (the shared keys, defined once), the
+  // reading anchor Back rides, and the selection's durable anchor.
+  selectView(): SelectSessionView | null;
+  menuView(): MenuView | null;
+  menuSession(): MenuSession;
+  subscribe(observer: () => void): Unsubscribe;
+  readingContext(extra?: readonly CommandBinding[]): InputContext;
+  readingAnchor(): ReadingAnchor;
+  /** Where a published anchor sits: found with its bounds, missing
+   * when no published target carries it, pending when the target is
+   * published but its geometry is not usable yet - the restoration's
+   * own three answers, from the frame. */
+  locateAnchor(anchor: string): import("./places.ts").AnchorLocation;
+  /** The anchor of the label-selected target (a row's task), while a
+   * published target still carries it: what selection follows across
+   * a refresh. Null when the selection is anchor-less or its anchor
+   * has left the published targets. */
+  selectedAnchor(): string | null;
+}
+export interface TargetGeometry {
+  bounds(id: string): Bounds | null;
+  subscribeChanges(observer: () => void): Unsubscribe;
+}
 export type ContentFrame<T extends object> = Readonly<{
   value: Readonly<T>;
   targets: readonly TargetDefinition[];

@@ -105,28 +105,15 @@ export const planeContent: TasksData = {
   status: "loaded",
   problem: null,
   page: planePage,
-  targets: [],
   errors: [],
 };
 
-/** A controller that serves the fixture and runs nothing. */
+/** A controller that serves the fixture and runs nothing. The frame's
+ * faces (select, menu) are the buffer's; the specimen hosts the view
+ * bare, with no lease, so none appear here. */
 export function fixtureTasksUI(add: AddView = ADD_CLOSED): TasksUI {
   return {
-    subscribeSelect: (observer) => {
-      observer(null);
-      return () => {};
-    },
-    subscribeMenu: (observer) => {
-      observer(null);
-      return () => {};
-    },
-    menuSession: () => {
-      throw new Error("the specimen opens no menu");
-    },
     getSelection: () => null,
-    rowPrimaryClick: () => {},
-    openMenuFor: () => {},
-    setTaskPorts: () => {},
     subscribeRail: (observer) => {
       observer(planeRail);
       return () => {};

@@ -1,7 +1,7 @@
 // The buffer container: the common container for viewport/scrolling,
 // loading and interaction context - not an owner of domain-specific
 // operations. This module carries the container's contracts from the
-// ratified construction package (t-36 r49) and, below them, the
+// ratified construction package and, below them, the
 // slice-1 container implementation.
 //
 // Slice-1 honesty notes (what is real, what waits):
@@ -14,12 +14,14 @@
 // - minimal-but-real: the viewport is the DOM scroller element the
 //   window's presentation attaches; a slice-1 named constant
 //   SCROLL_LINE_PX stands in for the line height (a tunable default
-//   per r49: later tasks change the VALUE mechanically).
-// - waiting for later slices: target presentations (no targets exist
-//   yet), the geometry service (no measurement machinery yet), key
-//   matching (no bindings installed; handleKey answers allow-default),
-//   anchor capture/reveal (capture records default positions only).
-//   Each reports what it cannot yet do instead of pretending.
+//   a named tunable: later tasks change the VALUE mechanically).
+// - waiting for later slices: the geometry service (no measurement
+//   machinery yet), key matching (no bindings installed; handleKey
+//   answers allow-default), anchor capture/reveal (capture records
+//   default positions only). Each reports what it cannot yet do
+//   instead of pretending. Target presentations stopped waiting:
+//   published targets get the frame's real presentation (lib/
+//   frame/presentations.ts), and the task list publishes its targets.
 
 import type {
   Bounds,
@@ -37,10 +39,11 @@ import type {
   PreparedContent,
   RefreshOutcome,
   TargetDefinition,
+  TargetGeometry,
   Unsubscribe,
   Viewport,
 } from "../lib/contracts/buffer.ts";
-import { knownIssue } from "../lib/contracts/buffer.ts";
+import { knownIssue, type TargetPresentations } from "../lib/contracts/buffer.ts";
 import type {
   Action,
   InputContext,
@@ -60,22 +63,16 @@ import type {
 import type { Component } from "svelte";
 import { createHostMatcher, type HostMatcher } from "../lib/input/host.ts";
 
-export type { ContentFrame, TargetDefinition } from "../lib/contracts/buffer.ts";
-export interface TargetPresentation {
-  activatePrimary(): void;
-  activatePointer(kind: "plain" | "modified"): boolean;
-  showActions(at: Point): void;
-  release(): void;
-}
-export interface TargetPresentations {
-  // Scoped to one published frame. Shared machinery resolves identity/actions
-  // and schedules measurement together; caller doesn't patch later geometry.
-  presentTarget(id: string, measure: () => Bounds | null): TargetPresentation;
-}
-export interface TargetGeometry {
-  bounds(id: string): Bounds | null;
-  subscribeChanges(observer: () => void): Unsubscribe;
-}
+export type {
+  ContentFrame,
+  ReadingAnchor,
+  TargetAct,
+  TargetDefinition,
+  TargetGeometry,
+  TargetPresentation,
+  TargetPresentations,
+} from "../lib/contracts/buffer.ts";
+import { createTargetPresentations } from "../lib/frame/presentations.ts";
 export interface InputCapture {
   capture(context: InputContext): InputLease;
 }
@@ -89,6 +86,10 @@ export interface BufferAccess<T extends object> {
   readonly updates: ContentUpdates<ContentFrame<T>>;
   readonly interactions: InputCapture;
   setReadingContext(context: InputContext | null): void;
+  /** The frame's presentation of this buffer's published targets (the
+   * sessions the instrument no longer keeps: select, menu, the reading
+   * context's shared keys, the anchors). */
+  presentations(): TargetPresentations;
 }
 export interface InstrumentAttachment<UI extends object, A extends AnchorData> {
   readonly presentation: UI;
@@ -100,7 +101,7 @@ export interface HostBuffer<T extends object> {
   readonly id: string;
   readonly viewport: Viewport;
   readonly places: ReturnPlaces;
-  /** The which-key chain (r110): this buffer's reading matcher's
+  /** The which-key chain: this buffer's reading matcher's
    * pending views and their change notification. */
   inputPending(): import("../lib/input/key-matcher.ts").WhichKeyView | null;
   inputAll(): import("../lib/input/key-matcher.ts").WhichKeyView;
@@ -183,7 +184,7 @@ export function mapBufferState<X extends object, Y extends object>(
   }
 }
 
-// The scroll-line stand-in (r49 tunable default): the VALUE changes
+// The scroll-line stand-in (a tunable default): the VALUE changes
 // mechanically when the prototype's feel is measured; the meaning of
 // the default is a ratified matter, not a per-call-site guess.
 const SCROLL_LINE_PX = 60;  // the prototype's line height (inst16 :504)
@@ -201,7 +202,7 @@ export interface SliceBufferViewport extends Viewport {
  * WebKitGTK dispatches a scroll event only on a rendering update, and
  * a window that is not active may render none for seconds, so a
  * listener on the scroller alone hears a keyboard page late or never
- * (t-52: a window's place stored the part one page back). */
+ * a window's place once stored the part one page back. */
 export function createViewport(moved: () => void = () => {}): SliceBufferViewport {
   let element: HTMLElement | null = null;
   const viewport: SliceBufferViewport = {
@@ -356,7 +357,7 @@ export class SliceBufferHost<
       context === null
         ? null
         : createHostMatcher(context, {
-            // the which-key suspension (the r110 tunable) rides the
+            // the which-key suspension (the named tunable) rides the
             // environment's probe - the App's popup state
             ...(this.build.expirySuspended !== undefined
               ? { expirySuspended: this.build.expirySuspended }
@@ -403,7 +404,6 @@ export class SliceBufferHost<
     };
   }
   private leases: Set<InputLeaseImpl> = new Set();
-  private readonly framePresentations = new WeakMap<ContentFrame<T>, TargetPresentations>();
   private restoreJobs: Set<RestoreJobImpl> = new Set();
 
   private readonly build: BufferBuild<T, UI, A>;
@@ -431,6 +431,7 @@ export class SliceBufferHost<
       geometry: this.geometry(),
       updates: this.updates(),
       interactions: this.interactions(),
+      presentations: () => this.presentations(),
       setReadingContext: (context) => {
         if (this.destroyed) return;
         this.baseContext = context;
@@ -519,26 +520,33 @@ export class SliceBufferHost<
   }
 
   presentationsFor(frame: ContentFrame<T>): TargetPresentations {
-    const existing = this.framePresentations.get(frame);
-    if (existing) return existing;
-    const presentations: TargetPresentations = {
-      presentTarget: (id, _measure) => {
-        // No target machinery exists in slice 1: an instrument that
-        // presents a target reports the gap, and the presentation
-        // activation stays inert - never a silently wrong act.
-        this.diagnostics.report(
-          this.context,
-          knownIssue({
-            code: "target-unavailable",
-            message: `no target presentation exists in this build (target '${id}')`,
-          }),
-        );
-        return inertPresentation();
-      },
-    };
-    this.framePresentations.set(frame, presentations);
-    return presentations;
+    // The presentation is the buffer's, not the frame's: the sessions
+    // it holds (select, menu) outlive refreshes - the frame's targets
+    // port reads the CURRENT publication at ask time, the way the
+    // instruments' own sessions read their live models - and a lease
+    // whose element the gesture cannot measure acts nothing.
+    return this.presentations();
   }
+
+  /** The frame's presentation of this buffer's published targets: one
+   * per buffer, built on first ask over the buffer's own services. */
+  presentations(): TargetPresentations {
+    if (this.presentationsCore === null) {
+      this.presentationsCore = createTargetPresentations({
+        targets: () => {
+          const state = this.snapshot();
+          if (state.kind !== "alive" || state.content.kind !== "available") return [];
+          return state.content.value.targets;
+        },
+        bounds: (id) => this.geometry().bounds(id),
+        capture: (context) => this.interactions().capture(context),
+        viewport: this.viewport,
+      });
+    }
+    return this.presentationsCore;
+  }
+
+  private presentationsCore: TargetPresentations | null = null;
 
   /** The window's return-places face over the attachment's content
    * places. Slice 1: default-position capture; restore requests the
@@ -640,7 +648,7 @@ export class SliceBufferHost<
     // republish), wait for usable geometry - pending is not absence
     // (scenario 7), the wait ends by placement, by a confirmed-missing
     // anchor (default position at the SAME place), or by the user's
-    // own viewport motion (latest intent wins, r63 default).
+    // own viewport motion (latest intent wins, the default).
     const anchor = place.position.anchor;
     const viewportElement = this.scrollerElement();
     let userMoved = false;
@@ -672,7 +680,7 @@ export class SliceBufferHost<
           // scroller truncates, which left the reading height a
           // sub-pixel inside the part above - the capture then named
           // that part, and a relaunch's restore drifted one part back
-          // each time (t-38).
+          // each time.
           this.viewport.moveTo({
             left: location.bounds.left - (offset?.left ?? 0),
             top: Math.ceil(location.bounds.top - (offset?.top ?? 0)),
@@ -899,17 +907,6 @@ class RestoreJobImpl implements RestoringPlace {
     this.observers.clear();
     this.onDone();
   }
-}
-
-function inertPresentation(): TargetPresentation {
-  return {
-    activatePrimary() {},
-    activatePointer() {
-      return false;
-    },
-    showActions() {},
-    release() {},
-  };
 }
 
 function isPromise<T>(value: T | Promise<T>): value is Promise<T> {

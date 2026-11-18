@@ -1,10 +1,9 @@
 // The Tasks instrument's controller (svelte-free): the control
-// plane (t-54: the "plane" location, which names no tracker) showing
+// plane (the "plane" location, which names no tracker) showing
 // one project's pipeline page - the project is the window's own state,
 // carried in the plane address's path - served as rows with
-// identities, label selection over visible rows, the task-row act
-// menu, and the return places scenario 17 needs - the departed row's
-// identity plus viewport offset, restored by Back.
+// identities, and the return places scenario 17 needs - the departed
+// row's identity plus viewport offset, restored by Back.
 //
 // The pattern is the Board instrument's, end to end: the controller
 // loads through the source/transport layer (TrackerSource's
@@ -18,58 +17,54 @@
 // poll re-reads the page and refreshes through the pipeline when its
 // rows changed.
 //
-// The control plane (t-48): beside the list, a rail of the projects
+// The frame presents what this instrument publishes: select
+// mode over the targets in view, the act menu, the click paths and
+// the shared reading keys are the frame's (lib/frame/presentations.ts,
+// through the buffer access's presentations face). This controller
+// only PUBLISHES the targets - every row and every rail entry, the
+// rail staying with the task list per the brief - with acts that
+// resolve when asked (taskRowActs over the live page, rail and window
+// services), and keeps what is about its own data: the rail's feed,
+// the add field, the return places.
+//
+// The control plane: beside the list, a rail of the projects
 // this device has reached (switching shows a project's tasks here) and,
-// under each, its running agents grouped by Herdr's word - the agents
-// pages joined with the shell's Herdr word feed (lib/tasks/rail.ts).
-// The rail is the instrument's chrome, published to its component
-// beside the menu, never through the buffer's frames. Agents no
-// tracker registered show too (t-55): under the project whose repo
-// path (each tracker's root page) holds their cwd, else at the foot.
+// under each, its running agents grouped by Herdr's word (lib/tasks/rail.ts).
+// The rail's entries are published as targets like the rows: s labels
+// them with the rows, and a click, a right-click or a label runs the
+// same acts. Rows label first, so a row's label is the one it had
+// before the rail.
 //
-// The rail's entries are targets of the list's own selection and act
-// menu (lib/tasks/rail.ts railTargetsOf, lib/tasks/menu.ts): s labels
-// rows and rail entries together, and a click, a right-click or a
-// label runs the same acts. Rows label first, so a row's label is the
-// one it had before the rail.
-//
-// Registering a project is its own act (t-54, lib/tasks/add.ts): `a`
+// Registering a project is its own act (lib/tasks/add.ts): `a`
 // opens the plane's add field, Enter registers host:port/name and the
 // rail lists it; nothing opens. With no project known, the plane says
-// so and names `a` - an empty plane, never an error.
+// so and names `a` - an empty plane, never an error. The `a` key is
+// the task list's one reading-key extra; everything else it reads is
+// the frame's table.
 //
 // Deliberately not here (recorded): find (a facility of a shown
 // revision - a task list is not one) and any row cursor (j/k is pure
 // scrolling, the scenario 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
-import { createLoadScope, failureIssue, readyFrame } from "../lib/instruments/scaffold.ts";
-import { knownIssue } from "../lib/contracts/buffer.ts";
+import { createLoadScope, failureIssue } from "../lib/instruments/scaffold.ts";
+import type { ContentFrame, TargetDefinition } from "../lib/contracts/buffer.ts";
 import type {
-  KnownIssue,
   Point,
   PreparedContent,
   RefreshOutcome,
-  Viewport,
 } from "../lib/contracts/buffer.ts";
-import type { InputContext } from "../lib/contracts/input.ts";
-import { tasksReadingContext } from "../lib/input/contexts.ts";
-import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
-import { createTasksMenu, tasksMenuLabel, type TaskPorts, type TasksMenu } from "../lib/tasks/menu.ts";
+import { key, sequence } from "../lib/contracts/input.ts";
 import { createFollow } from "../lib/instruments/follow.ts";
-import type { MenuView } from "../lib/menu/session.ts";
 import type {
   Address,
   ContentCapture,
   ContentPlaces,
   TaskAnchor,
 } from "../lib/contracts/places.ts";
-import type { ViewportMetrics } from "../lib/contracts/places.ts";
+import type { AnchorData, AnchorLocation, ViewportMetrics } from "../lib/contracts/places.ts";
 export type { TaskAnchor };
-import type { AnchorData, AnchorLocation } from "../lib/contracts/places.ts";
-import type { InstrumentProps } from "../lib/instruments/contract.ts";
 import type { StructuredIssue } from "../lib/board/errors.ts";
-import { SourceUnavailableError } from "../lib/board/errors.ts";
 import { PLANE_MACHINE, formatLocation, isPlane } from "../lib/location.ts";
 import { createAddProject, type AddView } from "../lib/tasks/add.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
@@ -86,19 +81,21 @@ import {
   type RailTarget,
   type WordsSnapshot,
 } from "../lib/tasks/rail.ts";
+import { taskRowActs, tasksMenuLabel, type TaskPorts } from "../lib/tasks/menu.ts";
 import {
   taskRowOf,
   tasksPageOf,
   tasksTargetsOf,
-  type TaskRow,
-  type TaskTarget,
   type TasksPageModel,
 } from "../lib/tasks/page.ts";
 
 /** The tasks frame's published domain data. Carries no `surface`
  * field on purpose: the observation layer discriminates frames
  * structurally (a board frame names a board; this one names rows),
- * so the Board instrument's module stays untouched by this slice. */
+ * so the Board instrument's module stays untouched by this slice. The
+ * targets are not here either: they ride the publication's own slot
+ * (ContentFrame.targets), and this controller refreshes them there
+ * when the rail changes. */
 export type TasksData = Readonly<{
   /** The load that produced THIS frame; retained frames keep their
    * own token while a newer request is pending. */
@@ -120,42 +117,29 @@ export type TasksData = Readonly<{
   /** Why the shown project's list could not be read; null otherwise. */
   problem: string | null;
   page: TasksPageModel | null;
-  /** The page's selectable targets: the rows, with their task ids and
-   * links (TaskTarget is a SelectableTarget plus the act facts). */
-  targets: readonly TaskTarget[];
   errors: readonly StructuredIssue[];
 }>;
 
-/** The tasks controller's face to its own component: the select and
- * menu sessions' live views, and the row act invocation paths.
- * Lifecycle lives on the buffer, not here. */
+/** The tasks controller's face to its own component: the rail's and
+ * the add field's live views and the add field's typing path. Select,
+ * menu, clicks and the reading keys are the frame's (the buffer's
+ * presentations face); the readout's selection fact forwards the
+ * frame's own. Lifecycle lives on the buffer, not here. */
 export interface TasksUI {
-  subscribeSelect(observer: (view: SelectSessionView | null) => void): () => void;
-  subscribeMenu(observer: (view: MenuView | null) => void): () => void;
-  menuSession(): import("../lib/menu/session.ts").MenuSession;
   /** The last label-selected row's task id, if any (identity rule:
-   * cleared when the row leaves the page). */
+   * the frame clears it when no published target carries the anchor
+   * any more). */
   getSelection(): string | null;
-  /** A plain click on a row or a rail entry runs its FIRST act
-   * directly - the same action object every invocation path runs
-   * (scenario 9). */
-  rowPrimaryClick(part: string): void;
-  /** Open the act menu for a row or a rail entry (right-click). */
-  openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
-  /** The window services the row acts ride (the one open funnel and
-   * the elsewhere surface); injected by the window, and no act is
-   * offered before then. */
-  setTaskPorts(ports: TaskPorts): void;
   /** The control plane's rail: projects and their running agents. */
   subscribeRail(observer: (rail: Rail) => void): () => void;
-  /** The add field (t-54): its live view, and the typing path. */
+  /** The add field: its live view, and the typing path. */
   subscribeAdd(observer: (view: AddView) => void): () => void;
   addView(): AddView;
   typeAdd(value: string): void;
 }
 
 /** How often a shown list re-reads its page (a named tunable,
- * t-36@r64; the board follows at the same pace). */
+ * a named tunable; the board follows at the same pace). */
 export const TASKS_FOLLOW_POLL_MS = 3000;
 
 const EMPTY_FRAME: TasksData = {
@@ -167,16 +151,10 @@ const EMPTY_FRAME: TasksData = {
   status: "loading",
   problem: null,
   page: null,
-  targets: [],
   errors: [],
 };
 
-/** Whether the page still carries a row naming this task. */
-function lastFrameStillCarries(model: TasksPageModel, task: string): boolean {
-  return model.groups.some((group) => group.rows.some((row) => row.task === task));
-}
-
-export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachment<TasksUI, TaskAnchor> {
+export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts): InstrumentAttachment<TasksUI, TaskAnchor> {
   const scope = createLoadScope<TasksData>(EMPTY_FRAME);
 
   // The follow (lib/instruments/follow.ts): the asked address while a
@@ -203,10 +181,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     async refresh() {
       const address = followAddress;
       if (address === null) return;
-      return buffer.updates.refresh(async () => {
-        const prepared = await load(address);
-        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
-      });
+      return buffer.updates.refresh(async () => load(address));
     },
     // the DOM timer id and Node's Timeout meet across lib mixes; the
     // id is opaque to the follow module
@@ -214,9 +189,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   });
 
-  const menuObservers = new Set<(view: MenuView | null) => void>();
-
-  // -- the control plane's rail (t-48) ---------------------------------
+  // -- the control plane's rail ----------------------------------------
   const railObservers = new Set<(rail: Rail) => void>();
   let words: WordsSnapshot = NO_WORDS;
   let agentPages: {
@@ -257,9 +230,75 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     return railOf(projects, words, currentProject(), homeTracker(), known);
   }
 
+  // -- the published targets -------------------------------------------
+  // The frame presents what is published here: every row, then every
+  // rail entry (the brief's rule: the rail stays with the task list,
+  // its entries published as targets like the rows). The acts resolve
+  // when asked - taskRowActs over the live page, rail and services -
+  // never frozen at publication. The rail's changes republish the
+  // targets alone (the page object is shared), gated on a signature,
+  // so a words tick costs nothing.
+  const actDeps = (): Parameters<typeof taskRowActs>[1] => ({
+    machine: () => scope.frame().resolved?.machine ?? null,
+    rowLink: (part) => taskRowOf(scope.frame().page ?? { groups: [] }, part)?.location ?? null,
+    ports: () => ports,
+    railTarget: (part) => railTargetsOf(railNow()).find((target) => target.part === part),
+    forget,
+    addProject: () => add.enter(),
+  });
+
+  const rowTargets = (page: TasksPageModel | null): TargetDefinition[] =>
+    page === null
+      ? []
+      : tasksTargetsOf(page).map((row) => ({
+          id: row.part,
+          kind: row.kind,
+          label: row.text,
+          inside: null,
+          acts: () => taskRowActs({ part: row.part, kind: row.kind, label: row.text }, actDeps()),
+          anchor: row.task,
+        }));
+
+  const railTargetDefs = (): TargetDefinition[] =>
+    railTargetsOf(railNow()).map((entry) => ({
+      id: entry.part,
+      kind: entry.kind,
+      label: tasksMenuLabel({ kind: entry.kind, label: entry.text }, entry),
+      inside: entry.within ?? null,
+      acts: () => taskRowActs({ part: entry.part, kind: entry.kind, label: entry.text }, actDeps()),
+      anchor: null,
+    }));
+
+  const publishedTargets = (): TargetDefinition[] => [
+    ...rowTargets(scope.frame().page),
+    ...railTargetDefs(),
+  ];
+
+  const targetsSignature = (targets: readonly TargetDefinition[]): string =>
+    JSON.stringify(targets.map((target) => [target.id, target.label, target.inside]));
+
+  let publishedSignature: string | null = null;
+
+  function refreshPublishedTargets(): void {
+    if (scope.isDestroyed()) return;
+    const next = publishedTargets();
+    const signature = targetsSignature(next);
+    if (signature === publishedSignature) return;
+    publishedSignature = signature;
+    buffer.updates.updateDisplayed((current) => ({ ...current, targets: next }));
+  }
+
+  function forget(project: string): void {
+    forgetTracker(project);
+    forgotten.add(project);
+    agentPages = agentPages.filter((entry) => entry.name !== project);
+    notifyRail();
+  }
+
   function notifyRail(): void {
     const rail = railNow();
     for (const observer of [...railObservers]) observer(rail);
+    refreshPublishedTargets();
   }
 
   async function readAgentPages(): Promise<void> {
@@ -340,49 +379,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     railTimer = null;
   }
 
-  // -- the row acts' window services -----------------------------------
-  let ports: TaskPorts | null = null;
-
-  function machine(): string | null {
-    return scope.frame().resolved?.machine ?? null;
-  }
-
-  function menuView(): MenuView | null {
-    if (!tasksMenu.session.isOpen()) return null;
-    const target = tasksMenu.session.target();
-    if (target === null) return null;
-    const acts = tasksMenu.session.acts();
-    return {
-      open: true,
-      label: target.label,
-      acts: acts.map((act) => ({ key: act.key, label: act.action.label })),
-      at: tasksMenu.session.at(),
-      part: target.part,
-    };
-  }
-
-  function notifyMenu(): void {
-    const view = menuView();
-    for (const observer of [...menuObservers]) observer(view);
-  }
-
-  function railTarget(part: string): RailTarget | undefined {
-    return railTargetsOf(railNow()).find((target) => target.part === part);
-  }
-
-  /** Every selectable target: the rows, then the rail's entries. */
-  function allTargets(): readonly (TaskTarget | RailTarget)[] {
-    return [...scope.frame().targets, ...railTargetsOf(railNow())];
-  }
-
-  function forget(project: string): void {
-    forgetTracker(project);
-    forgotten.add(project);
-    agentPages = agentPages.filter((entry) => entry.name !== project);
-    notifyRail();
-  }
-
-  // -- the add field (t-54): registering opens nothing ----------------
+  // -- the add field: registering opens nothing -----------------------
   const addObservers = new Set<(view: AddView) => void>();
   const add = createAddProject({
     capture: (context) => buffer.interactions.capture(context),
@@ -398,71 +395,12 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     for (const observer of [...addObservers]) observer(view);
   });
 
-  const tasksMenu: TasksMenu = createTasksMenu({
-    machine,
-    rowLink: (part) => taskRowOf(scope.frame().page ?? { groups: [] }, part)?.location ?? null,
-    railTarget,
-    forget,
-    addProject: () => add.enter(),
-    ports: () => ports,
-    capture: (context) => buffer.interactions.capture(context),
-  });
-  tasksMenu.setOnNotify(() => notifyMenu());
-
-  // -- the select session (label selection over visible rows) ----------
-  // The selection's identity is the TASK (scenario 12's identity
-  // rules on a task list): a positional part path changes meaning
-  // across a reorder, the task does not. A selection whose task
-  // leaves the page clears - never a silent neighbour.
-  let selectedTask: string | null = null;
-  const selectSession = createSelectSession({
-    targets: allTargets,
-    visible(target) {
-      const metrics = buffer.viewport.metrics();
-      const viewTop = metrics.position.top;
-      const viewBottom = metrics.position.top + metrics.height;
-      const bounds = buffer.geometry.bounds(target.part);
-      if (bounds === null) return false;
-      return bounds.top < viewBottom && bounds.bottom > viewTop;
-    },
-    capture: (context) => buffer.interactions.capture(context),
-    onSelected(target) {
-      if (target.kind === "task") selectedTask = (target as TaskTarget).task;
-      // scenario 9: selection opens the act menu
-      const label = tasksMenuLabel({ kind: target.kind, label: target.text }, railTarget(target.part));
-      tasksMenu.openFor({ part: target.part, kind: target.kind, label });
-    },
-  });
-
   const host: TasksUI = {
-    subscribeSelect(observer) {
-      return selectSession.subscribe(observer);
-    },
-    subscribeMenu(observer) {
-      menuObservers.add(observer);
-      observer(menuView());
-      return () => {
-        menuObservers.delete(observer);
-      };
-    },
-    menuSession() {
-      return tasksMenu.session;
-    },
     getSelection() {
-      return selectedTask;
-    },
-    rowPrimaryClick(part) {
-      const target = allTargets().find((entry) => entry.part === part);
-      if (target === undefined) return;
-      tasksMenu.session.primaryClick({ kind: target.kind, label: target.text, part });
-      notifyMenu();
-    },
-    openMenuFor(target, at) {
-      const rail = target.kind === "task" ? undefined : railTarget(target.part);
-      tasksMenu.openFor({ ...target, label: tasksMenuLabel(target, rail) }, at);
-    },
-    setTaskPorts(injected) {
-      ports = injected;
+      // the readout's selection fact is the frame's own: the anchor of
+      // the label-selected target, cleared when no published target
+      // carries it any more (scenario 12's identity rule)
+      return buffer.presentations().selectedAnchor();
     },
     subscribeRail(observer) {
       railObservers.add(observer);
@@ -494,7 +432,18 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     return homeTracker() ?? Object.keys(known)[0] ?? null;
   }
 
-  async function load(address: Address): Promise<PreparedContent<TasksData>> {
+  /** Publish a loaded frame with its targets: the domain data rides
+   * the publication's value, the targets its own slot - built AFTER
+   * the frame is adopted, since the rail's entries depend on the
+   * frame's own facts (the project it shows marks the rail). */
+  function publish(frame: TasksData): PreparedContent<ContentFrame<TasksData>> {
+    scope.adopt(frame);
+    const targets = publishedTargets();
+    publishedSignature = targetsSignature(targets);
+    return { kind: "ready", value: { value: frame, targets } };
+  }
+
+  async function load(address: Address): Promise<PreparedContent<ContentFrame<TasksData>>> {
     if (scope.isDestroyed())
       return {
         kind: "failed",
@@ -505,7 +454,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     scope.setAsked(asked);
     if (!isPlane(address)) {
       // this buffer serves the control plane; a tracker's pages are
-      // no location of their own (t-54) - the gap is named, never
+      // no location of their own - the gap is named, never
       // guessed
       return {
         kind: "failed",
@@ -513,29 +462,24 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       };
     }
     const project = projectFor(address);
-    const adoptEmpty = (shown: string | null, problem: string | null): PreparedContent<TasksData> => {
-      shownSignature = null;
-      selectedTask = null;
-      startRail();
-      scope.adopt({
-        generation: token,
-        asked: scope.asked(),
-        location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
-        project: shown,
-        resolved: shown === null ? null : { machine: `tracker:${shown}`, path: "tasks" },
-        status: problem === null ? "loaded" : "invalid",
-        problem,
-        page: null,
-        targets: [],
-        errors: [],
-      });
-      notifyRail();
-      return { kind: "ready", value: scope.frame() };
-    };
+    const base = (shown: string | null, problem: string | null): TasksData => ({
+      generation: token,
+      asked: scope.asked(),
+      location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
+      project: shown,
+      resolved: shown === null ? null : { machine: `tracker:${shown}`, path: "tasks" },
+      status: problem === null ? "loaded" : "invalid",
+      problem,
+      page: null,
+      errors: [],
+    });
     // no project known yet: the plane says how to add one (a), never
-    // an error
+    // an error; the rail still publishes, so another project stays
+    // one act away
     if (project === null) {
-      return adoptEmpty(null, null);
+      shownSignature = null;
+      startRail();
+      return publish(base(null, null));
     }
     const location: Location = { machine: `tracker:${project}`, path: "tasks" };
     const problemOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -544,10 +488,14 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       source = sourceFor(location.machine);
     } catch (error) {
       if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
-      return adoptEmpty(project, problemOf(error));
+      shownSignature = null;
+      startRail();
+      return publish(base(project, problemOf(error)));
     }
     if (!(source instanceof TrackerSource)) {
-      return adoptEmpty(project, `'${project}' is not a tracker`);
+      shownSignature = null;
+      startRail();
+      return publish(base(project, `'${project}' is not a tracker`));
     }
     let viewPage;
     try {
@@ -556,57 +504,51 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
       // the shown project is unreachable: the plane keeps its rail
       // and says why, so another project stays one act away
-      return adoptEmpty(project, problemOf(error));
+      shownSignature = null;
+      startRail();
+      return publish(base(project, problemOf(error)));
     }
     if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
     const model = tasksPageOf(viewPage);
     shownSignature = JSON.stringify(model);
-    // scenario 12's identity rule: a selection whose task left the
-    // page clears - never a silent neighbour
-    if (selectedTask !== null && !lastFrameStillCarries(model, selectedTask)) {
-      selectedTask = null;
-    }
     startRail();
-    scope.adopt({
+    // the shown project moves the rail's mark; the rail's entries
+    // ride the same publication
+    return publish({
       generation: token,
-      asked: scope.asked(),
-      location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
-      project,
-      resolved: location,
-      status: "loaded",
-      problem: null,
-      page: model,
-      targets: tasksTargetsOf(model),
-      errors: [],
-    });
-    // the shown project moves the rail's mark
-    notifyRail();
-    return { kind: "ready", value: scope.frame() };
+        asked: scope.asked(),
+        location: formatLocation({ machine: PLANE_MACHINE, path: "" }),
+        project,
+        resolved: location,
+        status: "loaded",
+        problem: null,
+        page: model,
+        errors: [],
+      });
   }
 
+  // The frame's presentation: the places below read its anchors (the
+  // reading position's, and the restore's) instead of walking the
+  // targets themselves - the same walk in any instrument is the
+  // frame's, not this controller's. The reading keys ride the same
+  // face.
+  const presentations = buffer.presentations();
+
   const places: ContentPlaces<TaskAnchor> = {
-    captureDisplayed(viewport: ViewportMetrics): ContentCapture<TaskAnchor> {
+    captureDisplayed(_viewport: ViewportMetrics): ContentCapture<TaskAnchor> {
       // the plane's address carries the project it shows: Back
-      // returns to that project, a relaunch reopens it
+      // returns to that project, a relaunch reopens it. The anchor is
+      // the frame's: the published target the reading position sits
+      // inside, named by its durable anchor; a target without an
+      // anchor (a rail entry) cannot carry a return place and is
+      // skipped, never guessed.
       const address: Address = { machine: PLANE_MACHINE, path: scope.frame().project ?? "" };
-      // The reading anchor (the hybrid default, r49): the row the
-      // reading position sits inside, else the default position.
-      // Geometry is live measurement; a row with no measurable
-      // presentation is skipped, never guessed.
-      const viewTop = viewport.position.top;
-      for (const target of scope.frame().targets) {
-        const bounds = buffer.geometry.bounds(target.part);
-        if (bounds === null) continue;
-        if (viewTop >= bounds.top && viewTop < bounds.bottom) {
-          const row = taskRowOf(scope.frame().page ?? { groups: [] }, target.part);
-          if (row === undefined) continue;
-          return {
-            address,
-            position: { kind: "anchor", anchor: { kind: "task", task: row.task }, bounds },
-          };
-        }
-      }
-      return { address, position: { kind: "default" } };
+      const reading = presentations.readingAnchor();
+      if (reading.kind === "default") return { address, position: { kind: "default" } };
+      return {
+        address,
+        position: { kind: "anchor", anchor: { kind: "task", task: reading.anchor }, bounds: reading.bounds },
+      };
     },
     async request(address: Address): Promise<RefreshOutcome> {
       // an explicit open (or a trail restore) ends any running follow
@@ -614,10 +556,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       const intent = ++openIntent;
       follow.stop();
       followAddress = null;
-      const outcome = await buffer.updates.refresh(async () => {
-        const prepared = await load(address);
-        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
-      });
+      const outcome = await buffer.updates.refresh(async () => load(address));
       const shown = scope.frame().project;
       // a shown project follows even while unreachable: its list
       // returns when its tracker answers again
@@ -634,20 +573,14 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
         !Array.isArray(data) &&
         (data as { kind?: unknown }).kind === "task" &&
         typeof (data as { task?: unknown }).task === "string" &&
-        // the anchor must name a row of THIS frame's page
-        scope.frame().targets.some((target) => target.task === (data as { task: string }).task)
+        // the anchor must name a target of THIS frame's publication
+        presentations.locateAnchor((data as { task: string }).task).kind !== "missing"
       );
     },
     revealAnchor(anchor: TaskAnchor): AnchorLocation {
-      const target = scope.frame().targets.find(
-        (entry) => entry.task === anchor.task,
-      );
-      if (target === undefined) return { kind: "missing" };
-      const bounds = buffer.geometry.bounds(target.part);
-      if (bounds === null) return { kind: "pending" };
-      return { kind: "found", bounds };
+      return presentations.locateAnchor(anchor.task);
     },
-    defaultPosition(_viewport: ReturnType<Viewport["metrics"]>): Point {
+    defaultPosition(_viewport: ViewportMetrics): Point {
       return { left: 0, top: 0 };
     },
     subscribeChanges(_observer: () => void) {
@@ -655,15 +588,16 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
     },
   };
 
-  const reading: InputContext = tasksReadingContext({
-    scrollDown: () => buffer.viewport.scrollLines(1),
-    scrollUp: () => buffer.viewport.scrollLines(-1),
-    scrollFraction: (direction, fraction) => buffer.viewport.scrollFraction(direction, fraction),
-    scrollToTop: () => buffer.viewport.start(),
-    scrollToBottom: () => buffer.viewport.end(),
-    enterSelect: () => selectSession.enter(),
-    addProject: () => add.enter(),
-  });
+  const reading = presentations.readingContext([
+    {
+      action: {
+        id: "tasks.add-project",
+        label: "add a project (host:port/name)",
+        run: () => add.enter(),
+      },
+      keys: [sequence(key("a"))],
+    },
+  ]);
 
   return {
     presentation: host,
@@ -673,9 +607,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachm
       scope.destroy();
       follow.stop();
       stopRail();
-      selectSession.exit();
       add.close();
-      tasksMenu.session.outsidePointerDown();
     },
   };
 }

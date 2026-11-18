@@ -15,6 +15,7 @@
 @import "./blocks/plane.css";
 @import "./blocks/pipeline.css";
 @import "./blocks/inspection.css";
+@import "./blocks/frame.css";
 
 html,
 body {
