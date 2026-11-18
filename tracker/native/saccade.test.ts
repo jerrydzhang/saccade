@@ -1272,3 +1272,27 @@ test("the check passes a commit that leaves an existing reference where it was",
 	assert.equal(run.status, 0, `an untouched reference does not block: ${run.output}`);
 	rmSync(dir, { recursive: true, force: true });
 });
+
+test("the check refuses a comment that describes fixture data by its number", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	stage(dir, "src/later.ts", "// the fixture ends with t-0 offered\nexport const later = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 1, "a comment about fixture data in the reference form is refused: it writes the plain words");
+	assert.match(run.output, /t-0\b/);
+	assert.match(run.output, /task/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the check refuses an incarnation reference", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	stage(dir, "src/later.ts", "// handed over by i-34\nexport const later = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 1, "an added comment citing an incarnation is refused");
+	assert.match(run.output, /i-34/);
+	assert.match(run.output, /incarnation/);
+	rmSync(dir, { recursive: true, force: true });
+});

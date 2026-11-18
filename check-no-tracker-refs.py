@@ -2,8 +2,12 @@
 """Code comments carry no tracker references: the repository check.
 
 Reads the staged diff (git diff --cached, hunks only) and refuses a
-commit whose added or changed lines put a task, message, session or
-revision number into a comment of a code file.
+commit whose added or changed lines put a task, message, incarnation
+or revision number into a comment of a code file. The check is a
+backstop: the rule binds agents whatever this catches, and a comment
+describing fixture data writes plain words ("task 0", "incarnation
+2"), never the reference form - this check refuses the reference form
+in such comments, by design.
 
 - Only the lines a commit adds or changes: the repository's existing
   references do not block, and a moved or renamed file adds no lines.
@@ -17,17 +21,17 @@ revision number into a comment of a code file.
 - The commit message is untouched: the trail from a line to its
   decision lives there.
 
-Known gaps, deliberately kept and not assumed away:
+Known gaps, deliberately kept and not assumed away (the rule binds
+whatever this catches and more):
 
 - A reference in a trailing comment after code on the same line is
   not caught: whole-line detection is what keeps strings out.
-- A block comment's interior is caught only at its opener and at
-  continuation lines that start with the marker; an interior line
-  opened by an unchanged line above it has no marker to see.
+- A block comment's interior line with no leading marker passes -
+  even in a wholly new block. Only the opener and marker-leading
+  continuation lines are seen.
 - An extension outside the table is not scanned.
 - A number written so the patterns do not see it is not caught: a
-  kind the rule does not name, or a value spelled around ("the
-  seven-oh-one ruling").
+  value spelled around ("the seven-oh-one ruling").
 
 The rule itself lives in AGENTS.md under "Layout and docs".
 """
@@ -60,13 +64,14 @@ COMMENT_MARKERS = {
     ".md": None,  # prose, out of scope by the rule itself
 }
 
-# The four kinds the rule names: a task, a message, a session, a
-# revision. \b keeps compounds ("r2d2", "ps-2") out; @rK of a location
-# matches through the same revision arm.
+# The four kinds the rule names: a task, a message, an incarnation, a
+# revision (this tracker has no s-N: sessions are incarnations).
+# \b keeps compounds ("r2d2", "ps-2") out; @rK of a location matches
+# through the same revision arm.
 REFERENCE = re.compile(
     r"(?P<task>\bt-\d+\b)"
     r"|(?P<message>\bm-\d+\b)"
-    r"|(?P<session>\bs-\d+\b)"
+    r"|(?P<incarnation>\bi-\d+\b)"
     r"|(?P<revision>\br\d+\b)"
 )
 
@@ -131,9 +136,10 @@ def main() -> None:
     for path, lineno, added, kind in offenders:
         print(f"  {path}:{lineno}: {kind}: {added}", file=sys.stderr)
     print("  a comment states the rule itself, never where it was decided: no task,", file=sys.stderr)
-    print("  message, session or revision numbers; data that names a task (a fixture", file=sys.stderr)
-    print("  board, a sample location in a test) is not a reference; the trail from a", file=sys.stderr)
-    print("  line to its decision is the commit message, which names its task", file=sys.stderr)
+    print("  message, incarnation or revision numbers - no exemption for test files:", file=sys.stderr)
+    print("  a comment about fixture data writes plain words (\"task 0\", \"incarnation", file=sys.stderr)
+    print("  2\"), never the reference form; the trail from a line to its decision is", file=sys.stderr)
+    print("  the commit message, which names its task", file=sys.stderr)
     sys.exit(1)
 
 
