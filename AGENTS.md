@@ -51,6 +51,13 @@ do, and `tracker/README.md` carries the tracker's law.
   rewrites data.
 - A phase review checks locality: no stray docs, no stale paths, no
   files outside their package's story.
+- Code carries no tracker references. A comment states the rule
+  itself, never where it was decided: no task, message, session or
+  revision numbers. Something that looks wrong and is deliberate says
+  so in plain words. The trail from a line to its decision is the
+  commit message, which names its task. A repository check holds this
+  over the lines a commit adds or changes; data that names a task (a
+  fixture board, a sample location in a test) is not a reference.
 
 ## Building and testing
 

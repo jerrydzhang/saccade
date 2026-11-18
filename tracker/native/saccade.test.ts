@@ -1162,3 +1162,113 @@ test("the presented terminal pairs host disclosure with session-scoped launch pr
 		else process.env.SACCADE_LAUNCHED_SESSION = saved[1];
 	}
 });
+
+// The repository check's own self-test: real invocations of the real
+// hook (the repo-root script the prek hook runs) against throwaway
+// git repositories - the five demonstrations the done-when demands.
+// A demonstration drives the staged diff exactly as a commit would:
+// files written, staged, the script run in the repository's root.
+const noRefsHook = join(import.meta.dirname, "../../check-no-tracker-refs.py");
+
+function scratchRepo(): string {
+	const dir = mkdtempSync(join(tmpdir(), "no-tracker-refs-"));
+	const git = (args: string[]): void => {
+		const run = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+		assert.equal(run.status, 0, `git ${args.join(" ")} failed: ${run.stderr}`);
+	};
+	git(["init", "--quiet"]);
+	git(["config", "user.email", "check@example.invalid"]);
+	git(["config", "user.name", "the check"]);
+	return dir;
+}
+
+function stage(dir: string, relative: string, content: string): void {
+	const path = join(dir, relative);
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, content);
+	const run = spawnSync("git", ["add", relative], { cwd: dir, encoding: "utf8" });
+	assert.equal(run.status, 0, `git add ${relative} failed: ${run.stderr}`);
+}
+
+function runHook(dir: string): { status: number | null; output: string } {
+	const run = spawnSync("python3", [noRefsHook], { cwd: dir, encoding: "utf8" });
+	return { status: run.status, output: `${run.stdout}${run.stderr}` };
+}
+
+const CLEAN_HEAD = "the head commit carries an existing reference where it was\n\n"
+	+ "A later commit must leave it standing: only added or changed lines\n"
+	+ "are the check's business.\n";
+
+test("the check refuses an added comment that cites a task", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	// the head lands without the hook: history is the trail's home,
+	// not the check's business
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	stage(dir, "src/later.ts", "// the deferral waits for t-701 to land first\nexport const later = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 1, "an added comment citing a task is refused");
+	assert.match(run.output, /src\/later\.ts:1: task/);
+	assert.match(run.output, /t-701/);
+	assert.match(run.output, /a comment states the rule itself/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the check refuses an added comment that cites a message", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	stage(dir, "src/later.ts", "// the trace's own finding sits in m-536\nexport const later = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 1, "an added comment citing a message is refused");
+	assert.match(run.output, /m-536/);
+	assert.match(run.output, /message/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the check refuses an added comment that cites a revision", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	stage(dir, "src/later.ts", "// pinned against the shape of r15\nexport const later = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 1, "an added comment citing a revision is refused");
+	assert.match(run.output, /r15/);
+	assert.match(run.output, /revision/);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the check passes a test string that is a location", () => {
+	const dir = scratchRepo();
+	stage(dir, "src/thing.ts", "export const shape = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	// data that names a task is not a reference: the location rides a
+	// string, the pattern rides a regex, neither is a comment
+	stage(
+		dir,
+		"tests/loc.test.ts",
+		'import { it } from "node:test";\n'
+		+ 'import assert from "node:assert/strict";\n'
+		+ 'const location = "repo/t-1@r3";\n'
+		+ 'it("parses the sample location", () => {\n'
+		+ '\tassert.match(location, /t-\\d+@r\\d+/);\n'
+		+ "});\n",
+	);
+	const run = runHook(dir);
+	assert.equal(run.status, 0, `a location string passes: ${run.output}`);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the check passes a commit that leaves an existing reference where it was", () => {
+	const dir = scratchRepo();
+	// the reference lands in the HEAD commit, without the hook: it is
+	// the repository's existing reference, not this commit's line
+	stage(dir, "src/kept.ts", "// decided in t-42, kept for the shape it guards\nexport const kept = 1;\n");
+	spawnSync("git", ["commit", "--quiet", "--no-verify", "-m", CLEAN_HEAD], { cwd: dir });
+	// the commit under the check touches a neighbour and leaves
+	// kept.ts exactly where it was
+	stage(dir, "src/other.ts", "// a plain remark about the neighbour\nexport const other = 2;\n");
+	const run = runHook(dir);
+	assert.equal(run.status, 0, `an untouched reference does not block: ${run.output}`);
+	rmSync(dir, { recursive: true, force: true });
+});
