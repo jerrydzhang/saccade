@@ -95,8 +95,8 @@ export async function whenBound(app: AppDriver): Promise<void> {
 
 /** An act from a citation's act menu: the real right-click opens the
  * menu, the act's key runs it (o, i, w, f, y). The elsewhere acts wait
- * for this window's binding: an o pressed while the window state is
- * still binding is dropped (src/App.ts openElsewhere). */
+ * for the boot's binding facts: an o pressed while the facts are still
+ * in flight is dropped (src/App.ts openElsewhere). */
 export async function citationAct(app: AppDriver, key: string): Promise<void> {
   if ("oiw".includes(key)) await whenBound(app);
   await app.click("citation", { button: "right" });

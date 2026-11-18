@@ -39,6 +39,7 @@ import {
   PORT_SURFACE,
   buildReadout,
   nativeWindowLabel,
+  shownPlaceOf,
   type DoorDelivery,
   type PortObservation,
 } from "./lib/observation.ts";
@@ -57,7 +58,6 @@ import {
   type ElsewhereAct,
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
-import { WindowStore, WINDOW_STORE_KEY } from "./lib/window-store.ts";
 import { TrackerSource } from "./lib/tracker.ts";
 import { formatLocation } from "./lib/location.ts";
 import { sourceFor } from "./lib/sources.ts";
@@ -76,12 +76,6 @@ import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
 import { createKeyTrace } from "./lib/input/key-trace.ts";
 import { createReadingLayoutHolder } from "./lib/board/reading-layout.ts";
-import {
-  createWindowPlaceHolder,
-  placementDone,
-  shownPlaceOf,
-  type WindowPlace,
-} from "./lib/navigation/window-place.ts";
 
 /** The which-key popup delay in ms (the r110 tunable, nvim's
  * neighborhood - the human tunes). */
@@ -144,9 +138,7 @@ export interface PortWindow {
 export function createPortWindow(windowId = "main"): PortWindow {
   const diagnostics: SliceDiagnostics = createDiagnostics();
   const buffers = createBufferFactory(windowId);
-  // the viewport's own moves reach the window's place at once, not
-  // only through the scroller's scroll events (createViewport)
-  const viewport: SliceBufferViewport = createViewport(() => windowPlace.changed());
+  const viewport: SliceBufferViewport = createViewport();
 
   // The window's buffers, one per surface kind, retained: the board
   // constructs at assembly, the tasks buffer constructs at its first
@@ -321,13 +313,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
 
   // -- the elsewhere surface (S18): the window's o/i/w OPEN acts -----
-  // The window binds a window-store state in the app's OWN store, on
-  // this device (t-71, revising t-14's tracker-side placement): the
-  // state carries this window's link, the o act's remembered receiver.
-  // Binding happens at boot, when the bridge is here - the store and
-  // the live-window set are the shell's to answer.
-  let windowStore: WindowStore | null = null;
-  let windowStateId: string | null = null;
+  // The shell's registry is the one owner of the run's window facts
+  // (t-71@r3): this window's link is the shell's fact about its label,
+  // answered beside every window in suite_windows, and the window
+  // binding answers once at boot. The app keeps no window state
+  // between runs: nothing here reads or writes any file.
+  let bound = false;
   let linkLabel: string | null = null;
   let ask: AskState | null = null;
   let elsewhereNote: string | null = null;
@@ -349,10 +340,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   async function beginLinkAsk(): Promise<void> {
     // space-l: the prototype's D1 modal - labels over windows, a key
     // sets the link; the ask machinery's link act is the same shape
-    if (windowStore === null || windowStateId === null) {
-      await ensureWindowState();
-      if (windowStore === null || windowStateId === null) return;
-    }
+    if (!bound) return;
     const windows = await suiteWindows();
     const others = windows.filter((entry) => entry.label !== nativeWindowLabel());
     if (others.length === 0) {
@@ -364,8 +352,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   async function clearTheLink(): Promise<void> {
-    if (windowStore === null || windowStateId === null) return;
-    await windowStore.clearLink(windowStateId).catch(() => {});
+    if (!bound) return;
+    await tauriInvoke()("clear_window_link", { from: nativeWindowLabel() }).catch(() => {});
     await refreshLink();
   }
 
@@ -376,45 +364,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let attachedViewport: HTMLElement | null = null;
 
   // -- the board's reading layout (lib/board/reading-layout.ts) -------
-  // The holder keeps the scales; the window says where they apply (CSS
-  // custom properties on its content scroller) and how they reach its
-  // window state.
+  // The holder keeps the scales for the run; the window says where
+  // they apply (CSS custom properties on its content scroller). They
+  // start at their defaults and nothing writes them anywhere.
   const readingLayout = createReadingLayoutHolder({
     apply(vars) {
       const element = attachedViewport;
       if (element === null) return;
       for (const [name, value] of Object.entries(vars)) element.style.setProperty(name, value);
     },
-    write({ zoom, width }) {
-      if (windowStore === null || windowStateId === null) return;
-      void windowStore.patch(windowStateId, { zoom, width }).catch(() => {
-        // an unreachable store: the layout stays this session's; the
-        // next change writes it again
-      });
-    },
-    // the DOM timer id and Node's Timeout meet across lib mixes
-    schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
-    cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   });
-
-  // -- the window's place (lib/navigation/window-place.ts) ------------
-  // What the window shows and where it reads reach its window state
-  // once they settle; the holder decides when, the window says what it
-  // shows (shownPlace, below) and how a write reaches its state. The
-  // shown frames, the scroller's scrolling and every placement feed it.
-  const windowPlace = createWindowPlaceHolder({
-    current: () => shownPlace(),
-    write({ location, part }) {
-      if (windowStore === null || windowStateId === null) return;
-      void windowStore.patch(windowStateId, { location, part }).catch(() => {
-        // an unreachable store: the place stays this session's; the
-        // next settled change writes it again
-      });
-    },
-    schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
-    cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
-  });
-  const onScrollerScroll = () => windowPlace.changed();
 
   // -- figure inspection (S04): a TEMPORARY window surface ----------
   // It dies on close, never enters the trail, and while open it is
@@ -520,150 +479,22 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return (await invoke("suite_windows")) as SuiteWindow[];
   }
 
-  async function ensureWindowState(): Promise<{ location: string; part: string | null } | null> {
-    if (windowStore !== null) return null;
-    let restored: { location: string; part: string | null } | null = null;
-    try {
-      // the bridge when present: the document rides the shell's two
-      // commands (window_store.rs, <app-data-dir>/window-store.json);
-      // a realm with no bridge keeps it in this origin's localStorage
-      // under the store's own key - serialization and schema live in
-      // the store either way
-      let invoke: ReturnType<typeof tauriInvoke> | null = null;
-      try {
-        invoke = tauriInvoke();
-      } catch {
-        invoke = null;
-      }
-      windowStore = new WindowStore({
-        backend:
-          invoke === null
-            ? {
-                load: () => Promise.resolve(localStorage.getItem(WINDOW_STORE_KEY)),
-                save: (text) => {
-                  localStorage.setItem(WINDOW_STORE_KEY, text);
-                  return Promise.resolve();
-                },
-              }
-            : {
-                load: async () => (await invoke("window_store_load")) as string | null,
-                save: async (text) => {
-                  await invoke("window_store_save", { text });
-                },
-              },
-        // the states bound to live windows of THIS app instance, the
-        // shell's registry answered fresh at every read - attachedHere
-        // is derived, never stored
-        liveStates: async () => {
-          if (invoke === null) return new Set<string>();
-          const windows = (await invoke("suite_windows")) as SuiteWindow[];
-          return new Set(
-            windows.map((entry) => entry.state_id).filter((id): id is string => typeof id === "string"),
-          );
-        },
-      });
-      if (invoke === null) {
-        // the binding needs the shell: no bridge is the honest early
-        // refusal, never a fake elsewhere surface
-        throw new Error("no bridge");
-      }
-      const binding = (await invoke("window_binding")) as {
-        label: string;
-        // the shell skips the field when no state is bound (serde
-        // skip_serializing_if): absent means unbound, not null
-        state_id?: string | null;
-      };
-      const bind = async (id: string): Promise<void> => {
-        await invoke("bind_window_state", { stateId: id });
-      };
-      if (typeof binding.state_id === "string" && binding.state_id.length > 0) {
-        windowStateId = binding.state_id;
-        await bind(windowStateId);
-      } else if (binding.label === "main") {
-        // the launch restore: the SHELL's memory names the states open
-        // at the last quit; the first one the store KNOWS is claimed
-        // here, each of the rest opens as its own window (the seed
-        // binds it). A memory id the store refuses is skipped, not
-        // reopened - an old open-windows.json names tracker-era ids
-        // this store never held, and the ratified fresh start (t-71)
-        // opens fresh windows after the change
-        const last = (await invoke("last_session")) as string[];
-        const known = async (id: string): Promise<boolean> => {
-          try {
-            await windowStore!.getState(id);
-            return true;
-          } catch {
-            return false;
-          }
-        };
-        let claimed = false;
-        for (const id of last) {
-          if (!(await known(id))) continue;
-          if (!claimed) {
-            windowStateId = id;
-            claimed = true;
-          } else {
-            await invoke("open_suite_window", { stateId: id }).catch(() => {});
-          }
-        }
-        if (!claimed) {
-          const fresh =
-            typeof crypto.randomUUID === "function"
-              ? crypto.randomUUID()
-              : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          await windowStore.create(fresh, {});
-          windowStateId = fresh;
-        }
-        const claimedId = windowStateId;
-        if (claimedId !== null) {
-          await bind(claimedId);
-        }
-      } else {
-        // a suite window the shell did not seed: its own fresh state
-        const fresh =
-          typeof crypto.randomUUID === "function"
-            ? crypto.randomUUID()
-            : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        await windowStore.create(fresh, {});
-        windowStateId = fresh;
-        await bind(fresh);
-      }
-      const boundId = windowStateId;
-      const state =
-        boundId === null ? null : await windowStore.getState(boundId).catch(() => null);
-      restored =
-        state === null || state.location === null || state.location.length === 0
-          ? null
-          : { location: state.location, part: state.part };
-      readingLayout.bound(state);
-      windowPlace.bound(state ?? { location: null, part: null });
-      await refreshLink();
-      injectPorts();
-      notifyStrip();
-    } catch (error) {
-      // no bridge, or the store refused: the elsewhere acts stay
-      // unoffered and the note records why (the honest refusal, never
-      // a fake surface)
-      elsewhereNote = `elsewhere unavailable: ${String(error instanceof Error ? error.message : error)}`;
-      notifyStrip();
-    }
-    return restored;
-  }
-
   async function refreshLink(): Promise<void> {
     linkLabel = null;
-    if (windowStore === null || windowStateId === null) return;
+    if (!bound) {
+      notifyStrip();
+      return;
+    }
     try {
-      const state = await windowStore.getState(windowStateId);
-      const linked = state.link;
-      if (linked === null || linked.length === 0) return;
+      // this window's link is the shell's fact about its label,
+      // answered beside every window in suite_windows; the shell
+      // lapses a dead link itself - a window's destruction removes
+      // every link pointing at it in the same step - so what the list
+      // answers is already clean: no lazy clearing here
       const windows = await suiteWindows();
-      linkLabel = windows.find((entry) => entry.state_id === linked)?.label ?? null;
-      // a state that no window carries is a dead link: clear it, so
-      // the strip never names a ghost and o never delivers into one
-      if (linkLabel === null) await windowStore.clearLink(windowStateId).catch(() => {});
+      linkLabel = windows.find((entry) => entry.label === nativeWindowLabel())?.link ?? null;
     } catch {
-      // a dead store read: the link resolves null until the next
+      // a dead shell read: the link resolves null until the next
       // refresh; o asks rather than delivering into a guess
     } finally {
       notifyStrip();
@@ -684,64 +515,36 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
-    if (windowStore === null || windowStateId === null) return;
+    if (!bound) return;
     const invoke = tauriInvoke();
-    const fresh =
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    // the delivery rides the state's birth location: the receiver
-    // restores it at boot through its own model (no eval into a
-    // half-loaded webview - the race the old app shipped as its
-    // linked-delivery hole)
-    await windowStore.create(fresh, { location: spec });
-    const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
+    // the receiver is born at the spec: open_suite_window seeds the
+    // birth place, and the receiver's own boot opens it through its
+    // own model (no eval into a half-loaded webview - the race the old
+    // app shipped as its linked-delivery hole)
+    const label = (await invoke("open_suite_window", { location: spec })) as string;
     await focusReceiver(label);
     if (becomeLink) {
-      // the store refuses links to a state no live window carries, and
-      // the receiver goes live when ITS boot binds - bounded wait for
-      // the binding, then the link (never an unbounded or dishonest
-      // success)
-      await setLinkWhenAttached(windowStateId, fresh);
+      // the target is live the moment the shell built the window: the
+      // link sets straight through, no attach race exists
+      await invoke("set_window_link", { from: nativeWindowLabel(), to: label });
       await refreshLink();
       notifyStrip();
     }
   }
 
-  async function setLinkWhenAttached(from: string, to: string, tries = 24): Promise<void> {
-    if (windowStore === null) return;
-    for (let attempt = 0; attempt < tries; attempt++) {
-      try {
-        await windowStore.setLink(from, to);
-        return;
-      } catch {
-        const state = await windowStore.getState(to).catch(() => null);
-        if (state !== null && state.attachedHere) {
-          // live here and still refused: not a race - the honest
-          // give-up names it
-          throw new Error(`the link could not be set even after ${to} went live`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    }
-    throw new Error(`the receiver ${to} never went live on this device`);
-  }
-
   async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
-    if (windowStore === null || windowStateId === null) {
-      await ensureWindowState();
-      // A JUST-OPENED window's state can still be binding when the
-      // human's o arrives (the suite worker's base defect 1: the act
-      // silently dropped, 'nothing happened'). WAIT for the binding,
-      // bounded - the act runs when the store lands; only a genuinely
-      // unbound window refuses, with the note.
+    if (!bound) {
+      // A JUST-OPENED window's binding facts can still be in flight
+      // when the human's o arrives (the suite worker's base defect 1:
+      // the act silently dropped, 'nothing happened'). WAIT for the
+      // boot's answer, bounded - the act runs when the facts land;
+      // only a genuinely unready window refuses, with the note.
       const deadline = Date.now() + 4000;
-      while ((windowStore === null || windowStateId === null) && Date.now() < deadline) {
+      while (!bound && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 120));
-        await ensureWindowState();
       }
-      if (windowStore === null || windowStateId === null) {
-        note = elsewhereNote ?? "the window store is not serving this window";
+      if (!bound) {
+        note = elsewhereNote ?? "the elsewhere surface is not ready for this window";
         notifyStrip();
         return;
       }
@@ -792,13 +595,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // the space-l link ask sets a link and opens nothing ("this window"
     // is its spec): focus moves only for an open
     if (asking.spec !== "this window") await focusReceiver(match.window);
-    if (asking.act === "link" && windowStore !== null && windowStateId !== null) {
-      const windows = await suiteWindows();
-      const target = windows.find((entry) => entry.label === match.window);
-      if (target?.state_id !== undefined && target.state_id !== null) {
-        await windowStore.setLink(windowStateId, target.state_id);
-        await refreshLink();
-      }
+    if (asking.act === "link" && bound) {
+      // the ask answered with a live window's label: that label is the
+      // link (the shell refuses it if the window died in between)
+      await tauriInvoke()("set_window_link", { from: nativeWindowLabel(), to: match.window });
+      await refreshLink();
     }
     notifyAsk();
     notifyStrip();
@@ -986,7 +787,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const surface = surfaceOfAddress(place.address);
       const target = instrumentFor(surface);
       setActive(surface);
-      windowPlace.placing(placementDone(target.places.restore(place)));
+      target.places.restore(place);
     },
   });
 
@@ -998,7 +799,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
       if (surface !== activeSurface) return;
       for (const observer of [...frameObservers]) observer(state);
       notifyStrip();
-      windowPlace.changed();
     });
   }
   const unsubscribeBoardFrame = subscribeSurface(activeInstrument(), "board");
@@ -1010,8 +810,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return instrument !== undefined ? instrument.snapshot() : { kind: "destroyed" };
   }
 
-  /** The place the window shows (lib/navigation/window-place.ts). */
-  function shownPlace(): WindowPlace | null {
+  /** The place the window shows (observation.ts shownPlaceOf). */
+  function shownPlace(): PortObservation["window"]["place"] {
     const state = displayedFrame();
     if (state.kind !== "alive" || state.content.kind !== "available") return null;
     return shownPlaceOf(
@@ -1169,7 +969,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
             }
           : { kind: "default" as const },
     };
-    windowPlace.placing(placementDone(target.places.restore(place)));
+    target.places.restore(place);
     notifyStrip();
   }
 
@@ -1352,14 +1152,21 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
     try {
       console.log("[viewer] startup: bridge present");
-      const restored = await ensureWindowState();
-      if (restored !== null) {
-        console.log(
-          `[viewer] startup: restoring the bound state's place: ${restored.location} ${restored.part ?? "(top)"}`,
-        );
-        openSpec(restored.location, restored.part);
-        // a restored location never falls through to the test-open
-        // channel; the window SET restored through the launch restore
+      // the boot's binding facts: the shell answers this window's
+      // label and, when it was born to show a place, the place (the o
+      // act's new window births its receiver at the spec). The
+      // elsewhere surface is ready when the facts have answered; no
+      // window state is read from anywhere (t-71@r3: a launch opens
+      // fresh, and what is on screen is the run's own)
+      const binding = (await invoke("window_binding")) as {
+        label: string;
+        opens_at?: string | null;
+      };
+      bound = true;
+      if (typeof binding.opens_at === "string" && binding.opens_at.length > 0) {
+        console.log(`[viewer] startup: born at ${binding.opens_at}`);
+        openSpec(binding.opens_at);
+        // a born place never falls through to the test-open channel
         return true;
       }
       const spec = (await invoke("test_open")) as string | null;
@@ -1372,6 +1179,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
       return true;
     } catch (error) {
       console.error(`[viewer] test open board FAILED: ${String(error)}`);
+      // the binding facts refused: the elsewhere acts stay unoffered
+      // and the note records why (the honest refusal, never a fake
+      // surface)
+      elsewhereNote = `elsewhere unavailable: ${String(error instanceof Error ? error.message : error)}`;
+      notifyStrip();
       return true;
     }
   }
@@ -1476,7 +1288,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
-      bound: windowStore !== null && windowStateId !== null,
+      bound,
       focus: focusState,
       place: shownPlace(),
       ask: ask === null
@@ -1518,8 +1330,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
   return {
     attachViewport(element: HTMLElement | null) {
       viewport.attachElement(element);
-      attachedViewport?.removeEventListener("scroll", onScrollerScroll);
-      element?.addEventListener("scroll", onScrollerScroll, { passive: true });
       attachedViewport = element;
       readingLayout.apply();
     },
@@ -1616,9 +1426,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     destroy() {
-      readingLayout.destroy();
-      windowPlace.destroy();
-      attachedViewport?.removeEventListener("scroll", onScrollerScroll);
       window.removeEventListener("keydown", windowKeyDown);
       windowHost.dispose();
       unsubscribeBoardFrame();

@@ -23,7 +23,7 @@
 //
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
 // window-wide since ea51669): they appear only when the window has
-// injected the ports and bound its window-store state. The primary
+// injected the ports and the boot's binding facts have answered. The primary
 // needs only the open funnel. No other act is offered - not the
 // prototype's 'l' (launch) or 'e' (inline activity), which the
 // agreement superseded.

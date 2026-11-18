@@ -32,6 +32,8 @@
 //   whether each opened through the port's own model.
 
 import type { BufferState } from "./contracts/buffer.ts";
+import type { SavedPlace } from "./contracts/places.ts";
+import { isPlane } from "./location.ts";
 import type { RenderPair } from "./instruments/registry.ts";
 import type { BoardData, BoardUI, RenderOutcome } from "../instruments/board.ts";
 import type { TasksData, TasksUI } from "../instruments/tasks.ts";
@@ -40,6 +42,37 @@ import type { Board, Block } from "./board/model.ts";
 import type { TaskRow } from "./tasks/page.ts";
 
 export const PORT_SURFACE = "__saccadePort" as const;
+
+export type ShownPlace = Readonly<{ location: string; part: string | null }>;
+
+/** The place the window shows: its ASKED location (never the revision
+ * a bare location resolved to - the readout names what was asked, so
+ * the trail's bare locations stay bare) and the board part the reading
+ * height sits in (the trail's own capture; a task row or the default
+ * position is no part). The control plane remembers no project (the
+ * human, 2026-11-14): its place is the bare plane. Null while the
+ * frame is loading or carries no location. */
+export function shownPlaceOf(
+  content: { asked?: unknown; status?: unknown } | undefined,
+  capture: () => SavedPlace,
+): ShownPlace | null {
+  if (content === undefined || typeof content.asked !== "string" || content.asked.length === 0) return null;
+  if (content.status === "loading") return null;
+  let part: string | null = null;
+  try {
+    const captured = capture();
+    const position = captured.position;
+    if (isPlane(captured.address)) {
+      part = null;
+    } else if (position.kind === "anchor") {
+      const anchor = position.anchor as { kind?: unknown; path?: unknown } | null;
+      if (anchor !== null && anchor.kind === "board-part" && typeof anchor.path === "string") part = anchor.path;
+    }
+  } catch {
+    // a buffer between lives captures nothing: no part
+  }
+  return { location: content.asked, part };
+}
 
 export type PortObservation = {
   app: Readonly<{ name: "saccade-app"; slice: number }>;
@@ -70,9 +103,9 @@ export type PortObservation = {
        * the page), or null when the window has no focus widget. */
       focusWidget: string | null;
     }> | null;
-    /** The place this window's state receives once it settles
-     * (lib/navigation/window-place.ts): the location as asked and the
-     * part at the reading height; null while nothing settled shows. */
+    /** The place the window shows: the location as asked and the
+     * part at the reading height (shownPlaceOf); null while nothing
+     * settled shows. */
     place: Readonly<{ location: string; part: string | null }> | null;
   }>;
   board: Readonly<{

@@ -11,8 +11,6 @@ import { commands, locators, page, userEvent, type Locator } from "vitest/browse
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
 import { SHELL_WORLD_KEY, type ShellCall, type ShellWindow, type ShellWorld } from "./shell-mock.ts";
 import { trackerDoor } from "./tracker-wire.ts";
-import { appWindowStore } from "./app-store.ts";
-import { WINDOW_STORE_KEY } from "../../../src/lib/window-store.ts";
 
 declare module "vitest/browser" {
   interface LocatorSelectors {
@@ -221,12 +219,10 @@ export type Shell = {
 };
 
 export type BridgedOptions = {
-  /** Other live windows besides "main": each is born in the app's own
-   * window store, the way its own boot would do it. */
+  /** Other live windows besides "main": plain entries in the shell's
+   * world (t-71@r3: the registry is the one owner, and the run keeps
+   * no window state anywhere else). */
   others?: string[];
-  /** The shell's launch-restore memory: the state ids open at the last
-   * quit (kit/shell-mock.ts last_session, taken once). */
-  lastSession?: string[];
   /** The shell's SACCADE_KEY_TRACE (the D1 diagnostic), off by default. */
   keyTrace?: boolean;
   /** Herdr's words feed (kit/shell-mock.ts ShellWorld.words). */
@@ -249,26 +245,17 @@ export const test = base.extend<{
     const seeded = inject("tracker");
     await use({ ...seeded, ...trackerDoor(seeded.base) });
   },
-  // the app with a mocked shell: one webview labelled main, a fresh
-  // store document, and the other windows the scenario names
+  // the app with a mocked shell: one webview labelled main and the
+  // other windows the scenario names, plain entries in the world
   // eslint-disable-next-line no-empty-pattern
   bridged: async ({}, use) => {
     const closers: (() => void)[] = [];
     await use(async (options = {}) => {
-      // the store document is the app's own (WINDOW_STORE_KEY, the
-      // key the app and the shell mock share): cleared per test so no
-      // state crosses launches, then the other windows seed their
-      // states through the app's WindowStore, the way their own boot
-      // would (kit/app-store.ts reads the same document)
-      localStorage.removeItem(WINDOW_STORE_KEY);
-      const store = appWindowStore();
       const windows: ShellWindow[] = [{ label: "main" }];
       for (const label of options.others ?? []) {
-        const stateId = `suite-state-${crypto.randomUUID()}`;
-        await store.create(stateId, {});
-        windows.push({ label, stateId });
+        windows.push({ label });
       }
-      const world: ShellWorld = { label: "main", windows, lastSession: options.lastSession ?? [], testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
+      const world: ShellWorld = { label: "main", windows, testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
       const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
       closers.push(close);
@@ -277,7 +264,12 @@ export const test = base.extend<{
         argsOf: (cmd) => world.calls.filter((call) => call.cmd === cmd).map((call) => call.args),
         windows: () => world.windows.map((entry) => ({ ...entry })),
         close: (label) => {
+          // the shell's Destroyed path: the window leaves the world and
+          // every link pointing at its label lapses with it
           world.windows = world.windows.filter((entry) => entry.label !== label);
+          for (const entry of world.windows) {
+            if (entry.link === label) delete entry.link;
+          }
         },
       };
       return { app, shell };

@@ -1,28 +1,27 @@
 //! The suite shell's window acts (t-14 "The suite"): one app, many
 //! first-class windows, the window manager owning all layout. The
 //! shell creates windows (`w`, the ask-once answer's new-window act,
-//! and resuming a stored window state here), focuses one when the
+//! each born at the place it should show), focuses one when the
 //! human asks (the window jump) and when the human opens something
 //! through the link (o, i, w, the task row's Enter: the receiver is
 //! focused, human ruling t-36 m-547, reversing t-14's "a new window
 //! never asks for focus" for those acts), always through the
 //! platform's activation request (focus_suite_window), broadcasts the
 //! window jump's labels to every suite window, and forgets a closing
-//! window in the session memory - closing forgets, the state stays in
-//! the app's own store (t-71, revising t-24@r20's tracker-side
-//! detach). Placement is never set: a new window gets whatever the
-//! window manager gives. A window created for any other reason (the
-//! launch restore) does not take focus when mapped.
+//! window - its entry and every link pointing at it lapse in the same
+//! step; nothing is written anywhere (t-71@r3). Placement is never
+//! set: a new window gets whatever the window manager gives. A window
+//! created for any other reason (the launch) does not take focus when
+//! mapped.
 
 use serde::Deserialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::window_registry::WindowRegistry;
 
-/// One window event, hooked for every window of this process: a bound
-/// window's destruction leaves the session memory - the next launch
-/// restores only what stayed open. The state itself is the app's own
-/// (t-71): nothing here reaches any store on close.
+/// One window event, hooked for every window of this process: a
+/// window's destruction leaves the registry - its entry and every
+/// link pointing at its label lapse together (t-71@r3).
 pub fn on_window_event(
     window: &tauri::Window<tauri::Wry>,
     event: &WindowEvent,
@@ -30,19 +29,8 @@ pub fn on_window_event(
 ) {
     if let WindowEvent::Destroyed = event {
         let label = window.label().to_string();
-        if let Some(entry) = registry.take_binding(&label) {
-            eprintln!(
-                "[shell] window {label} destroyed; the session memory forgets {}",
-                entry.state_id
-            );
-            use tauri::Manager;
-            let remaining = window
-                .app_handle()
-                .webview_windows()
-                .into_keys()
-                .filter(|other| *other != label)
-                .count();
-            crate::session::closed(&entry.state_id, remaining);
+        if registry.forget(&label) {
+            eprintln!("[shell] window {label} destroyed; its entry and the links to it lapsed");
         }
     }
 }
@@ -67,13 +55,13 @@ fn seconds_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// What one suite window carries: its label and the window store state it
-/// shows, when known.
+/// What one suite window carries: its label and the window it links
+/// to, when it carries a link.
 #[derive(serde::Serialize)]
 pub struct SuiteWindow {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub state_id: Option<String>,
+    pub link: Option<String>,
 }
 
 /// The suite's windows in this process, label order.
@@ -86,7 +74,7 @@ pub fn suite_windows(
         .webview_windows()
         .into_keys()
         .map(|label| SuiteWindow {
-            state_id: registry.state_id_of(&label),
+            link: registry.link_of(&label),
             label,
         })
         .collect();
@@ -96,26 +84,24 @@ pub fn suite_windows(
 
 /// Open a suite window: the window manager gives it what it gives,
 /// it does not take focus on map (the frontend's elsewhere acts then
-/// request focus for it, m-547), and the state it should resume - when
-/// the caller names one - is pre-seeded so the new window's bootstrap
-/// finds the binding and applies the state (the state itself lives in
-/// the app's own store, t-71).
+/// request focus for it, m-547), and the place it should show - when
+/// the caller names one - rides its birth: the window's own boot
+/// answers opens_at and opens there (t-71@r3). The label is the
+/// window's identity; the registry holds its entry from birth.
 #[tauri::command]
 pub fn open_suite_window(
     app: tauri::AppHandle,
     registry: tauri::State<'_, WindowRegistry>,
-    state_id: Option<String>,
+    location: Option<String>,
 ) -> Result<String, String> {
     let label = fresh_label(&app);
-    if let Some(seed) = &state_id {
-        registry.seed_state(&label, seed);
-    }
+    registry.born(&label, location.clone());
     eprintln!(
         "[shell] opening window {label}{}",
-        state_id
+        location
             .as_deref()
-            .map(|id| format!(" resuming {id}"))
-            .unwrap_or_else(|| " empty (a new window state)".to_string())
+            .map(|place| format!(" born at {place}"))
+            .unwrap_or_else(|| " born to no place".to_string())
     );
     let built_label = label.clone();
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::default())
@@ -181,7 +167,7 @@ pub fn open_suite_window(
         })
         .map(|_| built_label)
         .map_err(|error| {
-            registry.take_binding(&label);
+            registry.forget(&label);
             format!("the window manager refused: {error}")
         })
 }

@@ -2,30 +2,21 @@
 // shell (kit/shell-mock.ts): the link state and the strip, the o/i/w
 // decision (src/lib/elsewhere.ts elsewhereDecision), the dead-link
 // fallback, and which shell command fires with which arguments. The
-// window store is the app's own (t-71), read through the app's
-// WindowStore over the mocked realm's document (kit/app-store.ts).
-// What needs a second LIVE webview (the receiver's boot, the delivery
-// landing there, the link a new window completes once it binds) is
-// the native project's: s18-linked-delivery.scenario.ts.
+// run's window facts are the shell's memory (the registry, t-71@r3):
+// link facts read from shell.windows() and the readout. What needs a
+// second LIVE webview (the receiver's boot, the delivery landing
+// there, the link completing from the receiver's side) is the native
+// project's: s18-linked-delivery.scenario.ts.
 // Sources: t36_checks._s18_port, t36_differential._s17_port.
 import { expect, test } from "./kit/browser.ts";
 import { answerAsk, citationAct, openLocation, spec, whenBound, openPlane } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
-import type { Shell } from "./kit/browser.ts";
-import { appWindowStore } from "./kit/app-store.ts";
 
 // the citing seed's incorporation names the cited board at r1
 const citedAt = (tracker: Tracker): string => `${tracker.repo}/${tracker.tasks.cited}@r1`;
 
 async function onCiting(app: AppDriver, tracker: Tracker): Promise<void> {
   await openLocation(app, spec(tracker, tracker.tasks.citingChild));
-}
-
-// this window's own window-store state, as it bound it to the shell
-function ownState(shell: Shell): string {
-  const bound = shell.argsOf("bind_window_state").at(-1)?.stateId;
-  if (typeof bound !== "string") throw new Error("the app never bound its window state");
-  return bound;
 }
 
 // o through an ask answered with `window`'s chip: the link is set
@@ -45,10 +36,9 @@ test("one window, no link: o opens a new window born at the citation", async ({ 
 
   await citationAct(app, "o");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
-  const stateId = shell.argsOf("open_suite_window")[0]!.stateId as string;
-  // the delivery rides the new state's birth location, never an eval
-  // into the new webview (App.ts openInNewWindow)
-  expect((await appWindowStore().getState(stateId)).location).toBe(citedAt(tracker));
+  // the receiver is born at the citation: open_suite_window carried
+  // the location (App.ts openInNewWindow)
+  expect(shell.argsOf("open_suite_window")[0]).toEqual({ location: citedAt(tracker) });
   expect(shell.windows().map((entry) => entry.label)).toHaveLength(2);
   expect(shell.argsOf("open_in_window")).toEqual([]);
   expect(shell.argsOf("broadcast_jump_labels")).toEqual([]);
@@ -75,9 +65,9 @@ test("several windows, no link: o asks; the answer delivers there and becomes th
   expect(shell.argsOf("broadcast_jump_labels_clear").length).toBeGreaterThanOrEqual(1);
   await expect.poll(async () => (await app.readout()).window).toMatchObject({ link: "w-b", ask: null });
   expect((await app.strip()).link).toBe("linked to w-b");
-  // the link is the store's fact: this window's state points at w-b's
-  const receiver = shell.windows().find((entry) => entry.label === "w-b")!.stateId;
-  expect((await appWindowStore().getState(ownState(shell))).link).toBe(receiver);
+  // the link is the shell's fact about this window's label: main
+  // points at w-b
+  expect(shell.windows().find((entry) => entry.label === "main")!.link).toBe("w-b");
 });
 
 test("a live link: o delivers without asking; i asks and leaves the link; w opens a new viewer", async ({ bridged, tracker }) => {
@@ -105,8 +95,7 @@ test("a live link: o delivers without asking; i asks and leaves the link; w open
   // w: always a new viewer, born at the citation; the link stays
   await citationAct(app, "w");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
-  const born = shell.argsOf("open_suite_window")[0]!.stateId as string;
-  expect((await appWindowStore().getState(born)).location).toBe(spec);
+  expect(shell.argsOf("open_suite_window")[0]!.location).toBe(spec);
   expect((await app.readout()).window.link).toBe("w-b");
   expect((await app.strip()).link).toBe("linked to w-b");
 });
@@ -162,12 +151,11 @@ test("S17 the task row's Enter delivers through the link and the list holds its 
   expect((await app.readout()).tasks!.selection).not.toBeNull();
 
   // Enter runs the primary, o: one window and no link opens a new
-  // window born at the row's board (once the window state is bound)
+  // window born at the row's board (once the binding facts answered)
   await whenBound(app);
   await app.press("Enter");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
-  const born = shell.argsOf("open_suite_window")[0]!.stateId as string;
-  expect((await appWindowStore().getState(born)).location).toContain(`/${row.task}`);
+  expect(shell.argsOf("open_suite_window")[0]!.location).toContain(`/${row.task}`);
   const obs = await app.readout();
   expect(obs.surface).toBe("tasks");
   expect(obs.trail.entries.map((entry) => entry.location).join(" ")).not.toContain(`/${row.task}@`);

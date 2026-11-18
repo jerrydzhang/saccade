@@ -158,7 +158,6 @@ runner config loader and points vite's cache at the run root).
 
 Native holds real-window scenarios only: S18 (window birth, delivery landing
 in the other webview, the link), and the relaunches on the same data dir
-(`app.relaunch()`): S20 (the window set comes back), the reading layout, and
-`window-place.scenario.ts` (each window back at its location and reading
-part). To add later: an `i` delivery into an already-live receiver that has
-scrolled away.
+(`app.relaunch()`): S20 (a launch opens one fresh window, nothing comes
+back) and the reading layout. To add later: an `i` delivery into an
+already-live receiver that has scrolled away.

@@ -265,17 +265,16 @@ through. A write door with no caller is a retirement candidate.
 
 ## Window state
 
-Window state is the app's own, device-local since 0.22.0 (t-71,
-revising t-14's placement in the tracker): the store is the app's
-`client/port/src/lib/window-store.ts`, its file in the app's data
-directory, reached through the app's own shell - the tracker holds no
-window surface. The served route `/api/v1/windows` is gone, this
-version's breaking change. An existing `<db>.windows` file is left
-where it lies: never read, never cleaned. What the removed surface
-shared with every door stays: the origin policy answers an allowed
-origin's preflight with its origin echoed and the verbs the doors
-carry, and the echo rides every answered request, reads and writes
-alike.
+The app keeps no window state between runs (t-71@r3): a launch reads
+and writes no window-state file and opens one fresh window, and the
+tracker holds no window surface. The served route `/api/v1/windows` is
+gone, this version's breaking change. An existing `<db>.windows` file
+is left where it lies: never read, never cleaned. Within a run, the
+app's shell holds its windows' links in its own memory. What the
+removed surface shared with every door stays: the origin policy
+answers an allowed origin's preflight with its origin echoed and the
+verbs the doors carry, and the echo rides every answered request,
+reads and writes alike.
 
 ## Test placement
 

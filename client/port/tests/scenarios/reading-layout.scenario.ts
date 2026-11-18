@@ -1,10 +1,11 @@
 // The board's reading layout (lib/board/reading-layout.ts): the human
 // found boards small with no way to zoom, and wide margins even on a
 // vertical monitor. Two scales: + - = zoom the text (the column grows
-// with it), Ctrl-+ Ctrl-- Ctrl-= change the column's width alone. Both
-// ride the window's state, so a relaunch restores them.
+// with it), Ctrl-+ Ctrl-- Ctrl-= change the column's width alone.
+// Per window, for the run (t-71@r3): they start at their defaults and
+// nothing carries them across a quit.
 import { expect, test } from "#scenario";
-import { longBoard, openLocation, spec, whenBound } from "./kit/helpers.ts";
+import { longBoard, openLocation, spec } from "./kit/helpers.ts";
 import type { AppDriver, Box } from "./kit/driver.ts";
 
 async function firstParagraph(app: AppDriver): Promise<string> {
@@ -54,15 +55,4 @@ test("Ctrl-+ widens the column without enlarging the text; Ctrl-= restores", { t
   await app.press("Ctrl-=");
   await expect.poll(async () => (await app.readout()).reading?.width ?? null).toBe(1);
   await expect.poll(async () => width(await app.partBox(part))).toBeCloseTo(width(before), 0);
-});
-
-test("the reading layout rides the window state across a relaunch", { tags: ["multi-window"] }, async ({ app, tracker }) => {
-  await openLocation(app, spec(tracker, await longBoard(tracker, 3)));
-  await whenBound(app);
-  await app.press("+", "Ctrl-+", "Ctrl-+");
-  await expect.poll(async () => (await app.readout()).reading).toEqual({ zoom: 1.1, width: 1.2 });
-  // the write settles after the steps stop: a hold, then the relaunch
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
-  await app.relaunch();
-  await expect.poll(async () => (await app.readout()).reading, { timeout: 20_000 }).toEqual({ zoom: 1.1, width: 1.2 });
 });
