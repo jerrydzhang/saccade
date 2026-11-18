@@ -151,15 +151,16 @@ export interface TargetPresentation {
   release(): void;
 }
 export interface TargetPresentations {
-  // Scoped to one published frame. Shared machinery resolves identity/actions
-  // and schedules measurement together; caller doesn't patch later geometry.
+  // Scoped to the buffer's published frame: the machinery resolves
+  // identity and acts against the CURRENT publication at ask time
+  // (the instruments' own sessions read their targets live too), and
+  // a lease whose element the gesture cannot measure acts nothing.
   presentTarget(id: string, measure: () => Bounds | null): TargetPresentation;
   // The frame surface's face (t-73): what the frame's components
   // render from the leases the instrument's view receives - the select
   // session's labels, the act menu's view, session and input context,
-  // the frame's reading context (the shared keys, defined once), and
-  // the reading anchor Back rides - all scoped to THIS published
-  // frame, dead with it.
+  // the frame's reading context (the shared keys, defined once), the
+  // reading anchor Back rides, and the selection's durable anchor.
   selectView(): SelectSessionView | null;
   menuView(): MenuView | null;
   menuSession(): MenuSession;
@@ -167,6 +168,11 @@ export interface TargetPresentations {
   readingContext(extra?: readonly CommandBinding[]): InputContext;
   readingAnchor(): ReadingAnchor;
   locateAnchor(anchor: string): Bounds | null;
+  /** The anchor of the label-selected target (a row's task), while a
+   * published target still carries it: what selection follows across
+   * a refresh. Null when the selection is anchor-less or its anchor
+   * has left the published targets. */
+  selectedAnchor(): string | null;
 }
 export interface TargetGeometry {
   bounds(id: string): Bounds | null;

@@ -21,7 +21,7 @@
 //   default positions only). Each reports what it cannot yet do
 //   instead of pretending. Target presentations stopped waiting in
 //   t-73: published targets get the frame's real presentation (lib/
-//   frame/presentations.ts) - no instrument publishes targets yet.
+//   frame/presentations.ts), and the task list publishes its targets.
 
 import type {
   Bounds,
@@ -86,6 +86,10 @@ export interface BufferAccess<T extends object> {
   readonly updates: ContentUpdates<ContentFrame<T>>;
   readonly interactions: InputCapture;
   setReadingContext(context: InputContext | null): void;
+  /** The frame's presentation of this buffer's published targets (the
+   * sessions the instrument no longer keeps: select, menu, the reading
+   * context's shared keys, the anchors). */
+  presentations(): TargetPresentations;
 }
 export interface InstrumentAttachment<UI extends object, A extends AnchorData> {
   readonly presentation: UI;
@@ -400,7 +404,6 @@ export class SliceBufferHost<
     };
   }
   private leases: Set<InputLeaseImpl> = new Set();
-  private readonly framePresentations = new WeakMap<ContentFrame<T>, TargetPresentations>();
   private restoreJobs: Set<RestoreJobImpl> = new Set();
 
   private readonly build: BufferBuild<T, UI, A>;
@@ -428,6 +431,7 @@ export class SliceBufferHost<
       geometry: this.geometry(),
       updates: this.updates(),
       interactions: this.interactions(),
+      presentations: () => this.presentations(),
       setReadingContext: (context) => {
         if (this.destroyed) return;
         this.baseContext = context;
@@ -516,23 +520,33 @@ export class SliceBufferHost<
   }
 
   presentationsFor(frame: ContentFrame<T>): TargetPresentations {
-    const existing = this.framePresentations.get(frame);
-    if (existing) return existing;
-    // The frame's presentation of THIS frame's targets (t-73): select
-    // over the targets in view, the act menu, the click paths, the
-    // reading context and the reading anchor. One per published frame,
-    // dead with it; a repeat query is the same object (the registry
-    // packs it into the props the frame's components render from).
-    const presentations: TargetPresentations = createTargetPresentations({
-      targets: () => frame.targets,
-      bounds: (id) => this.geometry().bounds(id),
-      capture: (context) => this.interactions().capture(context),
-      report: (issue) => this.diagnostics.report(this.context, issue),
-      viewport: this.viewport,
-    });
-    this.framePresentations.set(frame, presentations);
-    return presentations;
+    // The presentation is the buffer's, not the frame's: the sessions
+    // it holds (select, menu) outlive refreshes - the frame's targets
+    // port reads the CURRENT publication at ask time, the way the
+    // instruments' own sessions read their live models - and a lease
+    // whose element the gesture cannot measure acts nothing.
+    return this.presentations();
   }
+
+  /** The frame's presentation of this buffer's published targets: one
+   * per buffer, built on first ask over the buffer's own services. */
+  presentations(): TargetPresentations {
+    if (this.presentationsCore === null) {
+      this.presentationsCore = createTargetPresentations({
+        targets: () => {
+          const state = this.snapshot();
+          if (state.kind !== "alive" || state.content.kind !== "available") return [];
+          return state.content.value.targets;
+        },
+        bounds: (id) => this.geometry().bounds(id),
+        capture: (context) => this.interactions().capture(context),
+        viewport: this.viewport,
+      });
+    }
+    return this.presentationsCore;
+  }
+
+  private presentationsCore: TargetPresentations | null = null;
 
   /** The window's return-places face over the attachment's content
    * places. Slice 1: default-position capture; restore requests the

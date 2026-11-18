@@ -1,36 +1,41 @@
 // The frame's half of the instrument contract (t-73): the presentation
-// of a published frame's targets. An instrument publishes its targets
-// with its data; this module presents them with no code in the
+// of the buffer's published targets. An instrument publishes its
+// targets with its data; this module presents them with no code in the
 // instrument - select mode over the targets in view (the geometry
 // bounds decide in-view; nested labels per the target's `inside`), the
 // act menu built from the acts list in order, the click paths (plain
 // click = the first act; a modified click = the act its key names;
 // right-click = the act list at the pointer), the frame's reading
 // context (the shared keys, defined once in lib/input/contexts.ts),
-// and the reading anchor Back rides.
+// and the anchors - the reading position's, for Back, and the
+// selection's, which follows a target across a refresh by its durable
+// anchor and clears when no published target carries it any more.
 //
 // Pure logic over injected ports: no DOM, no Svelte, no transport. The
-// buffer's presentationsFor builds one per published frame; the frame
-// surface component renders the views this module notifies. Everything
-// here is scoped to its frame and dead with it: a lease from an old
-// frame acts nothing, never a silently wrong act.
+// targets port reads the buffer's CURRENT publication at ask time, so
+// the sessions here outlive refreshes the way an instrument's own
+// sessions did (the task list's allTargets() read the shown page and
+// the live rail alike); a lease resolves its target when the gesture
+// presents it, and an element the gesture cannot measure means the
+// target has left - the lease acts nothing, never a silently wrong
+// act. The frame surface component renders the views this module
+// notifies.
 
-import { knownIssue, type Bounds, type KnownIssue, type Point, type ReadingAnchor, type TargetDefinition, type TargetPresentations, type Unsubscribe, type Viewport } from "../contracts/buffer.ts";
+import type { Bounds, Point, ReadingAnchor, TargetDefinition, TargetPresentations, Unsubscribe, Viewport } from "../contracts/buffer.ts";
 import type { CommandBinding, InputContext } from "../contracts/input.ts";
 import { frameReadingContext } from "../input/contexts.ts";
 import { createSelectSession, type SelectableTarget, type SelectSessionView } from "../select/session.ts";
 import { createActMenu, type ActMenu } from "../menu/create.ts";
-import type { MenuAct, MenuSession, MenuView, MenuTarget } from "../menu/session.ts";
+import type { MenuAct, MenuSession, MenuTarget, MenuView } from "../menu/session.ts";
 
 /** The ports the frame's presentation reads, all injected: the
- * published targets (read at ask time, never frozen), the geometry
- * service's content-coordinate bounds, the input capture funnel, the
- * recognized-issue report, and the viewport the reading keys serve. */
+ * published targets (the buffer's current publication, read at ask
+ * time), the geometry service's content-coordinate bounds, the input
+ * capture funnel, and the viewport the reading keys serve. */
 export interface TargetPresentationPorts {
   targets(): readonly TargetDefinition[];
   bounds(id: string): Bounds | null;
   capture(context: InputContext): { release(): void };
-  report(issue: KnownIssue): void;
   viewport: Viewport;
 }
 
@@ -63,6 +68,11 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
   const menu: ActMenu = createActMenu(actsOf, { capture: ports.capture });
   menu.setOnNotify(notify);
 
+  // The selection's anchor: what the readout's selection fact and a
+  // refresh follow. A target without an anchor (a rail entry) selects
+  // without recording one.
+  let selected: string | null = null;
+
   const select = createSelectSession({
     // the select machinery's TargetKind is the app's target kinds; the
     // published kind names its own (the same narrowing the registry's
@@ -86,6 +96,7 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
     },
     capture: ports.capture,
     onSelected(target) {
+      selected = targetOf(target.part)?.anchor ?? null;
       // scenario 9: the selection opens the act menu
       const def = targetOf(target.part);
       if (def === undefined) return;
@@ -110,17 +121,6 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
   return {
     presentTarget(id, measure) {
       const def = targetOf(id) ?? null;
-      if (def === null) {
-        // a lease for an id this frame does not publish (a stale
-        // gesture after a refresh) reports and acts nothing - never a
-        // silently wrong act
-        ports.report(
-          knownIssue({
-            code: "target-unavailable",
-            message: `no published target '${id}' in this frame`,
-          }),
-        );
-      }
       let released = false;
       // The gesture's own measurement, taken with the lease: an
       // element it cannot measure has left the surface, and a stale
@@ -211,6 +211,15 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
       const def = ports.targets().find((entry) => entry.anchor === anchor);
       if (def === undefined) return null;
       return ports.bounds(def.id);
+    },
+
+    selectedAnchor(): string | null {
+      // the selection follows its anchor across a refresh: it stands
+      // while a published target still carries it, and clears - never
+      // a silent neighbour - when none does (scenario 12's identity
+      // rule, the frame's own now)
+      if (selected === null) return null;
+      return ports.targets().some((entry) => entry.anchor === selected) ? selected : null;
     },
   };
 }

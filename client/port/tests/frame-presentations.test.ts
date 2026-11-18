@@ -20,7 +20,7 @@ import {
   type InputContext,
   type KeySequence,
 } from "../src/lib/contracts/input.ts";
-import { knownIssue, type Bounds, type KnownIssue, type TargetDefinition, type Viewport } from "../src/lib/contracts/buffer.ts";
+import type { Bounds, TargetDefinition, Viewport } from "../src/lib/contracts/buffer.ts";
 
 const VIEW = { width: 300, height: 100 };
 
@@ -57,7 +57,6 @@ const box = (top: number, bottom: number): Bounds => ({ left: 0, top, right: 100
  * the instruments will publish. */
 function harness(defs: readonly TargetDefinition[], geometry: ReadonlyMap<string, Bounds>, viewport = fakeViewport()) {
   const runs: string[] = [];
-  const reported: KnownIssue[] = [];
   const captured: InputContext[] = [];
   let released = 0;
   const ports: TargetPresentationPorts = {
@@ -71,10 +70,9 @@ function harness(defs: readonly TargetDefinition[], geometry: ReadonlyMap<string
         },
       };
     },
-    report: (issue) => reported.push(issue),
     viewport,
   };
-  return { presentations: createTargetPresentations(ports), reported, captured, releasedOf: () => released, viewport };
+  return { presentations: createTargetPresentations(ports), captured, releasedOf: () => released, viewport };
 }
 
 /** An act whose run records itself, so a test sees exactly which acts
@@ -237,14 +235,15 @@ test("a lease whose element has no acts clicks nothing and opens no menu", () =>
   assert.deepEqual(runs, []);
 });
 
-test("a lease for an id the frame does not publish reports and acts nothing", () => {
+test("a lease for an id the frame does not publish acts nothing", () => {
   const runs: string[] = [];
-  const { presentations, reported } = harness([], new Map());
+  const { presentations } = harness([], new Map());
   const lease = presentations.presentTarget("ghost", () => box(0, 20));
   assert.equal(lease.activatePointer("plain"), false);
+  lease.activatePrimary();
+  lease.showActions({ left: 0, top: 0 });
+  assert.equal(presentations.menuView(), null);
   assert.deepEqual(runs, []);
-  assert.equal(reported.length, 1);
-  assert.equal(reported[0]!.code, "target-unavailable");
 });
 
 test("a lease whose element has left the surface acts nothing", () => {
@@ -406,4 +405,49 @@ test("an instrument's own key extends the reading context; a frame key cannot be
     () => presentations.readingContext([{ action: { id: "tasks.other", label: "other", run: () => {} }, keys: [sequence(key("j"))] }]),
     "a binding that names a frame key is a collision, never a silent rebinding",
   );
+});
+
+test("the selection's anchor follows its target across a refresh and clears when it leaves", () => {
+  const defs: TargetDefinition[] = [
+    plain({ id: "a", anchor: "t-1", acts: () => [] }),
+    plain({ id: "b", anchor: "t-2", acts: () => [] }),
+  ];
+  const geometry = new Map([
+    ["a", box(10, 40)],
+    ["b", box(50, 80)],
+  ]);
+  const captured: InputContext[] = [];
+  const ports: TargetPresentationPorts = {
+    targets: () => defs,
+    bounds: (id) => geometry.get(id) ?? null,
+    capture: (context) => {
+      captured.push(context);
+      return { release: () => {} };
+    },
+    viewport: fakeViewport(),
+  };
+  const presentations = createTargetPresentations(ports);
+  const select = commandsOf(presentations.readingContext()).find((entry) => entry.action.id === "frame.select")!;
+  select.action.run();
+  // the labels' letters are the select machinery's (A first): typing
+  // the first target's letter into the captured select context
+  // selects it
+  const selectContext = captured.at(-1)!;
+  const resolution = selectContext.onUnmatched?.({ key: "a", ctrl: false, shift: false, alt: false, meta: false });
+  assert.equal(resolution?.kind, "consume");
+  assert.equal(presentations.selectView(), null, "the session exits on selection");
+  assert.equal(presentations.selectedAnchor(), "t-1", "the selected row's durable anchor is the selection's fact");
+  // the row leaves the publication (the refresh republished without
+  // it): the anchor clears - never a silent neighbour
+  defs.splice(0, 1);
+  assert.equal(presentations.selectedAnchor(), null);
+});
+
+test("selecting an anchor-less target records no anchor", () => {
+  const defs: TargetDefinition[] = [plain({ id: "rail", anchor: null, acts: () => [] })];
+  const geometry = new Map([["rail", box(0, 20)]]);
+  const { presentations } = harness(defs, geometry);
+  const select = commandsOf(presentations.readingContext()).find((entry) => entry.action.id === "frame.select")!;
+  select.action.run();
+  assert.equal(presentations.selectedAnchor(), null);
 });

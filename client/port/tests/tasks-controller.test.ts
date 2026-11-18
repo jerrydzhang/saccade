@@ -116,8 +116,11 @@ interface Harness {
   elsewhere: [string, ElsewhereAct][];
   copied: string[];
   press(key: string): string;
+  presentations(): import("../src/components/Buffer.ts").TargetPresentations | null;
   selectView(): unknown;
   menuView(): unknown;
+  showActions(part: string): void;
+  plainClick(part: string): boolean;
 }
 
 function harness(t: import("vitest").TestContext, rows: { task: string; title: string }[], bounds: Map<string, { top: number; bottom: number }>, scrollTop = 0): Harness {
@@ -149,27 +152,35 @@ function harness(t: import("vitest").TestContext, rows: { task: string; title: s
   };
   const opened: string[] = [];
   const elsewhere: [string, ElsewhereAct][] = [];
+  const copied: string[] = [];
+  // the window services ride the definition (t-73): the harness hands
+  // them at connect, exactly as the window assembly does
   let attachment!: InstrumentAttachment<TasksUI, TaskAnchor>;
   const host = new SliceBufferHost<TasksData, TasksUI, TaskAnchor>({
     context: { windowId: "w", bufferId: "tasks-1" },
     viewport: viewport as unknown as import("../src/lib/contracts/buffer.ts").Viewport,
     diagnostics: { report: () => "", unexpected: () => "" },
     connect(buffer) {
-      attachment = connectTasks(buffer);
+      attachment = connectTasks(buffer, {
+        open: (spec, part) => opened.push(part == null ? spec : `${spec} ${part}`),
+        elsewhere: (spec, act) => elsewhere.push([spec, act]),
+        copy: (text) => copied.push(text),
+      });
       return attachment;
     },
   });
   const built = host.wire();
   built.host.activate();
   onTestFinished(() => built.host.destroy());
-  const copied: string[] = [];
-  attachment.presentation.setTaskPorts({
-    open: (spec, part) => opened.push(part == null ? spec : `${spec} ${part}`),
-    elsewhere: (spec, act) => elsewhere.push([spec, act]),
-    copy: (text) => copied.push(text),
-  });
   const press = (key: string): string =>
     built.host.handleKey({ key, ctrl: false, shift: false, alt: false, meta: false });
+  // the select and menu sessions are the frame's, behind the lease
+  // (t-73): the views read off the buffer's presentations
+  const presentations = (): import("../src/components/Buffer.ts").TargetPresentations | null => {
+    const state = built.host.snapshot();
+    if (state.kind !== "alive" || state.content.kind !== "available") return null;
+    return built.host.presentationsFor(state.content.value);
+  };
   return {
     built,
     attachment,
@@ -177,20 +188,17 @@ function harness(t: import("vitest").TestContext, rows: { task: string; title: s
     elsewhere,
     copied,
     press,
-    selectView: () => {
-      let view: unknown = null;
-      attachment.presentation.subscribeSelect((v) => {
-        view = v;
-      })();
-      return view;
+    presentations,
+    selectView: () => presentations()?.selectView() ?? null,
+    menuView: () => presentations()?.menuView() ?? null,
+    showActions: (part: string): void => {
+      const lease = presentations()?.presentTarget(part, () => ({ left: 0, top: 0, right: 0, bottom: 0 }));
+      lease?.showActions({ left: 0, top: 0 });
     },
-    menuView: () => {
-      let view: unknown = null;
-      attachment.presentation.subscribeMenu((v) => {
-        view = v;
-      })();
-      return view;
-    },
+    /** The frame's own click path: the lease the surface would
+     * create for the part, activated as a plain click. */
+    plainClick: (part: string): boolean =>
+      presentations()?.presentTarget(part, () => ({ left: 0, top: 0, right: 0, bottom: 0 })).activatePointer("plain") ?? false,
   };
 }
 
@@ -210,14 +218,24 @@ test("the tasks page publishes through the refresh pipeline with its rows", asyn
   assert.equal(state.kind, "alive");
   if (state.kind === "alive" && state.content.kind === "available") {
     // the host's snapshot is the raw state: the frame is the content
-    // frame's VALUE (the registry's projection wraps it for rendering)
-    const frame = state.content.value.value;
+    // frame (the registry's projection wraps it for rendering), its
+    // targets in the publication's own slot (t-73)
+    const published = state.content.value;
+    const frame = published.value;
     assert.equal(frame.status, "loaded");
     assert.equal(frame.location, "plane");
     assert.equal(frame.project, "tasks-test");
     assert.equal(frame.asked, "plane", "the plane's location names no tracker");
-    assert.equal(frame.targets.length, 2);
-    assert.equal(frame.targets[0]?.task, "t-0");
+    // the rows, then the rail's entries (the shown project publishes
+    // as a target like the rows, t-73)
+    assert.equal(published.targets.length, 3);
+    assert.equal(published.targets[0]?.anchor, "t-0");
+    assert.equal(published.targets[0]?.id, "/content/0/content/0/row/0");
+    assert.equal(published.targets[0]?.label, "t-0 the cited seed account");
+    assert.deepEqual(
+      published.targets.map((target) => target.kind),
+      ["task", "task", "project"],
+    );
   } else {
     assert.fail("the tasks page published");
   }
@@ -249,10 +267,7 @@ test("label selection lands on the row and opens its act menu", async (t) => {
     { task: "t-1", title: "the citing seed account" },
   ], ROW_BOUNDS);
   await h.attachment.places.request(PLANE);
-  const state0 = h.built.host.snapshot();
-  console.log("DBG state:", state0.kind, state0.kind === "alive" ? state0.content.kind : "-", state0.kind === "alive" && state0.content.kind === "available" ? JSON.stringify(state0.content.value.value.targets.map((t2) => t2.part)) : "-");
   assert.equal(h.press("s"), "consume");
-  console.log("DBG select view:", JSON.stringify(h.selectView()));
   // labels paint while the session is active (it exits on selection)
   const view = h.selectView() as { active: boolean; labels: { part: string; label: string }[] };
   assert.equal(view.active, true);
@@ -326,19 +341,6 @@ test("with no selection no task act runs (the menu is not open)", async (t) => {
   h.press("Enter");
   assert.deepEqual(h.opened, []);
   assert.deepEqual(h.elsewhere, []);
-});
-
-test("a plain click runs the clicked row's first act directly", async (t) => {
-  const h = harness(t, [
-    { task: "t-0", title: "the cited seed account" },
-    { task: "t-1", title: "the citing seed account" },
-  ], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
-  h.attachment.presentation.rowPrimaryClick("/content/0/content/0/row/1");
-  // F6: the row's first act is o through the link - a plain click
-  // delivers through the elsewhere surface, never in place
-  assert.deepEqual(h.elsewhere, [["tasks-test/t-1", "link"]]);
-  assert.deepEqual(h.opened, []);
 });
 
 test("departure capture records the row under the reading position; restore returns by identity plus offset", async (t) => {
@@ -425,14 +427,13 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
     viewport: viewport as unknown as import("../src/lib/contracts/buffer.ts").Viewport,
     diagnostics: { report: () => "", unexpected: () => "" },
     connect(buffer) {
-      attachment = connectTasks(buffer);
+      attachment = connectTasks(buffer, { open: () => {} });
       return attachment;
     },
   });
   const built = host.wire();
   built.host.activate();
   onTestFinished(() => built.host.destroy());
-  attachment.presentation.setTaskPorts({ open: () => {} });
   await attachment.places.request(PLANE);
   built.host.handleKey({ key: "s", ctrl: false, shift: false, alt: false, meta: false });
   built.host.handleKey({ key: "a", ctrl: false, shift: false, alt: false, meta: false });
@@ -471,8 +472,9 @@ test("the control plane: rail entries are targets - s labels them after the rows
   h.press("Enter");
   assert.deepEqual(h.opened, ["plane tasks-test"]);
   assert.equal(h.attachment.presentation.getSelection(), null, "a rail entry is not a task selection");
-  // a plain click on the entry runs the same first act
-  h.attachment.presentation.rowPrimaryClick(project);
+  // a plain click on the entry runs the same first act (the frame's
+  // lease path, the surface's click)
+  assert.equal(h.plainClick(project), true);
   assert.deepEqual(h.opened, ["plane tasks-test", "plane tasks-test"]);
   // the rail marks the shown project; outside the native shell it
   // says Herdr's words are not here rather than showing nobody
@@ -486,7 +488,8 @@ test("the control plane: rail entries are targets - s labels them after the rows
   assert.ok(shown.projects.some((entry) => entry.name === "tasks-test" && entry.current));
 
   // d on the shown project: it leaves the rail though the list stays
-  h.attachment.presentation.openMenuFor({ part: project, kind: "project", label: "tasks-test" });
+  // (the frame's lease opens the act list, the right-click's path)
+  h.showActions(project);
   h.press("d");
   const after = (() => {
     let next: import("../src/lib/tasks/rail.ts").Rail | null = null;
@@ -522,6 +525,12 @@ function frameOf(h: Harness): TasksData {
   const state = h.built.host.snapshot();
   if (state.kind !== "alive" || state.content.kind !== "available") assert.fail("the plane published a frame");
   return state.content.value.value;
+}
+
+function publishedTargetsOf(h: Harness): readonly import("../src/lib/contracts/buffer.ts").TargetDefinition[] {
+  const state = h.built.host.snapshot();
+  if (state.kind !== "alive" || state.content.kind !== "available") assert.fail("the plane published a frame");
+  return state.content.value.targets;
 }
 
 function railOfHarness(h: Harness): import("../src/lib/tasks/rail.ts").Rail {
@@ -576,7 +585,15 @@ test("a bare plane shows the home project; an unreachable one keeps the rail and
   const shown = frameOf(h);
   assert.equal(shown.project, "tasks-test");
   assert.equal(shown.status, "loaded");
-  assert.equal(shown.targets.length, 1);
+  const shownTargets = publishedTargetsOf(h).map((target) => ({ id: target.id, kind: target.kind }));
+  assert.deepEqual(
+    shownTargets,
+    [
+      { id: "/content/0/content/0/row/0", kind: "task" },
+      { id: "rail/project/tasks-test", kind: "project" },
+    ],
+    "the rail's entries publish as targets with the rows",
+  );
 
   // a project this device never reached: the plane names the problem
   // and the rail stays, so another project is one act away
@@ -585,7 +602,13 @@ test("a bare plane shows the home project; an unreachable one keeps the rail and
   assert.equal(dead.status, "invalid");
   assert.equal(dead.project, "ghost");
   assert.match(dead.problem ?? "", /ghost/);
-  assert.equal(dead.targets.length, 0);
+  // the rail's entries stay targetable on an invalid plane: the
+  // shown (dead) project and the reached one
+  assert.deepEqual(
+    publishedTargetsOf(h).map((target) => target.id),
+    ["rail/project/ghost", "rail/project/tasks-test"],
+    "the rail's projects stay targetable on an invalid plane",
+  );
   assert.ok(railOfHarness(h).projects.some((project) => project.name === "tasks-test"));
 
   // a bare plane again keeps a known shown project, else the home
@@ -675,7 +698,8 @@ test("an agent no tracker registered is a rail target: s labels it, its menu is 
   h.press("Enter");
   assert.deepEqual(h.copied, ["hc attach other/t63"]);
   assert.deepEqual(h.opened, [], "copying opens nothing");
-  // a plain click on the foot group's entry runs its one act
-  h.attachment.presentation.rowPrimaryClick(foot);
+  // a plain click on the foot group's entry runs its one act (the
+  // frame's lease path, the surface's click)
+  assert.equal(h.plainClick(foot), true);
   assert.deepEqual(h.copied, ["hc attach other/t63", "hc attach t7r"]);
 });

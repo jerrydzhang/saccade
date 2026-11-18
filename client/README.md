@@ -2,8 +2,20 @@
 
 The Saccade suite's native app: a Svelte 5 frontend (`port/`) inside a
 Tauri 2 shell (`port-shell/` over the shell library in
-`src-tauri/src/`). Its windows hold the instruments - a board, the task
-list - read from a tracker over its HTTP wire. The app keeps no window
+`src-tauri/src/`). Its windows hold the instruments - a board, the
+task list - read from a tracker over its HTTP wire. The frame is a
+harness for the instruments (t-73): an instrument publishes its
+targets with its data (`ContentFrame.targets`, the contract's one
+target shape in `port/src/lib/contracts/buffer.ts`), and the frame
+presents them - select mode and its labels, the act menu, the click
+paths, the shared reading keys (`frameReadingContext`, an instrument
+adds keys and never rebinds one), the reading anchor Back rides. The
+task list publishes its rows and rail entries and keeps only its own
+concerns (the rail's feed, the add field, its return places); the
+board still wires its own select, menu and keys until its own task.
+Which instrument shows a location is each instrument's own claim
+(`port/src/lib/instruments/claims.ts`), read by the window assembly
+instead of a hard-coded choice. The app keeps no window
 state between runs (t-71@r3): a launch opens one fresh window, and
 what a run needs - which window is which and each window's link (the
 receiver `o` delivers into) - lives in the shell's memory (the window
@@ -49,7 +61,8 @@ The native test project runs only through the gated session lane:
 
 - `port/` - the frontend: `src/` (the window assembly `App.ts`, the
   instruments, `lib/` for the board model, rendering, find, select,
-  menus, input, figures), `tests/` (vitest: unit tests in `tests/`,
+  menus, input, figures, and the frame's presentation of published
+  targets in `lib/frame/`), `tests/` (vitest: unit tests in `tests/`,
   scenarios in `tests/scenarios/` with their kit), `vitest.config.ts`
   (the three projects), `vite.config.ts`
 - `port-shell/` - the app's crate: its own workspace root, the binary

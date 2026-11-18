@@ -5,16 +5,19 @@
 // controllers copied; the stateful load loop (generation, released,
 // askedSpec adoption) extracts here next, one controller at a time.
 
-import type { ContentFrame, PreparedContent } from "../contracts/buffer.ts";
+import type { ContentFrame, PreparedContent, TargetDefinition } from "../contracts/buffer.ts";
 import { knownIssue, type KnownIssue } from "../contracts/buffer.ts";
 import { SourceUnavailableError } from "../sources.ts";
 
 /** Wrap a prepared domain frame as the buffer's published content:
- * the logical content metadata rides with its data. */
+ * the logical content metadata rides with its data, its targets in
+ * the publication's own slot (t-73: an instrument that publishes
+ * targets passes them here, resolved with its data). */
 export function readyFrame<D extends object>(
   value: Readonly<D>,
+  targets: readonly TargetDefinition[] = [],
 ): PreparedContent<ContentFrame<D>> {
-  return { kind: "ready", value: { value, targets: [] } };
+  return { kind: "ready", value: { value, targets } };
 }
 
 export function failureIssue(code: string, message: string): KnownIssue {

@@ -6,10 +6,10 @@ from the TargetPresentations lease the instrument's view receives, and
 forwards the pointer's gestures on a marked element to that element's
 presentation: a plain click runs the primary act, a shifted or middle
 click runs the act its key names, a right-click opens the act list at
-the pointer. An instrument that publishes no targets gets no surface:
-nothing paints, no gesture acts, and the instrument's own content is
-the stage's whole story. Presentation only - the sessions live behind
-the presentations. -->
+the pointer. An instrument with no lease (a bare host, the specimen)
+or one publishing no targets gets no surface: nothing paints, no
+gesture acts, and the instrument's own content is the stage's whole
+story. Presentation only - the sessions live behind the presentations. -->
 <script lang="ts">
   import type { Bounds, TargetPresentations } from "../lib/contracts/buffer.ts";
   import type { SelectSessionView } from "../lib/select/session.ts";
@@ -19,10 +19,10 @@ the presentations. -->
   import ActMenu from "./ActMenu.svelte";
 
   let {
-    presentations,
+    presentations = null,
     children,
   }: {
-    presentations: TargetPresentations;
+    presentations?: TargetPresentations | null;
     children?: import("svelte").Snippet;
   } = $props();
 
@@ -33,6 +33,7 @@ the presentations. -->
   // the surface renders what the presentations hold now; every view
   // change in the frame's sessions re-reads both
   $effect(() => {
+    if (presentations === null) return;
     return presentations.subscribe(() => {
       select = presentations.selectView();
       menu = presentations.menuView();
@@ -61,6 +62,7 @@ the presentations. -->
   }
 
   function onClick(event: MouseEvent): void {
+    if (presentations === null) return;
     const part = partOf(event);
     if (part === null) return;
     // a shifted or middle click is the modified click (t-47): the act
@@ -70,6 +72,7 @@ the presentations. -->
   }
 
   function onContextMenu(event: MouseEvent): void {
+    if (presentations === null) return;
     const part = partOf(event);
     if (part === null) return;
     event.preventDefault();
@@ -90,7 +93,7 @@ a11y click advisories do not apply. -->
   {#if select !== null}
     <LabelOverlay chips={select.labels} measure={partMeasureIn(content)} typed={select.pendingLabel} />
   {/if}
-  {#if menu !== null}
+  {#if menu !== null && presentations !== null}
     <ActMenu {menu} host={content} session={presentations.menuSession()} />
   {/if}
 </div>
