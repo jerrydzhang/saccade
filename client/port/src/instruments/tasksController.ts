@@ -255,6 +255,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
           kind: row.kind,
           label: row.text,
           inside: null,
+          clickable: true,
           acts: () => taskRowActs({ part: row.part, kind: row.kind, label: row.text }, actDeps()),
           anchor: row.task,
         }));
@@ -265,6 +266,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       kind: entry.kind,
       label: tasksMenuLabel({ kind: entry.kind, label: entry.text }, entry),
       inside: entry.within ?? null,
+      clickable: true,
       acts: () => taskRowActs({ part: entry.part, kind: entry.kind, label: entry.text }, actDeps()),
       anchor: null,
     }));

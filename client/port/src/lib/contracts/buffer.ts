@@ -130,6 +130,13 @@ export type TargetDefinition = Readonly<{
    * depend on window services and live state: resolved when asked
    * for, never frozen at publication. */
   acts: () => readonly TargetAct[];
+  /** Whether the pointer's click acts on this target. True permits a
+   * plain click to run the first act and a modified click (shift or
+   * middle) to run the o act; false leaves the pointer only the
+   * right-click menu - select, the menu and Enter are the same
+   * either way. Required, with no default: no kind gets click
+   * behaviour by accident. */
+  clickable: boolean;
   /** What survives a refresh when the target has one (a row's task):
    * what selection follows and what Back returns to, since a part
    * path changes meaning when rows reorder. Null when none. */
@@ -146,7 +153,6 @@ export type ReadingAnchor =
 // container contracts, carried beside them so lib implements the
 // frame without importing components).
 export interface TargetPresentation {
-  activatePrimary(): void;
   activatePointer(kind: "plain" | "modified"): boolean;
   showActions(at: Point): void;
   release(): void;
