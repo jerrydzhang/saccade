@@ -51,6 +51,18 @@ do, and `tracker/README.md` carries the tracker's law.
   rewrites data.
 - A phase review checks locality: no stray docs, no stale paths, no
   files outside their package's story.
+- Code carries no tracker references. A comment states the rule
+  itself, never where it was decided: no task, message, incarnation
+  or revision numbers, and no exemption for test files - a comment
+  describing fixture data writes plain words ("task 0", "incarnation
+  2"), never the reference form. The rule is a hard rule for agents
+  whatever the check catches; the check is a backstop and need not be
+  exhaustive. Something that looks wrong and is deliberate says so in
+  plain words. The trail from a line to its decision is the commit
+  message, which names its task. The check holds the rule over the
+  lines a commit adds or changes; a string a test or a fixture
+  carries is not a comment and passes by construction, while a
+  comment about fixture data writes the plain words.
 
 ## Building and testing
 

@@ -23,11 +23,14 @@ declare module "node:child_process" {
 		status: number | null;
 		signal: string | null;
 		error: Error | undefined;
+		/** Present when the call asked for text (encoding "utf8"). */
+		stdout?: string;
+		stderr?: string;
 	}
 	export function spawnSync(
 		command: string,
 		args: readonly string[],
-		options: { stdio: readonly unknown[] },
+		options: { cwd?: string; encoding?: string; stdio?: readonly unknown[] },
 	): SpawnSyncResult;
 	export function spawn(
 		command: string,
