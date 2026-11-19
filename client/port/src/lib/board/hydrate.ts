@@ -90,25 +90,10 @@ export async function hydrate(
     if (stale()) return collected;
   }
 
-  hydrateIncorporations(container);
   await hydrateCitations(container, location);
   if (stale()) return collected;
 
   return collected;
-}
-
-/** A plain click on an incorporation's own chrome - its source line,
- * its edges, never a part inside it - runs its first act (expand or
- * collapse) through the same session path the menu runs. The
- * citation link, the receiving text and the cited components are
- * parts of their own and keep their own clicks; the right-gesture
- * guard as figures. */
-function hydrateIncorporations(container: HTMLElement): void {
-  // the blocks keep their part marking; the gestures on them are the
-  // frame surface's
-  for (const block of ownAll(container, ".block-incorporation[data-port-part]")) {
-    void block;
-  }
 }
 
 /** The incorporation citations carry their revision number in the
@@ -141,13 +126,6 @@ async function hydrateCitations(container: HTMLElement, location: Location): Pro
     // the element keeps its marking and its control id; the pointer's
     // gestures on it are the frame surface's, guards included
     span.replaceChildren(link);
-  }
-
-  // the figures' asset loading keeps its marking; their clicks are
-  // the frame surface's, guards included
-  const figureBlocks = ownAll(container, ".block-figure");
-  for (const block of figureBlocks) {
-    void block;
   }
 }
 

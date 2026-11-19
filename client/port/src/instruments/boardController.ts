@@ -553,7 +553,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardSer
     buffer.updates.updateDisplayed((current) => ({ ...current, targets: next }));
   }
 
-  // -- history mode (t-49, t-57; t-14 "The viewer", History) -----------
+  // -- history mode ---------------------------------------------------
   // A mode over the shown board, not a navigation: the window's trail
   // never sees it. Entering shows the shown revision against the one
   // before it; h and l step time; leaving shows the revision reached,

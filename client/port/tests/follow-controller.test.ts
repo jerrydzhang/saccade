@@ -132,7 +132,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   assert.equal(job, null, "release cancels follow");
 });
 
-// t-43: a capture names the location as it was ASKED. A bare board
+// a capture names the location as it was ASKED. A bare board
 // captures bare (never the revision it resolved to), so a trail return
 // requests it bare and the follow re-arms; a pinned board captures
 // pinned and stays unfollowed.
