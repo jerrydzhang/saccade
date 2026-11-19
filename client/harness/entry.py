@@ -71,6 +71,9 @@ CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
 # port, the scenarios, the seed module) read-only
 SUITE_PAYLOAD_SANDBOX_PATH = "/lane/suite_payload.py"
 SUITE_CLIENT_SANDBOX_PATH = "/suite/client"
+# the lane's core session: the core and the app resolve the same socket
+# by it (the transport's $XDG_RUNTIME_DIR/herdr-core/<session>.sock)
+SUITE_CORE_SESSION = "suite"
 tracker_db_arg = ""
 
 
@@ -257,6 +260,38 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         )
         return None
 
+    # the lane's pinned core (the saccade-app devshell sets the pin;
+    # the flake build sha-checks the release bytes): the suite lane
+    # runs it inside the sandbox so the app's own ask face answers
+    core_bin = os.environ.get("SAC_APP_HERDR_CORE_BIN", "")
+    if not core_bin.startswith("/nix/store/") or not os.access(core_bin, os.X_OK):
+        print(
+            "containment refusal: SAC_APP_HERDR_CORE_BIN must be a pinned store core binary",
+            file=sys.stderr,
+        )
+        return None
+    # the core execs fixed argv on its own machine: the requestLocal ask
+    # composes curl, the file reads canonicalize and carry bytes with
+    # realpath and cat. Each resolves in the devshell to one store path
+    # and binds at /lane, where the payload's PATH looks first
+    execs: dict[str, str | None] = {}
+    for name, binary in (("curl", "curl"), ("realpath", "realpath"), ("cat", "cat")):
+        located = shutil.which(binary)
+        execs[name] = str(pathlib.Path(located).resolve()) if located else None
+    missing = sorted(name for name, path in execs.items() if path is None)
+    if missing:
+        print(
+            f"containment refusal: not in PATH (pinned devshell expected): {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return None
+    if any(not path.startswith("/nix/store/") for path in execs.values()):
+        print(
+            "containment refusal: the core's exec tools must resolve to pinned store binaries",
+            file=sys.stderr,
+        )
+        return None
+
     mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
     if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
         print(
@@ -317,6 +352,10 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         "tauri_driver": tools["tauri_driver"],
         "webkit_driver": tools["webkit_driver"],
         "app": app,
+        "core_bin": core_bin,
+        "curl_bin": execs["curl"],
+        "realpath_bin": execs["realpath"],
+        "cat_bin": execs["cat"],
         "board_host": str(board),
         "board_sandbox": f"/board/{board.name}",
         "board_dir": str(board.parent),
@@ -353,6 +392,13 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str) -> dict[str,
     env["SESSION_BOARD_DIR_HOST"] = str(resolved["board_dir"])
     env["FONTCONFIG_FILE"] = resolved["fontconf"]
     env["SHOTS_DIR"] = str(run_root / "shots")
+    # the lane's core facts: the binary the payload starts, and the
+    # session both the core and the app resolve their socket by (the
+    # transport's $XDG_RUNTIME_DIR/herdr-core/<session>.sock). The
+    # machine name is the core's own fact, read inside the sandbox and
+    # exported to the suite there (suite_payload.py)
+    env["SAC_APP_HERDR_CORE_BIN"] = resolved["core_bin"]
+    env["HC_SESSION"] = SUITE_CORE_SESSION
     env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
@@ -380,6 +426,13 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
         (resolved["tauri_driver"], resolved["tauri_driver"]),
         (resolved["webkit_driver"], resolved["webkit_driver"]),
         (resolved["board_dir"], "/board"),
+        # the lane's core and the fixed argv its execs run: curl for the
+        # local-address ask, realpath and cat for the file reads. The
+        # payload's PATH looks in /lane first
+        (resolved["core_bin"], resolved["core_bin"]),
+        (resolved["curl_bin"], "/lane/curl"),
+        (resolved["realpath_bin"], "/lane/realpath"),
+        (resolved["cat_bin"], "/lane/cat"),
     ]
     if resolved.get("serve_bin"):
         binds.append((resolved["serve_bin"], "/lane/sac"))
@@ -423,6 +476,7 @@ def session_suite(board_arg: str, tracker_db_candidate: str, vitest_args: list[s
     env["SUITE_CLIENT_DIR"] = SUITE_CLIENT_SANDBOX_PATH
     binds = session_binds(resolved) + [
         (str((HERE / "suite_payload.py").resolve()), SUITE_PAYLOAD_SANDBOX_PATH),
+        (str((HERE / "lane_core.py").resolve()), "/lane/lane_core.py"),
         (str(VIEWER.resolve()), SUITE_CLIENT_SANDBOX_PATH),
     ]
     # vitest's own filters (a file or a test name) pass through to the

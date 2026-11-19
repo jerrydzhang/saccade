@@ -133,9 +133,12 @@ export class ProjectRegistry {
     }
     const cached = this.cache.get(key);
     if (cached) return cached;
+    // the registered path names the repository; the declaration is the
+    // file at its root
+    const file = `${registered.path.replace(/\/+$/, "")}/workbench.toml`;
     let text: string;
     try {
-      text = await this.asks.readFile(registered.machine, registered.path);
+      text = await this.asks.readFile(registered.machine, file);
     } catch (error) {
       throw new SourceUnavailableError(
         "lane-unavailable",
