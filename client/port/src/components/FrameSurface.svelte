@@ -6,15 +6,21 @@ from the TargetPresentations lease the instrument's view receives, and
 forwards the pointer's gestures on a marked element to that element's
 presentation: a plain click runs the primary act, a shifted or middle
 click runs the act its key names, a right-click opens the act list at
-the pointer. An instrument with no lease (a bare host, the specimen)
-or one publishing no targets gets no surface: nothing paints, no
-gesture acts, and the instrument's own content is the stage's whole
-story. Presentation only - the sessions live behind the presentations. -->
+the pointer. The middle button is a press-then-release lifecycle (the
+press arms, the release over the element acts, leaving cancels, and
+the stray click the release synthesizes is dropped), and a plain click
+within a right gesture's window is the WebDriver's synthesized
+artifact, dropped - the guards live in lib/frame/pointer-guards.ts.
+An instrument with no lease (a bare host, the specimen) or one
+publishing no targets gets no surface: nothing paints, no gesture
+acts, and the instrument's own content is the stage's whole story.
+Presentation only - the sessions live behind the presentations. -->
 <script lang="ts">
   import type { Bounds, TargetPresentations } from "../lib/contracts/buffer.ts";
   import type { SelectSessionView } from "../lib/select/session.ts";
   import type { MenuView } from "../lib/menu/session.ts";
   import { partMeasureIn } from "../lib/select/measure.ts";
+  import { createPointerGuards, surfaceClick } from "../lib/frame/pointer-guards.ts";
   import LabelOverlay from "./LabelOverlay.svelte";
   import ActMenu from "./ActMenu.svelte";
 
@@ -29,6 +35,10 @@ story. Presentation only - the sessions live behind the presentations. -->
   let content: HTMLElement | null = $state(null);
   let select: SelectSessionView | null = $state(null);
   let menu: MenuView | null = $state(null);
+  // the part a middle press armed on: the release acts only over it
+  let armedPart: string | null = null;
+
+  const guards = createPointerGuards(() => performance.now());
 
   // the surface renders what the presentations hold now; every view
   // change in the frame's sessions re-reads both
@@ -65,18 +75,52 @@ story. Presentation only - the sessions live behind the presentations. -->
     if (presentations === null) return;
     const part = partOf(event);
     if (part === null) return;
-    // a shifted or middle click is the modified click: the act
-    // its key names - `o`, open elsewhere - never a second mode
-    const modified = event.shiftKey || event.button === 1;
-    presentations.presentTarget(part, () => measurePart(part)).activatePointer(modified ? "modified" : "plain");
+    const lease = presentations.presentTarget(part, () => measurePart(part));
+    // the default dies inside surfaceClick: a marked element may
+    // carry its own (the citation links are anchors with href '#'),
+    // and the dropped artifacts die with it too
+    surfaceClick(event, lease, part, guards);
   }
 
   function onContextMenu(event: MouseEvent): void {
+    guards.contextmenu();
     if (presentations === null) return;
     const part = partOf(event);
     if (part === null) return;
     event.preventDefault();
     presentations.presentTarget(part, () => measurePart(part)).showActions(atOf(event));
+  }
+
+  // the middle button: the press arms (and keeps the platform's
+  // middle behaviour out), the release over the same element acts the
+  // modified click, leaving the surface cancels
+  function onMouseDown(event: MouseEvent): void {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    guards.middlePress();
+    armedPart = partOf(event);
+  }
+
+  // The release's own button is not trusted - this stack's WebDriver
+  // reports a middle release (and the click it synthesizes after it)
+  // as button 0 (recorded live in the native lane) - so the press
+  // decides and the release over the armed element acts.
+  function onMouseUp(event: MouseEvent): void {
+    const overArmed = armedPart !== null && armedPart === partOf(event);
+    armedPart = null;
+    if (!guards.middleRelease() || !overArmed) return;
+    const part = partOf(event);
+    if (part === null) return;
+    presentations?.presentTarget(part, () => measurePart(part)).activatePointer("modified");
+  }
+
+  function onStageLeave(): void {
+    armedPart = null;
+    guards.middleLeave();
+  }
+
+  function onAuxClick(event: MouseEvent): void {
+    if (guards.middleAuxClick(event.button)) event.preventDefault();
   }
 </script>
 
@@ -86,7 +130,15 @@ the select session + the act menu (Enter runs the first act), so the
 a11y click advisories do not apply. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="port-frame-stage" onclick={onClick} oncontextmenu={onContextMenu}>
+<div
+  class="port-frame-stage"
+  onclick={onClick}
+  oncontextmenu={onContextMenu}
+  onmousedown={onMouseDown}
+  onmouseup={onMouseUp}
+  onmouseleave={onStageLeave}
+  onauxclick={onAuxClick}
+>
   <div class="port-frame-content" bind:this={content}>
     {@render children?.()}
   </div>

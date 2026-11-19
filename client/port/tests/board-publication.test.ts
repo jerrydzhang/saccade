@@ -31,7 +31,14 @@ test("retained-frame hydration and folding cannot supersede a pending board open
   const controller = new SliceBufferHost<BoardData, BoardUI, BoardAnchor>({
     context: { windowId: "w", bufferId: "b" }, viewport: createViewport(),
     diagnostics: { report: () => "diagnostic", unexpected: () => "diagnostic" },
-    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+    connect(buffer) { attachment = connectBoard(buffer, {
+        open: () => {},
+        copy: () => {},
+        elsewhere: () => {},
+        figureEnlarge: () => {},
+        readingLayout: () => {},
+        onHistoryToggle: () => {},
+      }); return attachment; },
   });
   const built = controller.wire();
   onTestFinished(() => built.host.destroy());

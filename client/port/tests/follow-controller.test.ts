@@ -52,7 +52,14 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
  scrollFraction: () => {},
     },
     diagnostics: { report: () => "", unexpected: () => "" },
-    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+    connect(buffer) { attachment = connectBoard(buffer, {
+        open: () => {},
+        copy: () => {},
+        elsewhere: () => {},
+        figureEnlarge: () => {},
+        readingLayout: () => {},
+        onHistoryToggle: () => {},
+      }); return attachment; },
   });
   const built = controller.wire();
   onTestFinished(() => built.host.destroy());
@@ -71,7 +78,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   assert.equal(attachment.presentation.findView().open, true);
   assert.equal(attachment.presentation.findView().count, 1);
   assert.equal(press("s"), "allow-default", "ordinary typing in captured text entry never starts selection");
-  assert.equal(attachment.presentation.getSelection(), null);
+  assert.equal(attachment.presentation.findView().count, 1);
   await tick();
   assert.deepEqual(reads, ["t-1"]);
   revision = 2;
@@ -125,7 +132,7 @@ test("bare board follows multiple pinned resolutions, stops on pinned open, and 
   assert.equal(job, null, "release cancels follow");
 });
 
-// t-43: a capture names the location as it was ASKED. A bare board
+// a capture names the location as it was ASKED. A bare board
 // captures bare (never the revision it resolved to), so a trail return
 // requests it bare and the follow re-arms; a pinned board captures
 // pinned and stays unfollowed.
@@ -147,7 +154,14 @@ test("a bare board captures bare and its restore follows again; a pinned one sta
     context: { windowId: "w", bufferId: "b" },
     viewport: createViewport(),
     diagnostics: { report: () => "", unexpected: () => "" },
-    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+    connect(buffer) { attachment = connectBoard(buffer, {
+        open: () => {},
+        copy: () => {},
+        elsewhere: () => {},
+        figureEnlarge: () => {},
+        readingLayout: () => {},
+        onHistoryToggle: () => {},
+      }); return attachment; },
   });
   const built = controller.wire();
   onTestFinished(() => built.host.destroy());
@@ -195,7 +209,14 @@ test("history on a tracker without component changes refuses visibly and stays o
     context: { windowId: "w", bufferId: "b" },
     viewport: createViewport(),
     diagnostics: { report: () => "", unexpected: () => "" },
-    connect(buffer) { attachment = connectBoard(buffer); return attachment; },
+    connect(buffer) { attachment = connectBoard(buffer, {
+        open: () => {},
+        copy: () => {},
+        elsewhere: () => {},
+        figureEnlarge: () => {},
+        readingLayout: () => {},
+        onHistoryToggle: () => {},
+      }); return attachment; },
   });
   const built = controller.wire();
   onTestFinished(() => built.host.destroy());

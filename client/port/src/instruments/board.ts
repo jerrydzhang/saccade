@@ -6,17 +6,16 @@
 import type { Component } from "svelte";
 import BoardView from "./BoardView.svelte";
 import { connectBoard } from "./boardController.ts";
-import type { BoardAnchor, BoardData, BoardUI } from "./boardController.ts";
+import type { BoardAnchor, BoardData, BoardServices, BoardUI } from "./boardController.ts";
 import type { InstrumentDefinition } from "../lib/instruments/contract.ts";
 
 export * from "./boardController.ts";
-export type { SelectSessionView } from "../lib/select/session.ts";
 
-export function boardInstrument(): InstrumentDefinition<BoardData, BoardUI, BoardAnchor> {
+export function boardInstrument(services: BoardServices): InstrumentDefinition<BoardData, BoardUI, BoardAnchor> {
   return {
     kind: "board",
     Component: BoardView as Component<InstrumentProps<BoardData, BoardUI>>,
-    connect: connectBoard,
+    connect: (buffer) => connectBoard(buffer, services),
   };
 }
 

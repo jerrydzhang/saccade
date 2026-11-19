@@ -131,16 +131,12 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
         return measure() === null ? null : def;
       };
       return {
-        activatePrimary(): void {
-          const current = alive();
-          if (current === null) return;
-          // the first act is the primary: what a plain click and Enter
-          // run
-          current.acts()[0]?.action.run();
-        },
+        // clickable false leaves the pointer only the right-click
+        // menu: activatePointer refuses below, so a target whose kind
+        // answers clicks its own way never gains one by accident.
         activatePointer(kind) {
           const current = alive();
-          if (current === null) return false;
+          if (current === null || !current.clickable) return false;
           const target = menuTargetOf(current);
           const outcome =
             kind === "plain"
@@ -177,7 +173,7 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
       };
     },
 
-    readingContext(extra: readonly CommandBinding[] = []): InputContext {
+    readingContext(extra: readonly CommandBinding[] = [], owner?: string): InputContext {
       return frameReadingContext(
         {
           scrollDown: () => ports.viewport.scrollLines(1),
@@ -188,6 +184,7 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
           enterSelect: () => select.enter(),
         },
         extra,
+        owner,
       );
     },
 

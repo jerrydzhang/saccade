@@ -8,7 +8,7 @@
 // Outcomes are reported generation-scoped so the model carries actual
 // rendering results, never an implied parsed-equals-rendered claim.
 //
-// Port carry (t-36 slice 1, the board hydrate allowlist): two port
+// Port carry (the board hydrate allowlist): two port
 // adaptations. The hydration host is a narrow interface (the render
 // generation and the figure loader), not the old window-level model - a
 // stale asset load reports "stale" the same way. And the interactive
@@ -28,40 +28,23 @@ import { TrackerSource } from "../tracker.ts";
 import { el } from "../render.ts";
 import type { FigureBlock } from "./model.ts";
 
-/** What hydration needs: the actually displayed frame's identity,
- * figure/image byte loading, and the citation activation seam - a
- * plain click on a citation runs its first act through the
- * controller's shared menu path (scenario 9: the same action object
- * every invocation runs). A requested-but-unshown replacement does
- * not invalidate retained content; an actual replacement does. */
+/** What hydration needs: the actually displayed frame's identity and
+ * figure/image byte loading. The pointer's gestures on the marked
+ * elements are the frame's surface; hydration attaches no
+ * act listeners. A requested-but-unshown replacement does not
+ * invalidate retained content; an actual replacement does. */
 export interface HydrationHost {
   displayedGeneration(): number | null;
   loadFigureAsset(
     location: Location,
     block: FigureBlock,
   ): Promise<Uint8Array | string>;
-  /** A plain (unshifted, primary-button) click on the citation whose
-   * incorporation part is `part`. */
-  referencePrimaryClick(part: string): void;
-  /** A shifted or middle click on the citation: open elsewhere (`o`). */
-  referenceElsewhereClick(part: string): void;
-  /** A shifted or middle click on a prose ref: open elsewhere (`o`). */
-  refElsewhereClick(part: string): void;
-  /** A plain click on the figure whose part is `part` (the primary
-   * act, scenario 4's enlarge). */
-  /** A plain click on a figure or a rendered diagram: its first act. */
-  figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
-  /** A plain click on a prose ref: its first act (follow here). */
-  refPrimaryClick(part: string): void;
-  /** A plain click on an incorporation's source line (off its
-   * citation link): its first act, expand or collapse (t-58). */
-  incorporationPrimaryClick?(part: string): void;
 }
 
 /** The elements of `container` matching `selector` that it owns: an
  * expanded incorporation's cited components (.incorporation-cited)
  * hydrate on their own, against the cited revision's location, so a
- * board's hydration never reaches into them (t-58). */
+ * board's hydration never reaches into them. */
 function ownAll(container: HTMLElement, selector: string): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter((node) => {
     const cited = node.closest(".incorporation-cited");
@@ -86,7 +69,7 @@ export async function hydrate(
 
   const mermaidPending = ownAll(container, '[data-pending="mermaid"]');
   for (const div of mermaidPending) {
-    await hydrateMermaid(div, collected, host);
+    await hydrateMermaid(div, collected);
     if (stale()) return collected;
   }
 
@@ -107,45 +90,16 @@ export async function hydrate(
     if (stale()) return collected;
   }
 
-  hydrateIncorporations(container, host);
-  await hydrateCitations(container, host, location);
+  await hydrateCitations(container, location);
   if (stale()) return collected;
 
   return collected;
 }
 
-/** A plain click on an incorporation's own chrome - its source line,
- * its edges, never a part inside it - runs its first act (expand or
- * collapse, t-58) through the same session path the menu runs. The
- * citation link, the receiving text and the cited components are
- * parts of their own and keep their own clicks; the right-gesture
- * guard as figures. */
-function hydrateIncorporations(container: HTMLElement, host: HydrationHost): void {
-  const act = host.incorporationPrimaryClick;
-  if (act === undefined) return;
-  for (const block of ownAll(container, ".block-incorporation[data-port-part]")) {
-    const part = block.getAttribute("data-port-part")!;
-    let contextmenuAt = 0;
-    block.addEventListener("contextmenu", () => {
-      contextmenuAt = performance.now();
-    });
-    block.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement | null)?.closest?.("[data-port-part]") !== block) return;
-      if (event.button !== 0 || event.shiftKey) return;
-      if (performance.now() - contextmenuAt < 250) return;
-      act.call(host, part);
-    });
-  }
-}
-
 /** The incorporation citations carry their revision number in the
  * authored form, so the tracker lane reads t-N@rK directly and the
  * citation becomes a link to that revision. */
-async function hydrateCitations(
-  container: HTMLElement,
-  _host: HydrationHost,
-  location: Location,
-): Promise<void> {
+async function hydrateCitations(container: HTMLElement, location: Location): Promise<void> {
   if (!location.machine.startsWith("tracker:")) return;
   const source = sourceFor(location.machine);
   if (!(source instanceof TrackerSource)) return;
@@ -169,121 +123,20 @@ async function hydrateCitations(
       },
       path,
     );
-    // Real browsers emit no click for the right button. This stack's
-    // WebDriver synthesizes one right after the right-button release
-    // (recorded live: contextmenu, then click:button=0 ~120ms later)
-    // - the same gesture-synthesis wedge that eats the next pointer
-    // press's pointerdown after a right-click. A click within the
-    // right-gesture window is that artifact, never a user plain
-    // click; the window is generous against the synthesis order and
-    // tiny against any human press.
-    let contextmenuAt = 0;
-    link.addEventListener("contextmenu", () => {
-      contextmenuAt = performance.now();
-    });
-    // a middle click opens elsewhere, exactly as a shifted click
-    const justMiddle = middleClick(link, () => {
-      if (part !== null) _host.referenceElsewhereClick(part);
-    });
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      if (performance.now() - contextmenuAt < 250 || justMiddle()) return;
-      // a plain click runs the citation's FIRST act (follow here)
-      // through the controller's shared menu path - the same action
-      // object the menu key, Enter and the menu item run (scenario 9).
-      // A shifted click runs its `o` act instead: open at the link
-      // (t-14 "Two acts, never a mode"; t-47).
-      if (part === null) return;
-      if (event.shiftKey) {
-        _host.referenceElsewhereClick(part);
-        return;
-      }
-      _host.referencePrimaryClick(part);
-    });
+    // the element keeps its marking and its control id; the pointer's
+    // gestures on it are the frame surface's, guards included
     span.replaceChildren(link);
   }
-
-  // a prose ref's plain click runs its first act (follow here), as the
-  // prototype's primary on a ref; the right-gesture guard as citations
-  for (const ref of ownAll(container, ".port-ref[data-port-part]")) {
-    const part = ref.getAttribute("data-port-part")!;
-    let refContextmenuAt = 0;
-    ref.addEventListener("contextmenu", () => {
-      refContextmenuAt = performance.now();
-    });
-    const justMiddle = middleClick(ref, () => _host.refElsewhereClick(part));
-    ref.addEventListener("click", (event) => {
-      event.preventDefault();
-      if (performance.now() - refContextmenuAt < 250 || justMiddle()) return;
-      if (event.shiftKey) {
-        _host.refElsewhereClick(part);
-        return;
-      }
-      _host.refPrimaryClick(part);
-    });
-  }
-
-  // the figures' plain click runs THEIR first act (enlarge, scenario
-  // 4) through the same shared menu path; the right-gesture guard
-  // applies identically (the synthesized post-contextmenu click never
-  // enlarges)
-  const figureBlocks = ownAll(container, ".block-figure");
-  for (const block of figureBlocks) {
-    const part = block.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null;
-    if (part === null) continue;
-    let figureContextmenuAt = 0;
-    block.addEventListener("contextmenu", () => {
-      figureContextmenuAt = performance.now();
-    });
-    block.addEventListener("click", (event) => {
-      event.preventDefault();
-      if (performance.now() - figureContextmenuAt < 250) return;
-      if (event.shiftKey) {
-        console.log("[port] shifted figure open deferred (elsewhere slice)");
-        return;
-      }
-      _host.figurePrimaryClick(part);
-    });
-  }
 }
 
-/** The middle button's click on an element: the release over the
- * element that a middle press started on. The release's own button is
- * not trusted - this stack's WebDriver reports a middle release, and
- * the click it synthesizes after it, as button 0 (probed in the native
- * lane) - so the press decides. Answers whether a middle click just
- * acted, for the element's click handler to drop that stray click, as
- * the right-gesture guard drops the post-contextmenu one. */
-function middleClick(element: HTMLElement, act: () => void): () => boolean {
-  let pressed = false;
-  let actedAt = 0;
-  element.addEventListener("mousedown", (event) => {
-    if (event.button !== 1) return;
-    event.preventDefault();
-    pressed = true;
-  });
-  element.addEventListener("mouseup", (event) => {
-    if (!pressed) return;
-    pressed = false;
-    event.preventDefault();
-    actedAt = performance.now();
-    act();
-  });
-  element.addEventListener("mouseleave", () => {
-    pressed = false;
-  });
-  element.addEventListener("auxclick", (event) => {
-    if (event.button === 1) event.preventDefault();
-  });
-  return () => performance.now() - actedAt < 250;
-}
+
 
 async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {
   const tex = span.dataset.unitTex ?? "";
   const line = span.dataset.line ? Number(span.dataset.line) : undefined;
   const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, authored: span.dataset.unitSource ?? "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
   if (!result.ok) {
-    // the error span is not a math part (t-62): no math menu, no copy
+    // the error span is not a math part: no math menu, no copy
     // act on an expression that never rendered - the authored source
     // stands here as inspectable, selectable text of the block
     span.removeAttribute("data-port-part");
@@ -296,7 +149,7 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   }
   span.textContent = "";
   span.append(result.container);
-  // a click on math acts nothing (t-62, the human's ruling): math
+  // a click on math acts nothing (the human's ruling): math
   // wires no click primary - the expression's act is the menu's, open
   // by right-click or a select label, and no stray click copies. The
   // span still carries its part path, so the generic contextmenu path
@@ -305,7 +158,7 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   outcomes.push({ kind: "math", status: "ok", message: "", line });
 }
 
-async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[], host: HydrationHost): Promise<void> {
+async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {
   const source = div.dataset.unitSource ?? "";
   const line = div.dataset.line ? Number(div.dataset.line) : undefined;
   const result = await renderMermaid(source);
@@ -344,20 +197,6 @@ async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[], host:
   }
   const caption = el("p", { class: "diagram-caption" }, "diagram - click to expand, source preserved");
   div.append(figure, caption);
-  // a plain click runs the diagram's first act, enlarge (the prototype's
-  // primary on a figure-kind target); the right-gesture guard as figures
-  const part = div.getAttribute("data-port-part");
-  if (part !== null) {
-    let contextmenuAt = 0;
-    div.addEventListener("contextmenu", () => {
-      contextmenuAt = performance.now();
-    });
-    div.addEventListener("click", (event) => {
-      event.preventDefault();
-      if (performance.now() - contextmenuAt < 250) return;
-      host.figurePrimaryClick(part, "diagram");
-    });
-  }
   outcomes.push({ kind: "mermaid", status: "ok", message: "", line });
 }
 

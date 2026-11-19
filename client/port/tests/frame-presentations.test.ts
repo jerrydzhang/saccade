@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { createTargetPresentations, type TargetPresentationPorts } from "../src/lib/frame/presentations.ts";
+import { surfaceClick } from "../src/lib/frame/pointer-guards.ts";
 import {
   commandsOf,
   formatSequence,
@@ -85,6 +86,7 @@ const plain = (over: Partial<TargetDefinition> & { id: string }): TargetDefiniti
   kind: "task",
   label: over.id,
   inside: null,
+  clickable: true,
   anchor: null,
   acts: () => [],
   ...over,
@@ -222,14 +224,90 @@ test("a modified click on a kind with no o act acts nothing", () => {
   assert.deepEqual(runs, ["row.open"], "a key the kind does not declare acts nothing");
 });
 
+test("a non-clickable target's plain and modified clicks act nothing; its menu still opens", () => {
+  const runs: string[] = [];
+  const defs = [
+    plain({
+      id: "para",
+      kind: "text",
+      clickable: false,
+      acts: () => [
+        { key: "y", action: recorder(runs, "para.copy") },
+        { key: "o", action: recorder(runs, "para.open") },
+      ],
+    }),
+  ];
+  const geometry = new Map([["para", box(0, 20)]]);
+  const { presentations } = harness(defs, geometry);
+  const lease = presentations.presentTarget("para", () => box(0, 20));
+  assert.equal(lease.activatePointer("plain"), false, "a plain click on a paragraph must not copy");
+  assert.equal(lease.activatePointer("modified"), false, "a shifted or middle click on a paragraph acts nothing");
+  assert.deepEqual(runs, [], "the pointer never runs the acts of a non-clickable target");
+  lease.showActions({ left: 0, top: 0 });
+  assert.ok(presentations.menuView(), "the right-click menu still opens for a non-clickable target");
+  const outcome = presentations.menuSession().key("Enter");
+  assert.ok(outcome.kind === "act", "Enter runs the primary of a non-clickable target as anywhere");
+  assert.deepEqual(runs, ["para.copy"]);
+});
+
+test("a plain or shifted click on a citation-shaped target acts and prevents the default", () => {
+  const runs: string[] = [];
+  const defs = [
+    plain({
+      id: "cite",
+      acts: () => [
+        { key: "f", action: recorder(runs, "cite.follow") },
+        { key: "o", action: recorder(runs, "cite.open") },
+      ],
+    }),
+  ];
+  const geometry = new Map([["cite", box(0, 20)]]);
+  const { presentations } = harness(defs, geometry);
+  const lease = presentations.presentTarget("cite", () => box(0, 20));
+  let prevented = 0;
+  const plainEvent = { button: 0, shiftKey: false, preventDefault: () => { prevented += 1; } };
+  const shiftedEvent = { button: 0, shiftKey: true, preventDefault: () => { prevented += 1; } };
+  assert.equal(surfaceClick(plainEvent, lease, "cite", guardsOf()), true, "the plain click acts");
+  assert.equal(prevented, 1, "the default dies with the acted click");
+  assert.equal(surfaceClick(shiftedEvent, lease, "cite", guardsOf()), true, "the shifted click acts");
+  assert.equal(prevented, 2, "the shifted click's default dies too");
+  assert.deepEqual(runs, ["cite.follow", "cite.open"], "plain runs the first act, shifted the o act");
+});
+
+function guardsOf() {
+  // the artifact windows: no gestures in these tests
+  return {
+    rightGestureArtifact: () => false,
+    middleStrayClick: () => false,
+  };
+}
+
+test("a plain click and the menu's Enter run the same action object", () => {
+  const runs: string[] = [];
+  // the acts resolve once and stay: the lease's plain path and the
+  // menu's Enter path run the SAME action object, never a second
+  // code path's copy
+  const first = { key: "f", action: recorder(runs, "cite.follow") };
+  const defs = [
+    plain({ id: "cite", acts: () => [first, { key: "o", action: recorder(runs, "cite.open") }] }),
+  ];
+  const geometry = new Map([["cite", box(0, 20)]]);
+  const { presentations } = harness(defs, geometry);
+  presentations.presentTarget("cite", () => box(0, 20)).activatePointer("plain");
+  assert.equal(presentations.menuSession().acts().length, 0, "the plain click opened no menu");
+  presentations.presentTarget("cite", () => box(0, 20)).showActions({ left: 0, top: 0 });
+  const outcome = presentations.menuSession().key("Enter");
+  assert.ok(outcome.kind === "act" && outcome.action === first.action, "the menu key runs the published object itself");
+});
+
 test("a lease whose element has no acts clicks nothing and opens no menu", () => {
   const runs: string[] = [];
   const defs = [plain({ id: "quiet", acts: () => [] })];
   const geometry = new Map([["quiet", box(0, 20)]]);
   const { presentations } = harness(defs, geometry);
   const lease = presentations.presentTarget("quiet", () => box(0, 20));
-  assert.equal(lease.activatePointer("plain"), false);
-  assert.equal(lease.activatePrimary(), undefined);
+  assert.equal(lease.activatePointer("plain"), false, "an act-less target's plain click acts nothing");
+  assert.equal(lease.activatePointer("modified"), false);
   lease.showActions({ left: 0, top: 0 });
   assert.equal(presentations.menuView(), null, "no acts, no menu");
   assert.deepEqual(runs, []);
@@ -240,7 +318,7 @@ test("a lease for an id the frame does not publish acts nothing", () => {
   const { presentations } = harness([], new Map());
   const lease = presentations.presentTarget("ghost", () => box(0, 20));
   assert.equal(lease.activatePointer("plain"), false);
-  lease.activatePrimary();
+  assert.equal(lease.activatePointer("modified"), false);
   lease.showActions({ left: 0, top: 0 });
   assert.equal(presentations.menuView(), null);
   assert.deepEqual(runs, []);
@@ -257,7 +335,7 @@ test("a lease whose element has left the surface acts nothing", () => {
   const { presentations } = harness(defs, new Map([["gone", box(0, 20)]]));
   const lease = presentations.presentTarget("gone", () => null);
   assert.equal(lease.activatePointer("plain"), false);
-  lease.activatePrimary();
+  assert.equal(lease.activatePointer("modified"), false);
   lease.showActions({ left: 0, top: 0 });
   assert.equal(presentations.menuView(), null);
   assert.deepEqual(runs, []);
