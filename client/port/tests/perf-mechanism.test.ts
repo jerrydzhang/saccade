@@ -1,4 +1,4 @@
-// The mechanisms behind m-547 (5)'s slowness, pinned without timing:
+// The mechanisms behind the slowness, pinned without timing:
 // find's units are derived once per board, each block's markdown is
 // parsed once whoever reads it, and figures load concurrently.
 import assert from "node:assert/strict";

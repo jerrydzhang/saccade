@@ -8,7 +8,7 @@
 // Outcomes are reported generation-scoped so the model carries actual
 // rendering results, never an implied parsed-equals-rendered claim.
 //
-// Port carry (t-36 slice 1, the board hydrate allowlist): two port
+// Port carry (the board hydrate allowlist): two port
 // adaptations. The hydration host is a narrow interface (the render
 // generation and the figure loader), not the old window-level model - a
 // stale asset load reports "stale" the same way. And the interactive
@@ -30,7 +30,7 @@ import type { FigureBlock } from "./model.ts";
 
 /** What hydration needs: the actually displayed frame's identity and
  * figure/image byte loading. The pointer's gestures on the marked
- * elements are the frame's (t-73's surface); hydration attaches no
+ * elements are the frame's surface; hydration attaches no
  * act listeners. A requested-but-unshown replacement does not
  * invalidate retained content; an actual replacement does. */
 export interface HydrationHost {
@@ -44,7 +44,7 @@ export interface HydrationHost {
 /** The elements of `container` matching `selector` that it owns: an
  * expanded incorporation's cited components (.incorporation-cited)
  * hydrate on their own, against the cited revision's location, so a
- * board's hydration never reaches into them (t-58). */
+ * board's hydration never reaches into them. */
 function ownAll(container: HTMLElement, selector: string): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter((node) => {
     const cited = node.closest(".incorporation-cited");
@@ -99,7 +99,7 @@ export async function hydrate(
 
 /** A plain click on an incorporation's own chrome - its source line,
  * its edges, never a part inside it - runs its first act (expand or
- * collapse, t-58) through the same session path the menu runs. The
+ * collapse) through the same session path the menu runs. The
  * citation link, the receiving text and the cited components are
  * parts of their own and keep their own clicks; the right-gesture
  * guard as figures. */
@@ -158,7 +158,7 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   const line = span.dataset.line ? Number(span.dataset.line) : undefined;
   const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, authored: span.dataset.unitSource ?? "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
   if (!result.ok) {
-    // the error span is not a math part (t-62): no math menu, no copy
+    // the error span is not a math part: no math menu, no copy
     // act on an expression that never rendered - the authored source
     // stands here as inspectable, selectable text of the block
     span.removeAttribute("data-port-part");
@@ -171,7 +171,7 @@ async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promis
   }
   span.textContent = "";
   span.append(result.container);
-  // a click on math acts nothing (t-62, the human's ruling): math
+  // a click on math acts nothing (the human's ruling): math
   // wires no click primary - the expression's act is the menu's, open
   // by right-click or a select label, and no stray click copies. The
   // span still carries its part path, so the generic contextmenu path

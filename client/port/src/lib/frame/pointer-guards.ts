@@ -42,6 +42,30 @@ export interface PointerGuards {
   middleStrayClick(): boolean;
 }
 
+/** The surface's plain-click decision for a marked element: the act
+ * runs through the lease (a plain click the first act, a shifted
+ * click the o act) and the default dies - a marked element may carry
+ * its own default (the citation links are anchors with href '#'), and
+ * following it must not ride an act; the dropped artifacts die with
+ * it too. Returns whether the click acted. */
+export function surfaceClick(
+  event: { button: number; shiftKey: boolean; preventDefault(): void },
+  lease: { activatePointer(kind: "plain" | "modified"): boolean } | null,
+  part: string | null,
+  guards: {
+    rightGestureArtifact(): boolean;
+    middleStrayClick(): boolean;
+  },
+): boolean {
+  if (part === null || lease === null) return false;
+  // a marked element may carry its own default (the citation links
+  // are anchors with href '#'): the act replaces it, and the dropped
+  // artifacts die with it too
+  event.preventDefault();
+  if (guards.rightGestureArtifact() || guards.middleStrayClick()) return false;
+  return lease.activatePointer(event.shiftKey ? "modified" : "plain");
+}
+
 export function createPointerGuards(now: () => number): PointerGuards {
   let contextmenuAt: number | null = null;
   let armed = false;

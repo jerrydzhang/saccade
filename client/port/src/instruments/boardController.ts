@@ -7,7 +7,7 @@
 // bindings, return anchors, annotation acts - is the next slice; every
 // gap below is reported, never papered over.
 //
-// Instrument placement (r47-r51): a component meaningful on its own,
+// Instrument placement: a component meaningful on its own,
 // connected once per buffer, staying connected while inactive,
 // releasing on destruction.
 
@@ -85,7 +85,7 @@ export type BoardData = Readonly<{
    * does not. Model existence is untouched (scenario 12: folded-in
    * children keep existing, lose presentation). */
   folded: readonly string[];
-  /** History mode (t-49): the revision shown against the one before
+  /** History mode: the revision shown against the one before
    * it; absent outside history. */
   history?: HistoryView | null;
 }>;
@@ -132,7 +132,7 @@ export interface BoardUI extends HydrationHost {
   toggleFold(part: string): void;
   /** Whether a group part path is folded. */
   isFolded(part: string): boolean;
-  /** Expand or collapse an incorporation part (t-58). */
+  /** Expand or collapse an incorporation part. */
   toggleExpansion(part: string): void;
   /** The shown board's expanded incorporations. */
   expansions(): readonly Expansion[];
@@ -145,7 +145,7 @@ export interface BoardUI extends HydrationHost {
    * render's settle: its hydration is done. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
   /** A frame's board is in the DOM (before hydration): history mode
-   * places the part it holds (t-57). */
+   * places the part it holds. */
   reportRendered(generation: number): void;
 }
 
@@ -193,7 +193,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardSer
   let resolved: Location | null = null;
   // The address the shown frame was ASKED as (a bare t-N stays bare):
   // what a capture names, so a trail return or a relaunch follows
-  // again rather than pinning the revision it resolved to (t-43).
+  // again rather than pinning the revision it resolved to.
   let shownAsked: Address | null = null;
   // Folded group part paths: view state, survives refreshes of this
   // buffer (folds are never rewound by anything but their own act).
@@ -256,7 +256,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardSer
     },
   });
 
-  // Incorporation expansions (t-58): buffer view state beside the
+  // Incorporation expansions: buffer view state beside the
   // folds, keyed by part and source; the cited revision is read on
   // the shown board's machine and decoded like any board.
   const expansionObservers = new Set<(expansions: readonly Expansion[]) => void>();
@@ -921,7 +921,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardSer
     captureDisplayed(viewport: ViewportMetrics): ContentCapture<BoardAnchor> {
       // The place names the location as it was asked: a bare board
       // returns bare and keeps following, a pinned one stays pinned
-      // (t-43). History mode is the exception: a revision reached by
+      // History mode is the exception: a revision reached by
       // stepping time is the pinned one shown, as leaving history
       // would open it (the newest revision opens as asked).
       const inPast = history !== null && history.revision !== history.latest;

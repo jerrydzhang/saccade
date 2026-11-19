@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { createTargetPresentations, type TargetPresentationPorts } from "../src/lib/frame/presentations.ts";
+import { surfaceClick } from "../src/lib/frame/pointer-guards.ts";
 import {
   commandsOf,
   formatSequence,
@@ -248,6 +249,38 @@ test("a non-clickable target's plain and modified clicks act nothing; its menu s
   assert.ok(outcome.kind === "act", "Enter runs the primary of a non-clickable target as anywhere");
   assert.deepEqual(runs, ["para.copy"]);
 });
+
+test("a plain or shifted click on a citation-shaped target acts and prevents the default", () => {
+  const runs: string[] = [];
+  const defs = [
+    plain({
+      id: "cite",
+      acts: () => [
+        { key: "f", action: recorder(runs, "cite.follow") },
+        { key: "o", action: recorder(runs, "cite.open") },
+      ],
+    }),
+  ];
+  const geometry = new Map([["cite", box(0, 20)]]);
+  const { presentations } = harness(defs, geometry);
+  const lease = presentations.presentTarget("cite", () => box(0, 20));
+  let prevented = 0;
+  const plainEvent = { button: 0, shiftKey: false, preventDefault: () => { prevented += 1; } };
+  const shiftedEvent = { button: 0, shiftKey: true, preventDefault: () => { prevented += 1; } };
+  assert.equal(surfaceClick(plainEvent, lease, "cite", guardsOf()), true, "the plain click acts");
+  assert.equal(prevented, 1, "the default dies with the acted click");
+  assert.equal(surfaceClick(shiftedEvent, lease, "cite", guardsOf()), true, "the shifted click acts");
+  assert.equal(prevented, 2, "the shifted click's default dies too");
+  assert.deepEqual(runs, ["cite.follow", "cite.open"], "plain runs the first act, shifted the o act");
+});
+
+function guardsOf() {
+  // the artifact windows: no gestures in these tests
+  return {
+    rightGestureArtifact: () => false,
+    middleStrayClick: () => false,
+  };
+}
 
 test("a plain click and the menu's Enter run the same action object", () => {
   const runs: string[] = [];

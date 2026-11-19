@@ -105,7 +105,7 @@ test("invisible targets get no labels: existence is never visibility", () => {
   // the invisible group is never labeled; 'z' names no label and
   // narrows no text: ZERO matches left, so the stroke is consumed and
   // the session EXITS (the prototype's hintKey, inst16.html:106; the
-  // human's trap, m-536) - never staying alive with nothing to select,
+  // human's trap) - never staying alive with nothing to select,
   // and never selecting the invisible group
   const active = context();
   const step = active?.onUnmatched?.(key("z"));

@@ -128,7 +128,7 @@ import type { TargetPresentations } from "../lib/contracts/buffer.ts";
     );
   }
 
-  // A fold is an attribute on the rendered group (m-547 (5)): the
+  // A fold is an attribute on the rendered group: the
   // folded set is applied to the board as it stands, never a rebuild.
   const foldedKey = $derived(content.folded.join("\n"));
   $effect(() => {
@@ -143,7 +143,7 @@ import type { TargetPresentations } from "../lib/contracts/buffer.ts";
     }
   });
 
-  // t-58: the expanded incorporations, painted onto the board as it
+  // The expanded incorporations, painted onto the board as it
   // stands (as a fold): after every render and every toggle, each
   // fresh cited container hydrated against the cited revision.
   let expansionChanges = $state(0);

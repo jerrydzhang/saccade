@@ -9,10 +9,14 @@ targets with its data (`ContentFrame.targets`, the contract's one
 target shape in `port/src/lib/contracts/buffer.ts`), and the frame
 presents them - select mode and its labels, the act menu, the click
 paths, the shared reading keys (`frameReadingContext`, an instrument
-adds keys and never rebinds one), the reading anchor Back rides. The
-task list publishes its rows and rail entries and keeps only its own
-concerns (the rail's feed, the add field, its return places); the
-board still wires its own select, menu and keys until its own task.
+adds keys and never rebinds one), the reading anchor Back rides. Both
+instruments publish their targets with their data and keep only what
+is about their own data - the task list: the rail's feed, the add
+field, its return places; the board: find, folding, expansion,
+history, following its task's revisions, figures, and how its content
+is drawn. Unfolding the groups around an anchor before it can be
+revealed is the board's too - finding and measuring the anchor is the
+frame's, as it is for the task list.
 Which instrument shows a location is each instrument's own claim
 (`port/src/lib/instruments/claims.ts`), read by the window assembly
 instead of a hard-coded choice. The app keeps no window

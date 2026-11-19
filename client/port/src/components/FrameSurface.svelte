@@ -20,7 +20,7 @@ Presentation only - the sessions live behind the presentations. -->
   import type { SelectSessionView } from "../lib/select/session.ts";
   import type { MenuView } from "../lib/menu/session.ts";
   import { partMeasureIn } from "../lib/select/measure.ts";
-  import { createPointerGuards } from "../lib/frame/pointer-guards.ts";
+  import { createPointerGuards, surfaceClick } from "../lib/frame/pointer-guards.ts";
   import LabelOverlay from "./LabelOverlay.svelte";
   import ActMenu from "./ActMenu.svelte";
 
@@ -73,15 +73,13 @@ Presentation only - the sessions live behind the presentations. -->
 
   function onClick(event: MouseEvent): void {
     if (presentations === null) return;
-    // the synthesized clicks the right gesture and a middle release
-    // leave behind are dropped, never run as a user's plain click
-    if (guards.rightGestureArtifact() || guards.middleStrayClick()) return;
     const part = partOf(event);
     if (part === null) return;
-    // a shifted click is the modified click (the act its key names -
-    // `o`, open elsewhere), never a second mode
-    const modified = event.shiftKey;
-    presentations.presentTarget(part, () => measurePart(part)).activatePointer(modified ? "modified" : "plain");
+    const lease = presentations.presentTarget(part, () => measurePart(part));
+    // the default dies inside surfaceClick: a marked element may
+    // carry its own (the citation links are anchors with href '#'),
+    // and the dropped artifacts die with it too
+    surfaceClick(event, lease, part, guards);
   }
 
   function onContextMenu(event: MouseEvent): void {

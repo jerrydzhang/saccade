@@ -4,7 +4,7 @@
 // supplies fold state, the model's citation sources, and the window
 // services the reference acts ride.
 //
-// The reference acts (t-36@r90, the prototype's KINDS at inst16.html
+// The reference acts (the prototype's KINDS at inst16.html
 // :36-46 as the contract): a citation's first act is 'f' "follow
 // here" - so a plain click (primary, act 0) follows here - then 'y'
 // "copy reference". The copy payload is the prototype-parity
@@ -60,7 +60,7 @@ export interface BoardActDeps {
   isFolded(part: string): boolean;
   /** Fold or unfold a group part path. */
   toggleFold(part: string): void;
-  /** Whether an incorporation part is expanded now (t-58). */
+  /** Whether an incorporation part is expanded now. */
   isExpanded?(part: string): boolean;
   /** Expand or collapse an incorporation part: expanded, it shows
    * only the components its select paths cite. */
@@ -119,7 +119,7 @@ export function actsFor(target: MenuTarget, deps: BoardActDeps): readonly MenuAc
     return acts;
   }
   if (target.kind === "incorporation" && target.part !== null) {
-    // t-58: an incorporation shows collapsed (its source line and its
+    // an incorporation shows collapsed (its source line and its
     // receiving text); z expands it to the cited components alone and
     // collapses it again - the group's fold key, the same family of
     // act. It is the first act, so a plain click on the source line
@@ -172,7 +172,7 @@ export function actsFor(target: MenuTarget, deps: BoardActDeps): readonly MenuAc
     return acts;
   }
   if (target.kind === "math" && target.part !== null) {
-    // t-62: the expression's LaTeX source is the whole menu - y copies
+    // the expression's LaTeX source is the whole menu - y copies
     // it, through the menu's own paths (right-click, a select label,
     // Enter while the menu is open). A click on the expression acts
     // nothing: math wires no click primary (the human's ruling), the
@@ -290,7 +290,7 @@ export function actsFor(target: MenuTarget, deps: BoardActDeps): readonly MenuAc
           run: () => ports.open(spec, anchorPart === "" ? null : anchorPart),
         },
       },
-      // the OPEN acts (the r90 KINDS order: follow-here first, then
+      // the OPEN acts (the KINDS order: follow-here first, then
       // open elsewhere, then copy): o delivers at the link, i asks
       // once without touching the link, w opens a new viewer
       ...(ports.elsewhere
