@@ -1,18 +1,19 @@
 // The one core module's contract: the asks' shapes, the bridge
 // mapping behind them, and the direct implementation tests ride -
-// which performs the asks itself, no core between.
+// which answers the asks itself, no core between. The module names
+// three asks: read a file, read an asset beside it, request a local
+// address. It composes no argv of its own - the carrying command is
+// the shell's.
 
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { test } from "vitest";
 
-import { coreAsks, directAsks, type CommandOutcome } from "../src/lib/herdr-core.ts";
+import { coreAsks, directAsks } from "../src/lib/herdr-core.ts";
 import { SourceUnavailableError } from "../src/lib/board/errors.ts";
 
 test("a read lands on the bridge's read with the machine riding", async () => {
@@ -28,102 +29,69 @@ test("a read lands on the bridge's read with the machine riding", async () => {
   ]);
 });
 
-test("a run lands on the bridge's exec and its bytes come back bytes", async () => {
+test("the host reader rides no core: the bridge's on stays unset", async () => {
   const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
   const asks = coreAsks(async (cmd, args) => {
     calls.push({ cmd, args: args ?? {} });
-    return {
-      code: 0,
-      stdout: Array.from(new TextEncoder().encode("out")),
-      stderr: Array.from(new TextEncoder().encode("err")),
-      truncated: true,
-      timed_out: false,
-    };
+    return { text: "host file" };
   });
-  const outcome = await asks.runCommand("rohan", ["realpath", "-e", "--", "/b", "/b/c"]);
-  assert.deepEqual(calls, [
-    {
-      cmd: "exec_on",
-      args: { on: "rohan", argv: ["realpath", "-e", "--", "/b", "/b/c"] },
-    },
-  ]);
-  assert.equal(outcome.code, 0);
-  assert.equal(new TextDecoder().decode(outcome.stdout), "out");
-  assert.equal(new TextDecoder().decode(outcome.stderr), "err");
-  assert.equal(outcome.truncated, true);
-  assert.equal(outcome.timedOut, false);
+  const text = await asks.readFile("host", "/srv/workbench.toml");
+  assert.equal(text, "host file");
+  assert.deepEqual(calls, [{ cmd: "read_declaration", args: { path: "/srv/workbench.toml" } }]);
 });
 
-test("a local request composes its carrying argv inside the module", async () => {
+test("an asset read lands on the bridge's read with the machine riding", async () => {
   const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
   const asks = coreAsks(async (cmd, args) => {
     calls.push({ cmd, args: args ?? {} });
-    return { code: 0, stdout: [104, 105], stderr: [], truncated: false, timed_out: false };
+    return { bytes: [104, 105] };
   });
-  const body = await asks.requestLocal("rohan", { host: "127.0.0.1", port: 8811 }, "/view/v1");
+  const bytes = await asks.readAsset("rohan", "/srv/repo", "figures/a.png");
+  assert.equal(new TextDecoder().decode(bytes), "hi");
+  assert.deepEqual(calls, [
+    { cmd: "read_asset", args: { base: "/srv/repo", relative: "figures/a.png", on: "rohan" } },
+  ]);
+});
+
+test("a local request names the machine, the port and the route - the argv is the shell's", async () => {
+  const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
+  const asks = coreAsks(async (cmd, args) => {
+    calls.push({ cmd, args: args ?? {} });
+    return [104, 105];
+  });
+  const body = await asks.requestLocal("rohan", 8811, "/view/v1");
   assert.equal(new TextDecoder().decode(body), "hi");
   assert.deepEqual(calls, [
-    {
-      cmd: "exec_on",
-      args: {
-        on: "rohan",
-        argv: ["curl", "-fsS", "--max-time", "20", "http://127.0.0.1:8811/view/v1"],
-      },
-    },
+    { cmd: "local_request", args: { on: "rohan", port: 8811, route: "/view/v1" } },
   ]);
 });
 
-test("a failed local request names the machine and the address", async () => {
-  const asks = coreAsks(async () => ({
-    code: 7,
-    stdout: [],
-    stderr: Array.from(new TextEncoder().encode("connection refused")),
-    truncated: false,
-    timed_out: false,
-  }));
+test("a refused local request keeps the bridge's structured shape", async () => {
+  const asks = coreAsks(async () => {
+    throw { code: "machine-unavailable", message: "the request to 127.0.0.1:8811/view/v1 on rohan: failed" };
+  });
   await assert.rejects(
-    asks.requestLocal("rohan", { host: "127.0.0.1", port: 8811 }, "/view/v1"),
+    asks.requestLocal("rohan", 8811, "/view/v1"),
     (error: unknown) => {
       assert.ok(error instanceof SourceUnavailableError);
       assert.equal(error.code, "machine-unavailable");
       assert.match(error.message, /rohan/);
       assert.match(error.message, /127\.0\.0\.1:8811/);
-      assert.match(error.message, /connection refused/);
       return true;
     },
   );
 });
 
-test("a timed local request carries its own code", async () => {
-  const asks = coreAsks(async () => ({
-    code: 28,
-    stdout: [],
-    stderr: [],
-    truncated: false,
-    timed_out: true,
-  }));
-  await assert.rejects(
-    asks.requestLocal("sif", { host: "127.0.0.1", port: 9 }, "/"),
-    (error: unknown) => {
-      assert.ok(error instanceof SourceUnavailableError);
-      assert.equal(error.code, "exec-timeout");
-      assert.match(error.message, /sif/);
-      return true;
-    },
-  );
-});
-
-test("a machine that cannot carry the request keeps the core's refusal code", async () => {
+test("an unknown refusal code surfaces as a bridge bug, named", async () => {
   const asks = coreAsks(async () => {
-    throw { code: "exec-spawn-failed", message: "the core could not start the program" };
+    throw { code: "something-new", message: "the core said a new thing" };
   });
   await assert.rejects(
-    asks.requestLocal("rohan", { host: "127.0.0.1", port: 8811 }, "/view/v1"),
+    asks.requestLocal("rohan", 8811, "/view/v1"),
     (error: unknown) => {
       assert.ok(error instanceof SourceUnavailableError);
-      assert.equal(error.code, "exec-spawn-failed");
-      assert.match(error.message, /rohan/);
-      assert.match(error.message, /could not start the program/);
+      assert.equal(error.code, "bridge-invalid");
+      assert.match(error.message, /a new thing/);
       return true;
     },
   );
@@ -134,7 +102,7 @@ test("a route that is not a path refuses before anything rides", async () => {
     throw new Error("nothing may ride");
   });
   await assert.rejects(
-    asks.requestLocal("rohan", { host: "127.0.0.1", port: 8811 }, "view/v1"),
+    asks.requestLocal("rohan", 8811, "view/v1"),
     (error: unknown) => {
       assert.ok(error instanceof SourceUnavailableError);
       assert.equal(error.code, "read-failed");
@@ -149,45 +117,28 @@ test("the direct implementation performs the asks itself", async () => {
   try {
     const path = join(root, "workbench.toml");
     writeFileSync(path, "name = \"saccade\"\n");
-    const run = async (
-      _machine: string,
-      argv: readonly string[],
-    ): Promise<CommandOutcome> => {
-      const result = await promisify(execFile)(argv[0]!, argv.slice(1), {
-        encoding: "buffer",
-        timeout: 10_000,
-      });
-      return {
-        code: 0,
-        stdout: new Uint8Array(result.stdout),
-        stderr: new Uint8Array(result.stderr),
-        truncated: false,
-        timedOut: false,
-      };
-    };
     const server = createServer((_request, response) => {
       response.end("served here");
     });
-    const address = await new Promise<{ host: string; port: number }>((resolve) => {
+    const port = await new Promise<number>((resolve) => {
       server.listen(0, "127.0.0.1", () => {
         const detected = server.address();
         assert.ok(detected !== null && typeof detected === "object");
-        resolve({ host: detected.address, port: detected.port });
+        resolve(detected.port);
       });
     });
     const asks = directAsks({
       readFile: async (_machine, read) => readFileSync(read, "utf8"),
-      runCommand: run,
+      readAsset: async (_machine, base, relative) =>
+        new Uint8Array(readFileSync(join(base, relative))),
       requestLocal: async (_machine, local, route) => {
-        const reply = await fetch(`http://${local.host}:${local.port}${route}`);
+        const reply = await fetch(`http://127.0.0.1:${local}${route}`);
         return new Uint8Array(await reply.arrayBuffer());
       },
     });
     assert.equal(await asks.readFile("here", path), "name = \"saccade\"\n");
-    const outcome = await asks.runCommand("here", ["cat", path]);
-    assert.equal(outcome.code, 0);
-    assert.match(new TextDecoder().decode(outcome.stdout), /saccade/);
-    const body = await asks.requestLocal("here", address, "/the-route");
+    assert.equal(new TextDecoder().decode(await asks.readAsset("here", root, "workbench.toml")), "name = \"saccade\"\n");
+    const body = await asks.requestLocal("here", port, "/the-route");
     assert.equal(new TextDecoder().decode(body), "served here");
     await new Promise<void>((resolve) => server.close(() => resolve()));
   } finally {

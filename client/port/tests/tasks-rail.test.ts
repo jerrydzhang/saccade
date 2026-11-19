@@ -256,8 +256,8 @@ test("registering reads the declaration through the module; the store keeps path
   vi.stubGlobal("window", {
     __saccadeAsks: directAsks({
       readFile: async () => 'name = "pyrimel"\n\n[tracker]\nport = 8813\n',
-      runCommand: async () => {
-        throw new Error("no commands here");
+      readAsset: async () => {
+        throw new Error("no assets here");
       },
       requestLocal: async () => {
         throw new Error("no requests here");
@@ -296,8 +296,8 @@ test("a declaration with no tracker section registers and lists; one that names 
   vi.stubGlobal("window", {
     __saccadeAsks: directAsks({
       readFile: async () => `name = "bare"\n`,
-      runCommand: async () => {
-        throw new Error("no commands here");
+      readAsset: async () => {
+        throw new Error("no assets here");
       },
       requestLocal: async () => {
         throw new Error("no requests here");

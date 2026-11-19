@@ -7,9 +7,10 @@
 //   for any request whose path ends /workbench.toml. That is the same
 //   test-only trust the host reader carries - never human
 //   functionality; the lane's tests are the only caller.
+// - readAsset refuses: the lane serves no machine assets (its boards
+//   ride the fixture source, whose bytes never leave the page).
 // - requestLocal is a real fetch of the seeded tracker, which allows
 //   this page's origin (tracker-setup.ts).
-// - runCommand refuses: the lane runs no commands.
 //
 // Registration rides the device store seeding: the lane seeds the one
 // registered path the test page names (the seeded repository's real
@@ -24,11 +25,11 @@ type LaneSeed = { machine: string; repoPath: string; base: string };
 type LaneWindow = Window & {
   __saccadeAsks?: unknown;
   __saccadeLaneSeed?: LaneSeed;
-  __saccadeLaneCounts?: { readFile: number; runCommand: number; requestLocal: number };
+  __saccadeLaneCounts?: { readFile: number; readAsset: number; requestLocal: number };
 };
 
 const seed = (window.parent as LaneWindow).__saccadeLaneSeed;
-const counts = { readFile: 0, runCommand: 0, requestLocal: 0 };
+const counts = { readFile: 0, readAsset: 0, requestLocal: 0 };
 (window as LaneWindow).__saccadeLaneCounts = counts;
 
 if (seed !== undefined) {
@@ -50,11 +51,11 @@ if (seed !== undefined) {
     }
     return reply.text();
   },
-  async runCommand() {
-    counts.runCommand += 1;
-    throw new Error("the lane runs no commands");
+  async readAsset() {
+    counts.readAsset += 1;
+    throw new Error("the lane serves no machine assets");
   },
-  async requestLocal(_machine, _address, route) {
+  async requestLocal(_machine, port, route) {
     counts.requestLocal += 1;
     if (seed === undefined) {
       throw new Error(`the lane has no seeded tracker to answer ${route}`);
@@ -62,9 +63,10 @@ if (seed !== undefined) {
     if (!route.startsWith("/")) {
       throw new Error(`the route must start with '/': ${route}`);
     }
-    // a real fetch of the seeded tracker, whose loopback address the
-    // ask carries and whose origin allowlist names this page
-    const reply = await fetch(`${seed.base}${route}`);
+    // a real fetch of the seeded tracker at the loopback port the ask
+    // carries - the same address the shell composes on a machine; the
+    // tracker's origin allowlist names this page
+    const reply = await fetch(`http://127.0.0.1:${port}${route}`);
     if (!reply.ok) {
       throw new Error(`the tracker answered ${reply.status} for ${route}`);
     }

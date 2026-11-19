@@ -15,6 +15,7 @@
 import { resolveRelative } from "./resolve.ts";
 import { TrackerSource } from "./tracker.ts";
 import { LANE_CODES, SourceUnavailableError, type LaneCode } from "./board/errors.ts";
+import { theAsks } from "./asks.ts";
 
 // "fixture" and "host" are this viewer's own machines; "host" is the
 // test-only local-file reader (the lanes' fixture reader, never
@@ -167,60 +168,31 @@ export function tauriInvoke(): TauriInvoke {
   return invoke;
 }
 
-// The bridge rejects with its BridgeError {code, message}; keep the
-// structured code and human message instead of flattening them into a
-// string. An unknown code is a bridge bug, surfaced as one.
-function bridgeFailure(error: unknown): SourceUnavailableError {
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as { code?: unknown; message?: unknown };
-    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
-      const known = (LANE_CODES as readonly string[]).includes(candidate.code);
-      const code = known ? (candidate.code as LaneCode) : "bridge-invalid";
-      return new SourceUnavailableError(code, candidate.message);
-    }
-  }
-  return new SourceUnavailableError("read-failed", String(error));
-}
-
 export class HostFileSource implements BoardSource {
   readonly machine = "host" as const;
 
   async loadText(location: Location): Promise<LoadedText> {
-    const invoke = tauriInvoke();
-    try {
-      const result = (await invoke("read_declaration", {
-        path: location.path,
-      })) as { text: string };
-      return { text: result.text, location };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return { text: await theAsks().readFile(this.machine, location.path), location };
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const invoke = tauriInvoke();
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    try {
-      const bytes = (await invoke("read_asset", {
-        base: baseDir,
-        relative,
-      })) as number[];
-      return { bytes: new Uint8Array(bytes), path: relative };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return {
+      bytes: await theAsks().readAsset(this.machine, baseDir, relative),
+      path: relative,
+    };
   }
 }
 
-// A machine-named board: every read rides the LOCAL core's read-only
-// face (file.read for text, fixed-argv exec for bytes and remote path
-// resolution), and containment is proven on the remote side. Adding
-// machines, logging in or updating cores is the human's own host setup;
-// every machine state arrives here as a structured error, never a retry.
+// A machine-named board: every read rides the one module's asks on
+// that machine (the text read, and the asset read beside it), and
+// containment is proven on the remote side. Adding machines, logging in
+// or updating cores is the human's own host setup; every machine state
+// arrives here as a structured error, never a retry.
 export class RemoteSource implements BoardSource {
   readonly machine: string;
 
@@ -229,35 +201,19 @@ export class RemoteSource implements BoardSource {
   }
 
   async loadText(location: Location): Promise<LoadedText> {
-    const invoke = tauriInvoke();
-    try {
-      const result = (await invoke("read_declaration", {
-        path: location.path,
-        on: this.machine,
-      })) as { text: string };
-      return { text: result.text, location };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return { text: await theAsks().readFile(this.machine, location.path), location };
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const invoke = tauriInvoke();
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    try {
-      const bytes = (await invoke("read_asset", {
-        base: baseDir,
-        relative,
-        on: this.machine,
-      })) as number[];
-      return { bytes: new Uint8Array(bytes), path: relative };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return {
+      bytes: await theAsks().readAsset(this.machine, baseDir, relative),
+      path: relative,
+    };
   }
 }
 

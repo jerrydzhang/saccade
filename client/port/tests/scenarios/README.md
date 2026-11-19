@@ -106,7 +106,8 @@ Every module is a test-infrastructure module; each line says why it exists.
   (a middleware serving the seeded repository's `workbench.toml` for any
   path ending `/workbench.toml` - the same test-only trust the host reader
   carries), the tracker requests as real fetches of the seeded tracker, and
-  a refusal for commands. It also seeds the device store with the one
+  a refusal for machine assets (its boards ride the fixture source). It
+  also seeds the device store with the one
   registered path (the seeded repository's real path), so scenarios register
   nothing by typing; the control-plane scenario drives the real add field
   itself, and clears the seed for its empty case.

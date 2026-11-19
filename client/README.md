@@ -87,10 +87,11 @@ The native test project runs only through the gated session lane:
   `saccade-app`, and the tauri conf embedding `port/dist`
   (identifier `dev.saccade.app`)
 - `src-tauri/src/` - the shell library the crate compiles: read-only
-  declaration and asset commands with path guards, board admission
-  through the shared `board-grammar` crate, the suite's window acts
-  (`suite.rs`: windows, links, focus, the window jump), the window
-  registry (the run's one memory of its windows), the look
+  declaration and asset commands with path guards, the one local
+  request command (loopback, a bounded curl argv composed here), board
+  admission through the shared `board-grammar` crate, the suite's
+  window acts (`suite.rs`: windows, links, focus, the window jump),
+  the window registry (the run's one memory of its windows), the look
   configuration, the
   key trace's stderr door
 - `src-tauri/core-client/` - the pure read-only herdr-core client,

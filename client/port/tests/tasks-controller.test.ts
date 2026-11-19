@@ -518,8 +518,8 @@ function stubRegistry(seed: string[] = [], declaration = 'name = "tasks-test"\n\
   vi.stubGlobal("window", {
     __saccadeAsks: directAsks({
       readFile: async () => declaration,
-      runCommand: async () => {
-        throw new Error("no commands here");
+      readAsset: async () => {
+        throw new Error("no assets here");
       },
       requestLocal: async () => {
         throw new Error("no requests here");
@@ -672,8 +672,8 @@ test("an agent no tracker registered is a rail target: s labels it, its menu is 
   vi.stubGlobal("window", {
     __saccadeAsks: directAsks({
       readFile: async () => 'name = "tasks-test"\n\n[tracker]\nport = 9\n',
-      runCommand: async () => {
-        throw new Error("no commands here");
+      readAsset: async () => {
+        throw new Error("no assets here");
       },
       requestLocal: async () => {
         throw new Error("no requests here");

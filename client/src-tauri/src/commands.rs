@@ -1,16 +1,18 @@
-//! Read-only declaration and asset reads, plus the suite's one write:
-//! the explainer annotation submit (t-24@r21). The guard mirrors the
-//! frontend resolve rules exactly: relative segments only, no parent
-//! traversal, no backslash separators, no absolute paths, no NUL bytes.
-//! Canonicalized
+//! Read-only declaration and asset reads, one bounded local request,
+//! plus the suite's one write: the explainer annotation submit. The
+//! guard mirrors the frontend resolve rules exactly: relative segments
+//! only, no parent traversal, no backslash separators, no absolute
+//! paths, no NUL bytes. Canonicalized
 //! prefix checking runs second so a guard bypass still cannot escape.
 //!
 //! Local locations read through std::fs exactly as before. A location
 //! that names a machine reads through the LOCAL herdr-core's face
-//! instead (file.read for text; fixed-argv exec for bytes and remote
-//! path resolution; file.edit for the one annotation submit -
-//! exact-once, all-or-none), with containment proven on the remote side
-//! and every machine state surfacing as a structured error. The core
+//! instead (file.read for text; the asset read's canonicalization and
+//! bytes; file.edit for the one annotation submit - exact-once,
+//! all-or-none), with containment proven on the remote side and every
+//! machine state surfacing as a structured error. The one exec here is
+//! the local request's own composed curl argv - the renderer names a
+//! machine, a loopback port and a route, never an argv. The core
 //! socket is the only door here, and it opens only the calls named
 //! here; the renderer gets no socket, no shell and no machine
 //! management.
@@ -427,53 +429,107 @@ fn read_asset_local_core(base: &str, relative: &str) -> Result<Vec<u8>, BridgeEr
     Ok(bytes)
 }
 
-/// One fixed argv on a machine through the local core's exec: no
-/// shell, no environment, no working directory - the argv runs as
-/// given, bounded by the core's own budget. This is the ask the
-/// frontend's one core module makes for its non-read work; the argv's
-/// purpose lives with the caller, never here.
-#[derive(Serialize, Debug)]
-pub struct ExecOutcome {
-    pub code: Option<i32>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub truncated: bool,
-    pub timed_out: bool,
+/// The loopback bound for one local request: the curl argv's own
+/// --max-time, composed here so the wire's patience is the shell's
+/// fact, not the caller's.
+const LOCAL_REQUEST_BOUND_SECONDS: &str = "20";
+
+/// The curl argv for one local request, checked and composed here: the
+/// host is not a parameter - the command binds 127.0.0.1 itself, the
+/// port must be in range, and the route must start with '/'. This is
+/// the one fixed argv the frontend's local-address ask can reach; a
+/// real fixed command someday gets its own narrow command, as the
+/// reads have.
+fn local_request_argv(port: u16, route: &str) -> Result<Vec<String>, BridgeError> {
+    if port == 0 {
+        return Err(deny("port 0 binds nothing"));
+    }
+    if !route.starts_with('/') {
+        return Err(deny("the route must start with '/'"));
+    }
+    if route.contains('\0') {
+        return Err(deny("NUL byte in route"));
+    }
+    Ok(vec![
+        "curl".to_string(),
+        "-fsS".to_string(),
+        "--max-time".to_string(),
+        LOCAL_REQUEST_BOUND_SECONDS.to_string(),
+        format!("http://127.0.0.1:{port}{route}"),
+    ])
 }
 
+/// One HTTP GET against a loopback port on a machine, through the
+/// local core's exec of the one composed argv: the bytes, or the
+/// structured refusal - a spawn that never ran names the machine, a
+/// timeout says so, a non-zero exit carries the server's stderr. The
+/// webview names the machine, the port and the route; nothing else
+/// crosses this line.
 #[tauri::command]
-pub fn exec_on(on: String, argv: Vec<String>) -> Result<ExecOutcome, BridgeError> {
-    if argv.is_empty() {
-        return Err(deny("empty argv"));
-    }
-    if argv.iter().any(|arg| arg.contains('\0')) {
-        return Err(deny("NUL byte in argv"));
-    }
+pub fn local_request(on: String, port: u16, route: String) -> Result<Vec<u8>, BridgeError> {
+    let argv = local_request_argv(port, &route)?;
     let client = core_client()?;
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     let outcome = match client.exec(&on, &refs) {
         Ok(outcome) => outcome,
+        Err(CoreFail::SpawnFailed { detail }) => {
+            let _ = log_bridge(
+                "local_request",
+                &core_machine_label(&on),
+                "failed: exec-spawn-failed",
+            );
+            return Err(BridgeError {
+                code: "exec-spawn-failed".into(),
+                message: format!(
+                    "machine '{}' cannot carry the request to 127.0.0.1:{port}{route}: {detail}",
+                    core_machine_label(&on)
+                ),
+            });
+        }
         Err(fail) => {
             let _ = log_bridge(
-                "exec_on",
+                "local_request",
                 &core_machine_label(&on),
                 &format!("failed: {}", fail.code()),
             );
             return Err(core_failure(fail));
         }
     };
+    let ok = outcome.code == Some(0);
     let _ = log_bridge(
-        "exec_on",
-        &core_machine_label(&on),
-        &format!("exit {:?}, {} stdout bytes", outcome.code, outcome.stdout.len()),
+        "local_request",
+        &format!("{}127.0.0.1:{port}{route}", core_machine_label(&on)),
+        &if ok {
+            format!("{} bytes", outcome.stdout.len())
+        } else {
+            format!("exit {:?}", outcome.code)
+        },
     );
-    Ok(ExecOutcome {
-        code: outcome.code,
-        stdout: outcome.stdout,
-        stderr: outcome.stderr,
-        truncated: outcome.truncated,
-        timed_out: outcome.timed_out,
-    })
+    if outcome.timed_out {
+        return Err(BridgeError {
+            code: "exec-timeout".into(),
+            message: format!(
+                "the request to 127.0.0.1:{port}{route} on {} outlived its bound",
+                core_machine_label(&on)
+            ),
+        });
+    }
+    if !ok {
+        let detail: String = String::from_utf8_lossy(&outcome.stderr).trim().chars().take(200).collect();
+        return Err(BridgeError {
+            code: "machine-unavailable".into(),
+            message: format!(
+                "the request to 127.0.0.1:{port}{route} on {} failed{}",
+                core_machine_label(&on),
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            ),
+        });
+    }
+    Ok(outcome.stdout)
 }
 
 /// A static identity statement for the machine-readable surface: what this
@@ -489,7 +545,39 @@ pub fn viewer_identity() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{core_read_of, guard_relative, CoreRead, DeckFeedMessage};
+    use super::{core_read_of, guard_relative, local_request_argv, CoreRead, DeckFeedMessage};
+
+    #[test]
+    fn the_local_request_argv_binds_loopback_itself_and_is_bounded() {
+        let argv = local_request_argv(8811, "/view/v1/t-1").expect("a plain request composes");
+        assert_eq!(
+            argv,
+            vec![
+                "curl".to_string(),
+                "-fsS".to_string(),
+                "--max-time".to_string(),
+                "20".to_string(),
+                "http://127.0.0.1:8811/view/v1/t-1".to_string(),
+            ],
+            "the host is not a parameter: the command binds 127.0.0.1 itself, bounded"
+        );
+    }
+
+    #[test]
+    fn the_local_request_checks_its_three_facts_before_any_argv() {
+        assert_eq!(
+            local_request_argv(0, "/view/v1/t-1").expect_err("port 0 binds nothing").message,
+            "port 0 binds nothing"
+        );
+        assert_eq!(
+            local_request_argv(8811, "view/v1/t-1").expect_err("a route starts with '/'").message,
+            "the route must start with '/'"
+        );
+        assert_eq!(
+            local_request_argv(8811, "/view/v1/t-1\0").expect_err("NUL carries nothing").message,
+            "NUL byte in route"
+        );
+    }
 
     #[test]
     fn an_edit_refuses_non_absolute_and_nul_paths_before_any_wire() {

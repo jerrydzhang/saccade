@@ -87,8 +87,7 @@ export class TrackerSource implements BoardSource {
       );
     }
     const machine = project.machine;
-    const address = { host: "127.0.0.1", port };
-    return async (route) => new Response(await theAsks().requestLocal(machine, address, route));
+    return async (route) => new Response(await theAsks().requestLocal(machine, port, route));
   }
 
   /** The version contract, checked before any board read: the server

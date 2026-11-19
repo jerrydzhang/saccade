@@ -11,7 +11,7 @@
 import { coreAsks, directAsks, type MachineAsks } from "./herdr-core.ts";
 import { ProjectRegistry } from "./projects.ts";
 
-export type { CommandOutcome, LocalAddress, Machine, MachineAsks } from "./herdr-core.ts";
+export type { LocalPort, Machine, MachineAsks } from "./herdr-core.ts";
 export type { Declaration, Project, RegisteredPath } from "./projects.ts";
 
 type AsksWindow = { __saccadeAsks?: MachineAsks };

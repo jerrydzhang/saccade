@@ -47,10 +47,10 @@ function stubAsks(): void {
   vi.stubGlobal("window", {
     __saccadeAsks: directAsks({
       readFile: async () => `name = "${projectName}"\n\n[tracker]\nport = 9\n`,
-      runCommand: async () => {
-        throw new Error("no commands here");
+      readAsset: async () => {
+        throw new Error("no assets here");
       },
-      requestLocal: async (_machine, _address, route) => {
+      requestLocal: async (_machine, _port, route) => {
         const body = route === "/view/v1/" ? root(servedRepo) : tasks();
         return new TextEncoder().encode(JSON.stringify(body));
       },
