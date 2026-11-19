@@ -4,17 +4,38 @@
 // address; the controller (rows, published targets, places) lives in
 // tasksController.ts - svelte-free and unit-tested; this module is the
 // one place the component enters and the window's services meet the
-// task list.
+// task list. The rail publication (what sits beneath the project's
+// rail entry - the agents, their words, their acts) is this
+// instrument's own data (instruments/tasksRail.ts): it polls it and
+// publishes it for the frame to draw.
 
 import type { Component } from "svelte";
 import TasksView from "./TasksView.svelte";
 import { connectTasks } from "./tasksController.ts";
+import { createTasksRail } from "./tasksRail.ts";
 import type { TasksData, TasksUI } from "./tasksController.ts";
 import type { InstrumentProps } from "../lib/instruments/contract.ts";
 import type { TaskPorts } from "../lib/tasks/menu.ts";
 import { registerInstrument, type RegisteredInstrument } from "../lib/instruments/registry.ts";
+import { sourceFor } from "../lib/sources.ts";
+import { TrackerSource } from "../lib/tracker.ts";
+import { tasksPageOf } from "../lib/tasks/page.ts";
 
 export * from "./tasksController.ts";
+export * from "./tasksRail.ts";
+
+// the rail publication and the window services, wired at the first
+// construct; the frame may ask the publication's targets before any
+// construct, and an unbuilt instrument publishes nothing
+const railData = createTasksRail({
+  ports: () =>
+    services ?? {
+      open: () => {},
+      elsewhere: undefined,
+      copy: undefined,
+    },
+});
+let services: TaskPorts | null = null;
 
 /** The task list's registration: called once by the instruments'
  * index (the registry's one list). */
@@ -24,13 +45,41 @@ export function register(): RegisteredInstrument {
     title: "the project's tasks",
     claims: (address) => address.machine.startsWith("tracker:") && address.path === "tasks",
     projectView: (project) => `${project}/tasks`,
+    railTargets: (project) => railData.railTargets(project, windowPorts()),
+    pickerTasks: async (machine) => {
+      const source = sourceFor(machine);
+      if (!(source instanceof TrackerSource)) return [];
+      const model = tasksPageOf(await source.instrumentPage("tasks"));
+      const out: { id: string; title: string }[] = [];
+      for (const group of model.groups) {
+        for (const entry of group.rows) {
+          out.push({ id: entry.task, title: entry.title });
+        }
+      }
+      return out;
+    },
     Component: TasksView as Component<InstrumentProps<TasksData, TasksUI>>,
-    connect: (buffer, services) =>
-      connectTasks(buffer, {
-        open: (spec) => services.open(spec),
-        elsewhere: (spec, act) => services.elsewhere?.(spec, act),
-        copy: (text) => services.copy(text),
-        railWords: (observer) => services.railWords?.((rail) => observer(rail as never)) ?? (() => {}),
-      }),
+    connect: (buffer, windowServices) => {
+      services = windowServices as TaskPorts;
+      // the rail publication polls with the instrument alive: the
+      // frame reads its targets through the claims seam
+      railData.start();
+      const ports: TaskPorts = {
+        open: (spec) => windowServices.open(spec),
+        elsewhere: (spec, act) => windowServices.elsewhere?.(spec, act),
+        copy: (text) => windowServices.copy(text),
+        // the rows' agent marks read the rail publication's words
+        railWords: (observer) => {
+          const push = (): void => observer(railData.words());
+          push();
+          return railData.subscribe(push);
+        },
+      };
+      return connectTasks(buffer, ports);
+    },
   });
+}
+
+function windowPorts(): TaskPorts {
+  return services ?? { open: () => {}, elsewhere: undefined, copy: undefined, railWords: () => () => {} };
 }

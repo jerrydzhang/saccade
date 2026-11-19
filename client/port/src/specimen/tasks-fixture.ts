@@ -7,7 +7,7 @@
 // one of them empty.
 
 import { railOf, type AgentFacts, type HerdrWord, type Rail, type WordsSnapshot } from "../lib/tasks/rail.ts";
-import { ADD_CLOSED, type AddView } from "../lib/tasks/add.ts";
+import { ADD_CLOSED, type AddView } from "../lib/frame/add.ts";
 import type { TaskRow, TasksPageModel } from "../lib/tasks/page.ts";
 import type { TasksData, TasksUI } from "../instruments/tasksController.ts";
 
@@ -117,7 +117,7 @@ export function fixtureTasksUI(add: AddView = ADD_CLOSED): TasksUI {
   return {
     getSelection: () => null,
     subscribeWords: (observer) => {
-      observer(tasksRail);
+      observer(words);
       return () => {};
     },
   };

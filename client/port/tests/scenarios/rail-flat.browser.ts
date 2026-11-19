@@ -26,18 +26,21 @@ test("the rail is flat: rows in importance order, no word headings, a stray's la
   await expect.poll(() => app.shows("rail")).toBe(true);
   await expect.poll(() => app.shows("unregistered")).toBe(true);
   const foot = (await app.controlText("unregistered")) ?? "";
-  // blocked before working before idle (wordRank), each row once
+  // blocked before working before idle (wordRank), each row once; the
+  // rows draw generically - the published label carries the word, the
+  // terminal's title, the address
   const order = ["pi run", "notes run", "elsewhere / 1"].map((label) => foot.indexOf(label));
   expect(order.every((at) => at >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
-  // no row of the rail is a word: the words ride the rows' glyphs
+  // no row of the rail is a word heading: the words ride inside the
+  // published labels
   for (const heading of ["blocked", "working", "idle"]) {
     expect(foot.split("\n").map((line) => line.trim())).not.toContain(heading);
   }
-  // the id column holds the address, the name column the terminal's title
   const row = (await app.partText("rail/terminal/t7c")) ?? "";
-  expect(row.indexOf("t7c")).toBeGreaterThanOrEqual(0);
-  expect(row.indexOf("t7c")).toBeLessThan(row.indexOf("pi run"));
+  expect(row).toContain("blocked");
+  expect(row).toContain("pi run");
+  expect(row).toContain("t7c");
 });
 
 test("select mode: an agent inside a project is labelled nested; the project and a foot terminal are not", async ({ bridged, tracker }) => {

@@ -26,6 +26,7 @@ export function register(): RegisteredInstrument {
     title: "this board",
     claims: (address) => !(address.machine.startsWith("tracker:") && address.path === TASKS_PATH),
     projectView: () => null,
+    railTargets: () => [],
     Component: BoardView as Component<InstrumentProps<BoardData, BoardUI>>,
     connect: (buffer, services) => connectBoard(buffer, services as BoardServices),
   });

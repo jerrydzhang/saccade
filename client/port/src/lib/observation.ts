@@ -155,6 +155,9 @@ export type PortObservation = {
    * the board, and how many units (math, diagrams, figures, images) it
    * hydrated. A fold, a find, a selection must move neither. */
   presentation?: Readonly<{ renders: number; hydrated: number }> | null;
+  /** The frame rail's add field (the window's registration act), on
+   * every surface: the empty window and the task list read it. */
+  railAdd: Readonly<{ open: boolean; value: string; problem: string | null }>;
   /** The input surface (batch 3's contract): the pending strokes,
    * the which-key popup's content while shown, and the NAMED
    * tunables (read by the scenarios, never pinned there). */
@@ -185,8 +188,6 @@ export type PortObservation = {
     /** The project the list belongs to. */
     project: string | null;
     problem: string | null;
-    /** The frame rail's add field: the window's registration act. */
-    add: Readonly<{ open: boolean; value: string; problem: string | null }>;
     rows: readonly {
       part: string;
       task: string;
@@ -340,7 +341,6 @@ function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
 export function tasksViewOf(
   frame: TasksData | null,
   state: BufferState<RenderPair>,
-  railAdd: Readonly<{ open: boolean; value: string; problem: string | null }>,
 ): NonNullable<PortObservation["tasks"]> {
   const rows: { part: string; task: string; location: string; title: string }[] = [];
   const groups: { part: string; title: string }[] = [];
@@ -365,7 +365,6 @@ export function tasksViewOf(
     location: frame ? frame.location : null,
     project: frame ? frame.project : null,
     problem: frame ? frame.problem : null,
-    add: { open: railAdd.open, value: railAdd.value, problem: railAdd.problem },
     rows,
     selection,
     groups,
@@ -404,6 +403,7 @@ export function buildReadout(
     app: { name: "saccade-app", slice: 1 },
     surface: input.surface,
     window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound, focus: input.focus ?? null, place: input.place ?? null },
+    railAdd: input.railAdd,
     board: {
       status: input.surface === "board" ? status : "empty",
       asked: frame && input.surface === "board" ? frame.asked : null,
@@ -439,7 +439,7 @@ export function buildReadout(
     input: input.input,
     reading: input.reading,
     tasks: input.surface === "tasks"
-      ? tasksViewOf(tasksFrame, input.state, input.railAdd)
+      ? tasksViewOf(tasksFrame, input.state)
       : null,
   };
 }

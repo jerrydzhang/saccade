@@ -18,7 +18,7 @@ the frame's (App.svelte), not this instrument's. -->
   import FrameSurface from "../components/FrameSurface.svelte";
   import TasksPipeline from "./TasksPipeline.svelte";
   import type { TasksData, TasksUI } from "./tasks.ts";
-  import { wordsByIncarnationOf, type Rail } from "../lib/tasks/rail.ts";
+  import { wordsByIncarnationOf, type WordsSnapshot } from "../lib/tasks/rail.ts";
 
   let {
     content,
@@ -34,12 +34,12 @@ the frame's (App.svelte), not this instrument's. -->
     targets?: TargetPresentations | null;
   } = $props();
 
-  // The rail's words join the rows' agents: the frame's rail carries
-  // the words (the controller's face forwards them); the rows read
-  // them for their agents' live marks.
-  let rail: Rail = $state({ projects: [], unregistered: [], herdr: null });
+  // The words join the rows' agents: the instrument's own rail
+  // publication polls them (the controller's face forwards them); the
+  // rows read them for their agents' live marks.
+  let words: WordsSnapshot = $state({ generation: 0, connected: false, words: {} });
   $effect(() => controller.subscribeWords((next) => {
-    rail = next;
+    words = next;
   }));
 
   // The row highlight follows the POINTER'S OWN MOVEMENT, never a row
@@ -72,7 +72,7 @@ the frame's (App.svelte), not this instrument's. -->
 
   const page = $derived(content.page);
   // each row's agents marked by their live words: the rail's join
-  const words = $derived(wordsByIncarnationOf(rail));
+  const agentsWords = $derived(wordsByIncarnationOf(words));
 </script>
 
 <FrameSurface presentations={targets}>
@@ -91,7 +91,7 @@ the frame's (App.svelte), not this instrument's. -->
       <div class="port-tasks-none" data-port-control="tasks-problem">{content.project}: {content.problem}</div>
     {/if}
     {#if page !== null && content.status === "loaded"}
-      <TasksPipeline {page} {words} {now} {hovered} />
+      <TasksPipeline {page} words={agentsWords} {now} {hovered} />
     {/if}
   </div>
   </div>

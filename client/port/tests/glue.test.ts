@@ -72,6 +72,7 @@ function stubDefinition(
     title: "stub",
     claims: () => true,
     projectView: () => null,
+    railTargets: () => [],
     Component: stubComponent,
     connect: (buffer: BufferAccess<Frame>): InstrumentAttachment<Controller, BoardAnchor> => {
       const controller: Controller = { tag };
@@ -96,7 +97,7 @@ function environment(): WindowEnvironment {
     viewport: createViewport(),
     diagnostics: createDiagnostics(),
     buffers: createBufferFactory("win"),
-    services: { open: () => {}, copy: () => {} },
+    services: { open: () => {}, elsewhere: undefined, copy: () => {} },
   };
 }
 
@@ -187,6 +188,7 @@ test("latest intent wins: a superseded refresh never publishes", async () => {
     title: "stub",
     claims: () => true,
     projectView: () => null,
+    railTargets: () => [],
     Component: stubComponent,
     connect: (buffer: BufferAccess<Frame>): InstrumentAttachment<Controller, BoardAnchor> => {
       const first = buffer.updates.refresh(async () => {
@@ -238,6 +240,7 @@ test("a failed refresh retains the last usable frame and reports", async () => {
     title: "stub",
     claims: () => true,
     projectView: () => null,
+    railTargets: () => [],
     Component: stubComponent,
     connect: (buffer: BufferAccess<Frame>): InstrumentAttachment<Controller, BoardAnchor> => {
       void buffer.updates.refresh(() => ({

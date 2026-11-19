@@ -47,3 +47,30 @@ export function projectViewFor(project: string): string | null {
   }
   return null;
 }
+
+/** The picker's task candidates on a tracker machine: the registered
+ * instruments' first answer. The window's picker face reads this - the
+ * window never reads a tracker's lib. */
+export async function pickerTasks(
+  machine: string,
+): Promise<readonly { id: string; title: string }[]> {
+  for (const entry of registeredInstruments()) {
+    if (entry.pickerTasks === undefined) continue;
+    const tasks = await entry.pickerTasks(machine);
+    if (tasks.length > 0) return tasks;
+  }
+  return [];
+}
+
+/** The targets the registered instruments publish beneath a project's
+ * rail entry (the agents an instrument's tracker serves, its acts) or
+ * at the rail's foot when the project is null (terminals no
+ * registered project holds). The frame draws them without knowing
+ * their kind. */
+export function railTargetsFor(project: string | null): import("../contracts/buffer.ts").TargetDefinition[] {
+  const out: import("../contracts/buffer.ts").TargetDefinition[] = [];
+  for (const entry of registeredInstruments()) {
+    for (const target of entry.railTargets(project)) out.push(target);
+  }
+  return out;
+}

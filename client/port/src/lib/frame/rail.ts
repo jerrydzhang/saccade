@@ -1,119 +1,63 @@
-// The frame's rail: the projects this device has registered and, under
-// each, its running agents. The rail is the frame's own surface - any
-// window can show it, none starts with it - so its data lives with the
-// frame: the registered projects come from the device's registry, the
-// agents from the projects' agents pages joined with the shell's word
-// feed, and the add field rides here. The rail knows nothing of tasks:
-// a chosen project opens its task list through the window's open
-// funnel, and what an instrument claims for a project is wave 2's
-// seam.
+// The frame's rail, the frame's own: the projects this device has
+// registered - names and the shown mark - the add field, register and
+// unregister, show and hide, the scroll region and the cramped rule.
+// What sits beneath a project is not the frame's: the rail asks the
+// claims seam (the registered instruments) for the targets published
+// beneath each project and draws them without knowing their kind; a
+// project whose instruments publish nothing beneath it is a plain
+// entry.
 
-import { createAddProject, type AddProject, type AddView } from "../tasks/add.ts";
-import {
-  agentFactsOf,
-  railOf,
-  railTargetsOf,
-  wordsOf,
-  NO_WORDS,
-  type AgentFacts,
-  type Rail,
-  type RailTarget,
-  type WordsSnapshot,
-} from "../tasks/rail.ts";
+import { createAddProject, type AddProject, type AddView } from "./add.ts";
 import { theProjects } from "../asks.ts";
-import { sourceFor, tauriInvoke } from "../sources.ts";
-import { formatLocation } from "../location.ts";
 import { projectViewFor } from "../instruments/claims.ts";
+import { registeredInstruments } from "../instruments/registry.ts";
 import type { InputContext } from "../contracts/input.ts";
 import type { TargetDefinition } from "../contracts/buffer.ts";
-import type { ElsewhereAct } from "../elsewhere.ts";
-import type { MenuAct } from "../menu/session.ts";
-import { TrackerSource } from "../tracker.ts";
-import type { TaskPorts } from "../tasks/menu.ts";
 
-/** How often the rail re-reads its agents and its words (a named
- * tunable). */
-export const RAIL_POLL_MS = 3000;
+/** The frame rail's project entry: the registry's name and the shown
+ * mark. What sits beneath it comes from the claims seam, not from
+ * here. */
+export type FrameRailProject = {
+  name: string;
+  current: boolean;
+  /** The project's rail id: the header the beneath-targets nest
+   * inside. */
+  part: string;
+};
+
+export const projectPart = (name: string): string => `rail/project/${name}`;
 
 export interface FrameRailDeps {
-  /** The frame's input capture: the add field's text entry and the
-   * act menus ride it while they hold the keys. */
+  /** The frame's input capture: the add field's text entry rides it
+   * while it holds the keys. */
   capture(context: InputContext): { release(): void };
-  /** Open a location in this window: a chosen project's task list. */
+  /** Open a location in this window: a project's claimed view. */
   open(spec: string): void;
-  /** The elsewhere surface: an agent's o/i/w acts. */
-  elsewhere(spec: string, act: ElsewhereAct): void;
-  /** The clipboard, observed so the lane can see the act. */
-  copy(text: string): void;
   /** The project this window shows, when it shows one: the rail's
    * mark. */
   shownProject(): string | null;
 }
 
-/** The acts on a task's board, composed spec in hand: an agent's for
- * its first task. */
-function boardActs(spec: string, ports: TaskPorts, reference = true): MenuAct[] {
-  const acts: MenuAct[] = [];
-  if (ports.elsewhere !== undefined) {
-    const elsewhere = ports.elsewhere;
-    const open = (act: ElsewhereAct): { id: string; label: string; run: () => void } => ({
-      id: `tasks.elsewhere.${act}`,
-      label:
-        act === "link"
-          ? "open board (through the link, or ask once)"
-          : act === "once"
-            ? "open in... (ask; keep the link)"
-            : "open in a new window",
-      run: () => elsewhere(spec, act),
-    });
-    acts.push(
-      { key: "o", action: open("link") },
-      { key: "i", action: open("once") },
-      { key: "w", action: open("new") },
-    );
+/** The seam's publications: beneath each project's header, then the
+ * foot group's projectless targets. */
+function targetsBeneathAndFoot(projects: FrameRailProject[]): TargetDefinition[] {
+  const out: TargetDefinition[] = [];
+  for (const registration of registeredInstruments()) {
+    for (const project of projects) {
+      for (const target of registration.railTargets(project.name)) {
+        out.push(target);
+      }
+    }
+    for (const target of registration.railTargets(null)) {
+      out.push(target);
+    }
   }
-  const copy = ports.copy;
-  if (copy !== undefined && reference) {
-    acts.push({ key: "y", action: { id: "tasks.copy-reference", label: "copy reference", run: () => copy(spec) } });
-  }
-  return acts;
-}
-
-/** An agent's acts: y first - the attach command for its terminal,
- * the address exactly as the local core names it - so Enter and a
- * plain click copy it; then its first task's board acts, when it owns
- * one. */
-function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
-  const acts: MenuAct[] = [];
-  const copy = ports.copy;
-  const address = target.address;
-  if (copy !== undefined && address !== null) {
-    acts.push({
-      key: "y",
-      action: {
-        id: "tasks.agent.attach",
-        label: `copy hc attach ${address}`,
-        run: () => copy(`hc attach ${address}`),
-      },
-    });
-  }
-  if (target.project !== null && target.task !== null) {
-    acts.push(...boardActs(formatLocation({ machine: `tracker:${target.project}`, path: target.task }), ports, false));
-  }
-  return acts;
+  return out;
 }
 
 export function createFrameRail(deps: FrameRailDeps) {
-  const railObservers = new Set<(rail: Rail) => void>();
-  let words: WordsSnapshot = NO_WORDS;
-  let agentPages: {
-    name: string;
-    agents: AgentFacts[] | null;
-    problem: string | null;
-    repoPath: string | null;
-  }[] = [];
-  let railRunning = false;
-  let railTimer: ReturnType<typeof setTimeout> | null = null;
+  const railObservers = new Set<(projects: FrameRailProject[]) => void>();
+  let railTimer: ReturnType<typeof setInterval> | null = null;
 
   // projects unregistered this session: the shown one stays off the
   // rail though the window still shows it, until it is registered
@@ -129,66 +73,33 @@ export function createFrameRail(deps: FrameRailDeps) {
     return forgotten.has(current) ? null : current;
   }
 
-  function railNow(): Rail {
-    // every registered project is listed, read or not yet, the shown
-    // one among them
-    const names = new Set([...registeredNames, ...agentPages.map((entry) => entry.name)]);
+  function projectsNow(): FrameRailProject[] {
+    // the registry's names, in name order; the shown one marked
+    const names = [...registeredNames].sort((a, b) => a.localeCompare(b));
     const current = railCurrent();
-    if (current !== null) names.add(current);
-    const projects = [...names].map(
-      (name) =>
-        agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null, repoPath: null },
-    );
-    return railOf(projects, words, current);
+    if (current !== null && !names.includes(current)) names.push(current);
+    return names.map((name) => ({ name, current: name === current, part: projectPart(name) }));
   }
 
   function notifyRail(): void {
-    const rail = railNow();
-    for (const observer of [...railObservers]) observer(rail);
+    const projects = projectsNow();
+    for (const observer of [...railObservers]) observer(projects);
   }
 
-  async function readAgentPages(): Promise<void> {
-    // the registry reads every registered declaration through the
-    // module; a device with no asks has no registered projects at all
-    let projects: { machine: string; path: string; declaration: { name: string } }[] = [];
+  /** The registry's names and addresses, read through the module: a
+   * device with no asks has no registered projects at all. */
+  async function readRegisteredNames(): Promise<void> {
     try {
-      projects = await theProjects().projects();
+      const projects = await theProjects().projects();
+      registeredNames = projects.map((project) => project.declaration.name);
+      pathsByName = new Map(
+        projects.map((project) => [project.declaration.name, { machine: project.machine, path: project.path }]),
+      );
     } catch {
-      projects = [];
+      registeredNames = [];
+      pathsByName = new Map();
     }
-    registeredNames = projects.map((project) => project.declaration.name);
-    pathsByName = new Map(
-      projects.map((project) => [project.declaration.name, { machine: project.machine, path: project.path }]),
-    );
-    const current = railCurrent();
-    const names = [...registeredNames];
-    if (current !== null && !names.includes(current)) names.push(current);
-    agentPages = await Promise.all(
-      names.map(async (name) => {
-        try {
-          const source = sourceFor(`tracker:${name}`);
-          if (!(source instanceof TrackerSource)) {
-            return { name, agents: null, problem: "not a tracker", repoPath: null };
-          }
-          const agents = agentFactsOf(await source.agentsPage());
-          // the agents page read through the contract, so the root's
-          // identity is in hand; a tracker that cannot say its repo
-          // path still lists its agents, and places no stray
-          const repoPath = await source.identity().then(
-            (identity) => identity.repoPath,
-            () => null,
-          );
-          return { name, agents, problem: null, repoPath };
-        } catch (error) {
-          return {
-            name,
-            agents: null,
-            problem: error instanceof Error ? error.message : String(error),
-            repoPath: null,
-          };
-        }
-      }),
-    );
+    notifyRail();
   }
 
   /** Unregister a project: the path leaves the device's list, nothing
@@ -197,7 +108,6 @@ export function createFrameRail(deps: FrameRailDeps) {
     const registered = pathsByName.get(project);
     if (registered !== undefined) theProjects().forget(registered);
     forgotten.add(project);
-    agentPages = agentPages.filter((entry) => entry.name !== project);
     registeredNames = registeredNames.filter((name) => name !== project);
     notifyRail();
   }
@@ -211,134 +121,129 @@ export function createFrameRail(deps: FrameRailDeps) {
       if (!registeredNames.includes(declaration.name)) registeredNames = [...registeredNames, declaration.name];
       pathsByName.set(declaration.name, registered);
       notifyRail();
-      // its agents read now rather than at the next poll
-      if (railRunning) void readAgentPages().then(() => railRunning && notifyRail());
     },
   });
 
-  /** The acts on one rail entry, resolved when asked: a project's
-   * f/a/d, an agent's y and its first task's board acts. */
-  function railEntryActs(entry: { part: string; kind: string }): MenuAct[] {
-    const ports: TaskPorts = {
-      open: (spec) => deps.open(spec),
-      elsewhere: (spec, act) => deps.elsewhere(spec, act),
-      copy: deps.copy,
-    };
-    if (entry.kind === "project" || entry.kind === "agent") {
-      const target = railTargetsOf(railNow()).find((candidate) => candidate.part === entry.part);
-      if (target === undefined) return [];
-      if (target.kind === "project") {
-        const project = target.project;
-        if (project === null) return [];
-        const acts: MenuAct[] = [
-          {
-            key: "f",
-            action: {
-              id: "rail.project.show",
-              label: "show its tasks here",
-              run: () => {
-                const view = claimedView(project);
-                if (view !== null) deps.open(view);
-              },
-            },
-          },
-          {
-            key: "a",
-            action: {
-              id: "rail.project.add",
-              label: "register a project (machine:/path/to/repository)",
-              run: () => add.enter(),
-            },
-          },
-          {
-            key: "d",
-            action: {
-              id: "rail.project.unregister",
-              label: "unregister this project (register its path again to reach it)",
-              run: () => forget(project),
-            },
-          },
-        ];
-        return acts;
-      }
-      return agentActs(target, ports);
-    }
-    return [];
+  /** The rail's targets: the project headers the frame owns, then
+   * whatever the claims seam publishes beneath each, then the foot
+   * group (the seam's projectless targets). The frame draws them
+   * without knowing their kind. */
+  function targets(): TargetDefinition[] {
+    const projects = projectsNow();
+    const out: TargetDefinition[] = projects.map((project) => ({
+      id: project.part,
+      kind: "project",
+      label: project.name,
+      inside: null,
+      clickable: true,
+      acts: () => projectActs(project),
+      anchor: null,
+    }));
+    out.push(...targetsBeneathAndFoot(projects));
+    return out;
   }
 
-  async function agentsLoop(): Promise<void> {
-    if (!railRunning) return;
-    await readAgentPages();
-    if (!railRunning) return;
-    notifyRail();
-    railTimer = setTimeout(() => void agentsLoop(), RAIL_POLL_MS);
-  }
-
-  // The shell's word feed: the shell's bounded hold wakes on a change
-  // or answers quiet; outside the native shell there is no feed
-  async function wordsLoop(): Promise<void> {
-    let invoke;
-    try {
-      invoke = tauriInvoke();
-    } catch {
-      words = { ...NO_WORDS, problem: "Herdr words reach only the native app" };
-      notifyRail();
-      return;
+  /** A project's own header acts: its claimed view first (the
+   * instrument's claim names the location), then register and
+   * unregister. */
+  function projectActs(project: FrameRailProject): import("../contracts/buffer.ts").TargetAct[] {
+    const acts: import("../contracts/buffer.ts").TargetAct[] = [];
+    const view = projectViewFor(project.name);
+    if (view !== null) {
+      acts.push({
+        key: "f",
+        action: { id: "rail.project.show", label: `show ${view} here`, run: () => deps.open(view) },
+      });
     }
-    while (railRunning) {
-      try {
-        const next = wordsOf(await invoke("words_wait", { since: words.generation, timeout: 25 }));
-        if (!railRunning) return;
-        if (next.generation !== words.generation || next.connected !== words.connected) {
-          words = next;
-          notifyRail();
-        }
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, RAIL_POLL_MS));
-      }
-    }
+    acts.push({
+      key: "a",
+      action: {
+        id: "rail.project.add",
+        label: "register a project (machine:/path/to/repository)",
+        run: () => add.enter(),
+      },
+    });
+    acts.push({
+      key: "d",
+      action: {
+        id: "rail.project.unregister",
+        label: "unregister this project (register its path again to reach it)",
+        run: () => forget(project.name),
+      },
+    });
+    return acts;
   }
 
   return {
     /** The rail's live view, notified on every change. */
-    subscribeRail(observer: (rail: Rail) => void): () => void {
+    subscribeRail(observer: (projects: FrameRailProject[]) => void): () => void {
       railObservers.add(observer);
-      observer(railNow());
+      observer(projectsNow());
       return () => {
         railObservers.delete(observer);
       };
     },
-    railNow,
+    projectsNow,
     /** Re-notify: the shown project's mark moves with the window's
      * open, not with the rail's own polls. */
     refresh(): void {
       notifyRail();
     },
-    /** The rail's entries as the frame's targets: the acts resolve
-     * when asked, over the rail's live view. */
-    targets(): TargetDefinition[] {
-      return railTargetsOf(railNow()).map((entry) => ({
-        id: entry.part,
-        kind: entry.kind,
-        label: entry.text,
-        inside: entry.within ?? null,
-        clickable: true,
-        acts: () => railEntryActs(entry),
-        anchor: null,
-      }));
-    },
     forget,
     /** The add field: the frame's registration act. */
     add,
+    /** Whether any project is registered (the empty window's third
+     * line). */
+    registered(): boolean {
+      return registeredNames.length > 0;
+    },
+    /** The rail's targets: the project headers the frame owns, then
+     * whatever the claims seam publishes beneath each, then the foot
+     * group. */
+    targets(): TargetDefinition[] {
+      return targets();
+    },
+    /** The targets beneath one project's rail entry (its header and
+     * the seam's publications), or the foot group's when the project
+     * is null. */
+    railTargets(project: string | null): TargetDefinition[] {
+      if (project === null) {
+        const foot: TargetDefinition[] = [];
+        for (const registration of registeredInstruments()) {
+          for (const target of registration.railTargets(null)) {
+            foot.push(target);
+          }
+        }
+        return foot;
+      }
+      const entry = projectsNow().find((candidate) => candidate.name === project);
+      if (entry === undefined) return [];
+      return [
+        {
+          id: entry.part,
+          kind: "project",
+          label: entry.name,
+          inside: null,
+          clickable: true,
+          acts: () => projectActs(entry),
+          anchor: null,
+        },
+        ...registeredInstruments().flatMap((registration) =>
+          registration.railTargets(project),
+        ),
+      ];
+    },
     start(): void {
-      if (railRunning) return;
-      railRunning = true;
-      void agentsLoop();
-      void wordsLoop();
+      if (railTimer !== null) return;
+      void readRegisteredNames();
+      // the registry's names re-read at a calm cadence: a store
+      // changed outside this window (another window's registration)
+      // still lands here; the reads ride the registry's session
+      // cache, no wire
+      railTimer = setInterval(() => void readRegisteredNames(), 3000);
     },
     stop(): void {
-      railRunning = false;
-      if (railTimer !== null) clearTimeout(railTimer);
+      if (railTimer !== null) clearInterval(railTimer);
       railTimer = null;
       add.close();
     },
@@ -347,9 +252,3 @@ export function createFrameRail(deps: FrameRailDeps) {
 
 export type FrameRail = ReturnType<typeof createFrameRail>;
 export type { AddView };
-
-/** The location form the instruments claim for a project's name
- * (the claims seam), as the open funnel takes it. */
-function claimedView(project: string): string | null {
-  return projectViewFor(project);
-}

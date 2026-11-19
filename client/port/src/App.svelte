@@ -16,7 +16,8 @@ from the registry's reviewed erasure boundary. -->
   import type { WhichKeyView } from "./lib/input/key-matcher.ts";
   import Strip from "./components/Strip.svelte";
   import FrameRail from "./components/FrameRail.svelte";
-  import type { Rail } from "./lib/tasks/rail.ts";
+  import type { FrameRailProject } from "./App.ts";
+  import type { TargetDefinition } from "./lib/contracts/buffer.ts";
 
   let port: PortWindow | null = null;
   let scroller: HTMLElement | null = $state(null);
@@ -41,7 +42,9 @@ from the registry's reviewed erasure boundary. -->
     add: { open: false, value: "", problem: null },
     pane: null,
   });
-  let rail = $state<Rail>({ projects: [], unregistered: [], herdr: null });
+  let railProjects = $state<FrameRailProject[]>([]);
+  let railBeneath = $state<readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[]>([]);
+  let railFoot = $state<readonly TargetDefinition[]>([]);
   let railSelectLabels = $state<readonly { part: string; label: string; nested?: boolean }[]>([]);
   let railSelectTyped = $state("");
   let railMenu = $state<import("./lib/menu/session.ts").MenuView | null>(null);
@@ -84,8 +87,13 @@ from the registry's reviewed erasure boundary. -->
       railState = view;
     });
     const offRail = windowPort.subscribeRail((next) => {
-      rail = next;
-      railShown = next.projects.find((project) => project.current)?.name ?? null;
+      railProjects = next;
+      railBeneath = next.map((project) => ({
+        project,
+        targets: windowPort.railTargets(project.name),
+      }));
+      railFoot = windowPort.railTargets(null);
+      railShown = next.find((project) => project.current)?.name ?? null;
     });
     void windowPort.boot();
     return () => {
@@ -237,7 +245,9 @@ from the registry's reviewed erasure boundary. -->
     <div class="port-frame-layout" class:port-frame-layout-with-rail={railState.visible}>
       {#if railState.visible}
         <FrameRail
-          {rail}
+          projects={railProjects}
+          beneath={railBeneath}
+          foot={railFoot}
           view={railState}
           shown={railShown}
           labels={railSelectLabels}

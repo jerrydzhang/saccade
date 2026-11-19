@@ -60,9 +60,9 @@ import {
   type ElsewhereAct,
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
-import { TrackerSource } from "./lib/tracker.ts";
-import { sourceFor } from "./lib/sources.ts";
-import { tasksPageOf } from "./lib/tasks/page.ts";
+
+import { pickerTasks } from "./lib/instruments/claims.ts";
+
 import type { PickContext } from "./lib/picker/model.ts";
 import {
   zoomIn as inspectionZoomIn,
@@ -143,8 +143,12 @@ export interface PortWindow {
    * visibility, the add field and the pane. */
   attachRailPane(element: HTMLElement | null): void;
   subscribeRailState(observer: (view: FrameRailView) => void): () => void;
-  /** The frame rail's live view (projects, agents, the shown mark). */
-  subscribeRail(observer: (rail: import("./lib/tasks/rail.ts").Rail) => void): () => void;
+  /** The frame rail's live view: the registered projects and the
+   * shown mark. */
+  subscribeRail(observer: (projects: import("./lib/frame/rail.ts").FrameRailProject[]) => void): () => void;
+  /** The targets published beneath a project's rail entry (the
+   * claims seam), or the foot group's when the project is null. */
+  railTargets(project: string | null): import("./lib/contracts/buffer.ts").TargetDefinition[];
   typeAdd(value: string): void;
   submitAdd(): void;
   closeAdd(): void;
@@ -226,17 +230,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const frameRail = createFrameRail({
     capture: frameCapture,
     open: (spec) => openSpec(spec),
-    elsewhere: (spec, act) => {
-      openElsewhere(spec, act).catch((error: unknown) => {
-        diagnostics.report(
-          refusalContext,
-          knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
-        );
-        note = `the open act failed: ${String(error).slice(0, 120)}`;
-        notifyStrip();
-      });
-    },
-    copy: (text) => copyPayload(text),
     shownProject,
   });
 
@@ -266,7 +259,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   function railStateView(): FrameRailView {
     return {
       visible: railVisible && !railCramped,
-      registered: frameRail.railNow().projects.length > 0,
+      registered: frameRail.registered(),
       add: frameRail.add.view(),
       pane: railPane,
     };
@@ -329,7 +322,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyStrip();
       });
     },
-    railWords: (observer: (rail: never) => void) => frameRail.subscribeRail(observer as never),
     figureEnlarge: (part: string) => openInspection(part),
     readingLayout: (change: Parameters<typeof readingLayout.change>[0]) => readingLayout.change(change),
     onHistoryToggle: (toggle: () => void) => {
@@ -464,15 +456,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const tasks: { id: string; title: string }[] = [];
     if (trackerMachine !== null) {
       try {
-        const source = sourceFor(trackerMachine);
-        if (source instanceof TrackerSource) {
-          const model = tasksPageOf(await source.instrumentPage("tasks"));
-          for (const row of model.groups) {
-            for (const entry of row.rows) {
-              tasks.push({ id: entry.task, title: entry.title });
-            }
-          }
-        }
+        // the claims face: the task list instrument offers the picker
+        // its candidates; the frame never reads a tracker's lib
+        tasks.push(...(await pickerTasks(trackerMachine)));
       } catch {
         // a dead tracker read: the picker still lists recents
       }
@@ -839,11 +825,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyRailState();
       },
       registerProject: () => {
+        (window as unknown as { __probe?: string[] }).__probe = [
+          ...(window as unknown as { __probe?: string[] }).__probe ?? [],
+          `register: visible was ${railVisible}`,
+        ];
         if (!railVisible) {
           railVisible = true;
           notifyRailState();
         }
         frameRail.add.enter();
+        (window as unknown as { __probe?: string[] }).__probe = [
+          ...(window as unknown as { __probe?: string[] }).__probe ?? [],
+          `after enter: add open ${frameRail.add.view().open}, visible ${railVisible}`,
+        ];
       },
       showHelp: () => {
         helpOpen = true;
@@ -1578,6 +1572,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     subscribeRail: (observer) => frameRail.subscribeRail(observer),
+    railTargets: (project) => frameRail.railTargets(project),
     typeAdd: (value) => frameRail.add.type(value),
     submitAdd: () => void frameRail.add.submit(),
     closeAdd: () => frameRail.add.close(),

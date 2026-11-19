@@ -25,9 +25,9 @@ const MACHINE = "tracker:tasks-test";
 const TASKS = { machine: MACHINE, path: "tasks" };
 // the words feed's observers, for the rows' agent marks (the frame
 // rail's feed, injected)
-const wordsObservers: ((rail: import("../src/lib/tasks/rail.ts").Rail) => void)[] = [];
-function frameRailWords(rail: import("../src/lib/tasks/rail.ts").Rail): void {
-  for (const observer of [...wordsObservers]) observer(rail);
+const wordsObservers: ((words: import("../src/lib/tasks/rail.ts").WordsSnapshot) => void)[] = [];
+function frameRailWords(words: import("../src/lib/tasks/rail.ts").WordsSnapshot): void {
+  for (const observer of [...wordsObservers]) observer(words);
 }
 
 function tasksPageFixture(rows: { task: string; title: string }[]): ViewPage {

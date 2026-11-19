@@ -1,24 +1,28 @@
-<!-- The frame's rail, painted: the projects this device has registered
-and, under each, its running agents grouped by Herdr's word; the add
-field rides at the rail's foot. Any window can show the rail; the
-frame (App.svelte) hosts this pane beside the content and feeds it the
-frame rail's live view. The pane's entries are ordinary targets of the
-shown buffer: select mode labels them with the content's (the labels
-ride the same session, measured in the pane), a plain click or Enter
-runs the primary act through the shown lease, a right-click opens the
-act list. With no shown buffer (the empty window), a project's plain
-click opens its task list directly. The wheel scrolls the rail and
-keeps the shown project in view; the reading keys never scroll it. -->
+<!-- The frame's rail, painted: the projects this device has
+registered, and beneath each - drawn generically, no kind knowledge -
+whatever targets the instruments publish there (the labels carry
+their own words). The add field rides at the rail's foot; the foot
+group holds the published targets no project claims. Any window can
+show the rail; the frame (App.svelte) hosts this pane beside the
+content and feeds it the frame rail's live view. The pane's entries
+are ordinary targets of the shown buffer: select mode labels them
+with the content's (the labels ride the same session, measured in the
+pane), a plain click or Enter runs the primary act through the shown
+lease, a right-click opens the act list. With no shown buffer (the
+empty window), a project's plain click opens its claimed view
+directly. The wheel scrolls the rail and keeps the shown project in
+view; the reading keys never scroll it. -->
 <script lang="ts">
-  import { agentPart, projectPart, terminalPart, type Rail, type RailAgent } from "../lib/tasks/rail.ts";
-  import type { AddView } from "../lib/tasks/add.ts";
+  import type { AddView } from "../lib/frame/add.ts";
   import type { MenuView } from "../lib/menu/session.ts";
   import LabelOverlay from "./LabelOverlay.svelte";
   import ActMenu from "./ActMenu.svelte";
   import { partMeasureIn } from "../lib/select/measure.ts";
 
   let {
-    rail,
+    projects,
+    beneath,
+    foot,
     view,
     shown,
     labels,
@@ -32,8 +36,15 @@ keeps the shown project in view; the reading keys never scroll it. -->
     entryMenu,
     attachPane,
   }: {
-    rail: Rail;
-    view: { visible: boolean; add: AddView; pane: HTMLElement | null };
+    /** The registered projects: the frame rail's headers. */
+    projects: FrameRailProject[];
+    /** The published targets beneath each project (the claims seam's
+     * answer). */
+    beneath: readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[];
+    /** The published targets no project claims: the frame's foot
+     * group. */
+    foot: readonly TargetDefinition[];
+    view: { visible: boolean; registered: boolean; add: AddView; pane: HTMLElement | null };
     /** The project this window shows: the rail's mark. */
     shown: string | null;
     /** The select session's labels over the presented set (the
@@ -51,8 +62,8 @@ keeps the shown project in view; the reading keys never scroll it. -->
     submitAdd(): void;
     closeAdd(): void;
     /** A plain click or Enter on an entry: through the shown lease
-     * when one is present, else a project's entry opens its task
-     * list. */
+     * when one is present, else a project's entry opens its claimed
+     * view. */
     entryActivate(part: string, event: MouseEvent): void;
     /** A right-click on an entry: the act list at the pointer. */
     entryMenu(part: string, event: MouseEvent): void;
@@ -73,9 +84,6 @@ keeps the shown project in view; the reading keys never scroll it. -->
 
   const chipLabels = $derived(labels.filter((entry) => entry.part.startsWith("rail/")));
   const measure = $derived(partMeasureIn(pane));
-
-  const titleOf = (agent: RailAgent): string =>
-    [agent.msg, agent.progress].filter((part) => part !== null).join(" - ");
 
   // The wheel scrolls the rail's own list; the shown project stays in
   // view (the rail's clamping rule), whichever project's row the wheel
@@ -104,54 +112,34 @@ keeps the shown project in view; the reading keys never scroll it. -->
     bind:this={pane}
   >
     <div class="port-rail-list" bind:this={list} onwheel={() => keepShownInView()}>
-      {#each rail.projects as project (project.name)}
-        <section
-          class="port-rail-project"
-          data-port-shown={project.current ? "" : undefined}
-        >
+      {#each projects as project (project.part)}
+        <section class="port-rail-project" data-port-shown={project.current ? "" : undefined}>
           <button
             class="port-rail-name"
             data-port-control={`project-${project.name}`}
-            data-port-part={projectPart(project.name)}
+            data-port-part={project.part}
             data-port-kind="project"
             data-port-title={project.name}
-            data-port-current={project.current ? "" : undefined}
             aria-current={project.current ? "page" : undefined}
-            onclick={(event) => entryActivate(partOf(event) ?? `rail/project/${project.name}`, event)}
+            onclick={(event) => entryActivate(partOf(event) ?? project.part, event)}
             oncontextmenu={(event) => {
               event.preventDefault();
-              entryMenu(partOf(event) ?? `rail/project/${project.name}`, event);
+              entryMenu(partOf(event) ?? project.part, event);
             }}
           >{project.name}</button>
-          {#if project.problem !== null}
-            <div class="port-rail-note" title={project.problem}>unreachable</div>
-          {/if}
-          {#each project.groups as group (group.state)}
-            {#each group.agents as agent (agent.address)}
-              <button
-                class="port-rail-agent"
-                data-port-control={`agent-${project.name}-${agent.incarnation ?? agent.address}`}
-                data-port-part={agent.incarnation === null
-                  ? terminalPart(agent.address)
-                  : agentPart(project.name, agent.incarnation)}
-                data-port-kind="agent"
-                data-port-unregistered={agent.incarnation === null ? "" : undefined}
-                data-port-word={group.state}
-                title={titleOf(agent)}
-                onclick={(event) => entryActivate(partOf(event)!, event)}
-                oncontextmenu={(event) => {
-                  event.preventDefault();
-                  entryMenu(partOf(event)!, event);
-                }}
-              >
-                <span class="port-state-mark" data-port-word={agent.state} aria-hidden="true"></span>
-                <span class="port-rail-who">
-                  <span class="port-rail-incarnation">{agent.incarnation ?? agent.address}</span>
-                  {#if agent.name !== null}<span class="port-rail-agent-name">{agent.name}</span>{/if}
-                </span>
-                <span class="port-rail-tasks" title={agent.tasks.join(", ")}>{agent.tasks.join(", ")}</span>
-              </button>
-            {/each}
+          {#each beneath.find((group) => group.project.part === project.part)?.targets as target (target.id)}
+            <button
+              class="port-rail-entry"
+              data-port-control={`rail-entry-${target.id}`}
+              data-port-part={target.id}
+              data-port-kind={target.kind}
+              data-port-title={target.label}
+              onclick={(event) => entryActivate(partOf(event) ?? target.id, event)}
+              oncontextmenu={(event) => {
+                event.preventDefault();
+                entryMenu(partOf(event) ?? target.id, event);
+              }}
+            >{target.label}</button>
           {/each}
         </section>
       {/each}
@@ -174,35 +162,24 @@ keeps the shown project in view; the reading keys never scroll it. -->
           {/if}
         </div>
       {/if}
-      {#if rail.unregistered.length > 0}
+      {#if foot.length > 0}
         <section class="port-rail-project" data-port-control="unregistered">
           <div class="port-rail-name port-rail-group">unregistered</div>
-          {#each rail.unregistered as agent (agent.address)}
+          {#each foot as target (target.id)}
             <button
-              class="port-rail-agent"
-              data-port-control={`unregistered-${agent.address}`}
-              data-port-part={terminalPart(agent.address)}
-              data-port-kind="agent"
-              data-port-unregistered=""
-              data-port-word={agent.state}
-              title={[agent.msg, agent.progress].filter((part) => part !== null).join(" - ")}
-              onclick={(event) => entryActivate(partOf(event)!, event)}
+              class="port-rail-entry"
+              data-port-control={`unregistered-${target.id}`}
+              data-port-part={target.id}
+              data-port-kind={target.kind}
+              data-port-title={target.label}
+              onclick={(event) => entryActivate(target.id, event)}
               oncontextmenu={(event) => {
                 event.preventDefault();
-                entryMenu(partOf(event)!, event);
+                entryMenu(target.id, event);
               }}
-            >
-              <span class="port-state-mark" data-port-word={agent.state} aria-hidden="true"></span>
-              <span class="port-rail-who">
-                <span class="port-rail-incarnation">{agent.address}</span>
-                {#if agent.label !== null}<span class="port-rail-agent-name">{agent.label}</span>{/if}
-              </span>
-            </button>
+            >{target.label}</button>
           {/each}
         </section>
-      {/if}
-      {#if rail.herdr !== null}
-        <div class="port-rail-note">{rail.herdr}</div>
       {/if}
     </div>
     {#if chipLabels.length > 0}

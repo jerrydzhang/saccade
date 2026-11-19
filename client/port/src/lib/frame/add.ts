@@ -1,11 +1,10 @@
-// The rail's add field: registering a project is its own act,
-// separate from opening anything. Space a (in any window) shows the
-// rail if it is hidden and opens a small inline field in it; the
-// human types machine:/path/to/repository, Enter registers the
-// repository whose declaration file names the project (the registry
-// reads the file through the one core module) and the rail lists it -
-// nothing opens. Escape leaves the field. The session lives here;
-// the field renders in the frame rail.
+// The rail's add field, the frame's own: registering a project is
+// its own act, separate from opening anything. Space a (in any
+// window) shows the rail if it is hidden and opens a small inline
+// field in it; the human types machine:/path/to/repository, Enter
+// registers the repository whose declaration file names the project
+// (the registry reads the file through the one core module) and the
+// rail lists it - nothing opens. Escape leaves the field.
 //
 // The shape is Find's (lib/find/interaction.ts): a pure session plus
 // a text-entry context of declared field commands, captured through

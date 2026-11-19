@@ -155,6 +155,7 @@ import { theProjects, directAsks } from "../src/lib/asks.ts";
 import { parseRegisteredPath } from "../src/lib/projects.ts";
 import { sourceFor } from "../src/lib/sources.ts";
 import { TrackerSource } from "../src/lib/tracker.ts";
+import { createTasksRail } from "../src/instruments/tasksRail.ts";
 import { createFrameRail } from "../src/lib/frame/rail.ts";
 import "../src/lib/instruments/index.ts";
 
@@ -209,8 +210,6 @@ test("a project's acts: f shows its tasks here first; a opens the add field; d u
   const rail = createFrameRail({
     capture: () => ({ release: () => {} }),
     open: (spec) => opened.push(spec),
-    elsewhere: () => {},
-    copy: () => {},
     shownProject: () => null,
   });
   rail.add.enter();
@@ -226,7 +225,7 @@ test("a project's acts: f shows its tasks here first; a opens the add field; d u
   assert.equal(rail.add.view().open, true, "a opens the add field and opens nothing");
   rail.add.close();
   acts[2]!.action.run();
-  assert.deepEqual(rail.railNow().projects, [], "the unregistered project leaves the rail");
+  assert.deepEqual(rail.projectsNow().map((project) => project.name), [], "the unregistered project leaves the rail");
   // the store holds no path any more
   assert.deepEqual(JSON.parse(store.get("saccade.projects") ?? "[]"), []);
 });
@@ -276,23 +275,29 @@ test("an agent's acts are its first task's, composed against its own project", a
   vi.spyOn(source, "agentsPage").mockImplementation(async () => agentsPage());
   vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: null }));
   const elsewhere: [string, string][] = [];
-  const rail = createFrameRail({
-    capture: () => ({ release: () => {} }),
-    open: () => {},
-    elsewhere: (spec, act) => elsewhere.push([spec, act]),
-    copy: () => {},
-    shownProject: () => null,
+  const copied: string[] = [];
+  const rail = createTasksRail({
+    ports: () => ({
+      open: () => {},
+      elsewhere: (spec, act) => elsewhere.push([spec, act]),
+      copy: (text) => copied.push(text),
+    }),
   });
   rail.start();
   try {
     await vi.waitFor(() => {
-      assert.ok(rail.railNow().projects.some((project) => project.groups.length > 0), "the agents read and join their words");
+      assert.ok(rail.words().words.t10 !== undefined, "the words read");
     });
-    const agent = rail.targets().find((entry) => entry.kind === "agent");
+    // the agents publish beneath the project's rail entry (the
+    // instrument's own publication face)
+    const ports = { open: () => {}, elsewhere: (spec: string, act: "link" | "once" | "new") => elsewhere.push([spec, act]), copy: (text: string) => copied.push(text) };
+    const targets = rail.railTargets("saccade", ports);
+    const agent = targets.find((entry) => entry.kind === "agent");
     assert.ok(agent !== undefined, "the rail's agents publish as targets");
     const acts = agent.acts();
     assert.deepEqual(acts.map((act) => act.key), ["y", "o", "i", "w"], "y the attach first, then the task's acts");
     acts[0]!.action.run();
+    assert.deepEqual(copied, ["hc attach t10"]);
     acts[1]!.action.run();
     assert.deepEqual(elsewhere, [["saccade/t-4", "link"]]);
   } finally {

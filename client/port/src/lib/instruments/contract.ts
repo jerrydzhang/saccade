@@ -32,6 +32,16 @@ export type InstrumentDefinition<
    * project's name (the task list claims `name/tasks`), or null when
    * it offers none. */
   projectView(project: string): string | null;
+  /** The targets this instrument publishes beneath a project's rail
+   * entry (its `inside` names the project's rail id), or at the rail's
+   * foot when the project is null. The instrument's own data, read and
+   * polled by the instrument; the frame draws them without knowing
+   * their kind. */
+  railTargets(project: string | null): import("../contracts/buffer.ts").TargetDefinition[];
+  /** The picker's task candidates on a tracker machine: the tasks
+   * this instrument's tracker lists, or none (the board offers
+   * none). */
+  pickerTasks?(machine: string): Promise<readonly { id: string; title: string }[]>;
   Component: Component<InstrumentProps<T, UI>>;
   connect: (buffer: BufferAccess<T>, services: import("../instruments/registry.ts").WindowServices) => InstrumentAttachment<UI, A>;
 }>;

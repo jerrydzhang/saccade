@@ -59,9 +59,9 @@ export interface WindowServices {
   /** The copy observation: the payload recorded, the clipboard
    * attempted. */
   copy(text: string): void;
-  /** The frame rail's live view (the rows' agent marks read its
-   * words). */
-  railWords?(observer: (rail: unknown) => void): () => void;
+  /** The window carries the rest of its own doors beside the named
+   * ones (the board's enlarge, reading layout, history toggle); the
+   * instruments read their slices. */
   [name: string]: unknown;
 }
 
@@ -117,6 +117,14 @@ export interface RegisteredInstrument {
   /** The location form this instrument offers for a registered
    * project's name, or null. */
   projectView(project: string): string | null;
+  /** The targets this instrument publishes beneath a project's rail
+   * entry (its `inside` names the project's rail id), or at the rail's
+   * foot when the project is null. The instrument's own data, read
+   * and polled by the instrument; the frame draws them without
+   * knowing their kind. */
+  railTargets(project: string | null): import("../contracts/buffer.ts").TargetDefinition[];
+  /** The picker's task candidates on a tracker machine, or none. */
+  pickerTasks?(machine: string): Promise<readonly { id: string; title: string }[]>;
   construct(environment: WindowEnvironment): RunningInstrument;
 }
 
@@ -143,12 +151,13 @@ export function instrumentForAddress(
 
 export function registerInstrument<
   T extends object, UI extends object, A extends AnchorData,
->(definition: InstrumentDefinition<T, UI, A>): RegisteredInstrument {
+>(definition: InstrumentDefinition<T, UI, A> & { railTargets?: RegisteredInstrument["railTargets"] }): RegisteredInstrument {
   const registration: RegisteredInstrument = {
     kind: definition.kind,
     title: definition.title,
     claims: definition.claims,
     projectView: definition.projectView,
+    railTargets: definition.railTargets ?? (() => []),
     construct(environment) {
       const built: BuiltBuffer<T, UI> = environment.buffers.create<T, UI, A>({
         context: environment.context,

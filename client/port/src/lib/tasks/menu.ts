@@ -26,7 +26,7 @@ import type { Action, InputContext } from "../input/input-context.ts";
 import { formatLocation } from "../location.ts";
 import { createMenuSession, type MenuAct, type MenuSession, type MenuTarget } from "../menu/session.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
-import type { Rail } from "./rail.ts";
+import type { WordsSnapshot } from "./rail.ts";
 
 /** The window services the task-row acts ride: opening goes through
  * the window's ONE open funnel (trail + restore), the elsewhere acts
@@ -39,9 +39,9 @@ export type TaskPorts = Readonly<{
   /** Copy text to the clipboard; injected so tests observe it and
    * the menu never touches the DOM's clipboard itself. */
   copy?(text: string): void;
-  /** The frame rail's live view, for the rows' agent marks: the rail
-   * is the frame's; the rows read its words. */
-  railWords?(observer: (rail: Rail) => void): () => void;
+  /** The rail publication's words feed (the rows' agent marks read
+   * the words); the publication is the instrument's own. */
+  railWords?(observer: (words: WordsSnapshot) => void): () => void;
 }>;
 
 import { createActMenu } from "../menu/create.ts";
