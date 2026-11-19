@@ -17,6 +17,7 @@ import { instrumentPath, parseTaskSpec, viewRoute } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
 import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
 import { theAsks, theProjects } from "./asks.ts";
+import type { Project } from "./projects.ts";
 
 // The tracker's identity facts, from the root page.
 export type TrackerIdentity = {
@@ -37,6 +38,9 @@ export type TaskFact = { spec: string; name: string | null };
 
 export class TrackerSource implements BoardSource {
   private contract: Promise<Contract> | null = null;
+  // the registered path the cached contract was checked against: a
+  // re-registration at another path re-checks, never replays
+  private contractFor: string | null = null;
   // pinned spec -> the board page (an immutable revision: the page and
   // its facts cache; the file routes ride the same revision)
   private pages = new Map<string, Promise<ViewPage>>();
@@ -53,12 +57,11 @@ export class TrackerSource implements BoardSource {
     return `tracker:${this.tracker}`;
   }
 
-  /** The route fetcher: the declared loopback address of the
-   * registered project naming itself as this source's tracker, asked
-   * through the one module on the project's machine. Resolved per
-   * call - the registry's answer is read fresh, so a register or a
-   * forget takes hold without a stale wire. */
-  private async wire(): Promise<Fetcher> {
+  /** The registered project naming itself as this source's tracker,
+   * read fresh from the registry (its declaration cache makes that
+   * cheap): the refusal here is the add field's to explain, not the
+   * rail's. */
+  private async registeredProject(): Promise<Project> {
     const project = await theProjects().projectByName(this.tracker);
     if (project === null) {
       throw new SourceUnavailableError(
@@ -66,6 +69,16 @@ export class TrackerSource implements BoardSource {
         `no registered project names itself '${this.tracker}'; add it on the plane (a, then machine:/path/to/repository)`,
       );
     }
+    return project;
+  }
+
+  /** The route fetcher: the declared loopback address of the
+   * registered project naming itself as this source's tracker, asked
+   * through the one module on the project's machine. Resolved per
+   * call - the registry's answer is read fresh, so a register or a
+   * forget takes hold without a stale wire. */
+  private async wire(): Promise<Fetcher> {
+    const project = await this.registeredProject();
     const port = project.declaration.port;
     if (port === null) {
       throw new SourceUnavailableError(
@@ -83,13 +96,24 @@ export class TrackerSource implements BoardSource {
    * versions this viewer decodes, and it must serve a view major this
    * viewer reads. */
   private async checkContract(): Promise<Contract> {
-    if (this.contract !== null) return this.contract;
+    const project = await this.registeredProject();
+    if (this.contract !== null && this.contractFor === project.path) return this.contract;
     const load = (async () => {
       const root = await fetchPage(await this.wire(), viewRoute(""));
       if (root.tracker !== null && root.tracker !== undefined && root.tracker !== this.tracker) {
         throw new SourceUnavailableError(
           "machine-unknown",
           `the server serves tracker '${root.tracker}', not '${this.tracker}'; name the tracker by its repository directory`,
+        );
+      }
+      // the port lives in two places: the declaration the app read and
+      // the address the server was started at. The server says which
+      // repository it serves; when it is not the registered one, the
+      // app says so and names both
+      if (root.repoPath !== undefined && root.repoPath !== null && root.repoPath !== project.path) {
+        throw new SourceUnavailableError(
+          "machine-unknown",
+          `'${this.tracker}' is registered at ${project.path}, but the tracker on the port its declaration names serves ${root.repoPath}; the two places name different repositories`,
         );
       }
       const range = root.boardGrammar;
@@ -130,10 +154,14 @@ export class TrackerSource implements BoardSource {
       };
     })();
     this.contract = load;
+    this.contractFor = project.path;
     void load.catch(() => {
       // a refused contract is not a fact about the tracker: drop it,
       // so the next open tries the wire again
-      if (this.contract === load) this.contract = null;
+      if (this.contract === load) {
+        this.contract = null;
+        this.contractFor = null;
+      }
     });
     return load;
   }
