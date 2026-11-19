@@ -9,7 +9,7 @@ import { test } from "vitest";
 import { createSelectSession } from "../src/lib/select/session.ts";
 import type { SelectableTarget } from "../src/lib/select/session.ts";
 import { assignLabels } from "../src/lib/select/label-select.ts";
-import { boardTargetsOf } from "../src/lib/board/targets.ts";
+import { boardTargetsOf, targetFactsAt } from "../src/lib/board/targets.ts";
 import type { Board } from "../src/lib/board/model.ts";
 import type { InputContext, KeyInput } from "../src/lib/contracts/input.ts";
 import { commandContext } from "../src/lib/contracts/input.ts";
@@ -53,10 +53,10 @@ test("targets come from the model, nested included, identity is the part path", 
     ],
   } as unknown as Board;
   assert.deepEqual(
-    boardTargetsOf(board).map((t) => [t.part, t.kind, t.within]),
+    boardTargetsOf(board.content).map((t) => [t.id, t.kind, t.inside]),
     [
-      ["/content/0", "text", undefined],
-      ["/content/1", "group", undefined],
+      ["/content/0", "text", null],
+      ["/content/1", "group", null],
       ["/content/1/content/0", "text", "/content/1"],
       ["/content/1/content/1", "figure", "/content/1"],
     ],
@@ -233,7 +233,7 @@ test("m-545: every mermaid fence in a block is a diagram target of its own, in d
     ],
   } as unknown as Board;
   assert.deepEqual(
-    boardTargetsOf(board).map((t) => [t.part, t.kind]),
+    boardTargetsOf(board.content).map((t) => [t.id, t.kind]),
     [
       ["/content/0", "text"],
       ["/content/0/diagram/0", "diagram"],
@@ -254,7 +254,7 @@ test("m-547: refs in prose are targets of their own, in document order; code and
     content: [{ kind: "text", markdown: "See t-3@r14 and i-2.", pos: { start: { line: 1 }, end: { line: 1 } } }],
   } as unknown as Board;
   assert.deepEqual(
-    boardTargetsOf(board).map((t) => [t.part, t.kind, t.text]),
+    boardTargetsOf(board.content).map((t) => [t.id, t.kind, t.label]),
     [
       ["/content/0", "text", "See t-3@r14 and i-2."],
       ["/content/0/ref/0", "ref", "t-3@r14"],
@@ -275,14 +275,20 @@ test("t-62: every math expression in a block is a math target of its own, in doc
     ],
   } as unknown as Board;
   assert.deepEqual(
-    boardTargetsOf(board).map((t) => [t.part, t.kind, t.tex, t.within]),
+    boardTargetsOf(board.content).map((t) => [t.id, t.kind]),
     [
-      ["/content/0", "text", undefined, undefined],
-      // an expression sits inside its block (t-63: its label is nested)
-      ["/content/0/math/0", "math", "(\\mathbb{Z}_2)^p", "/content/0"],
-      ["/content/0/math/1", "math", "\\mathcal{F}_S", "/content/0"],
-      ["/content/0/math/2", "math", "E = mc^2", "/content/0"],
-      ["/content/1", "text", undefined, undefined],
+      ["/content/0", "text"],
+      // an expression sits inside its block: its TeX rides the facts,
+      // resolved when the copy act asks (targetFactsAt)
+      ["/content/0/math/0", "math"],
+      ["/content/0/math/1", "math"],
+      ["/content/0/math/2", "math"],
+      ["/content/1", "text"],
     ],
   );
+  const texOf = (part: string): string | null => targetFactsAt(board.content, part)?.tex ?? null;
+  assert.equal(texOf("/content/0/math/0"), "(\\mathbb{Z}_2)^p");
+  assert.equal(texOf("/content/0/math/1"), "\\mathcal{F}_S");
+  assert.equal(texOf("/content/0/math/2"), "E = mc^2");
+  assert.equal(texOf("/content/1"), null);
 });

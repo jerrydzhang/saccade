@@ -103,8 +103,11 @@ Presentation only - the sessions live behind the presentations. -->
     armedPart = partOf(event);
   }
 
+  // The release's own button is not trusted - this stack's WebDriver
+  // reports a middle release (and the click it synthesizes after it)
+  // as button 0 (recorded live in the native lane) - so the press
+  // decides and the release over the armed element acts.
   function onMouseUp(event: MouseEvent): void {
-    if (event.button !== 1) return;
     const overArmed = armedPart !== null && armedPart === partOf(event);
     armedPart = null;
     if (!guards.middleRelease() || !overArmed) return;

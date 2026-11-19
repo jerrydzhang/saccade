@@ -151,8 +151,29 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const instruments: Record<string, RunningInstrument> = {};
   let activeSurface: string = "board";
 
+  let runBoardHistoryToggle: () => void = () => {};
   const registrations: Record<string, ReturnType<typeof registerInstrument>> = {
-    board: registerInstrument(boardInstrument()),
+    board: registerInstrument(
+      boardInstrument({
+        open: (spec, part) => openSpec(spec, part),
+        copy: (payload) => copyPayload(payload),
+        elsewhere: (spec, act) => {
+          openElsewhere(spec, act).catch((error: unknown) => {
+            diagnostics.report(
+              refusalContext,
+              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+            );
+            note = `the open act failed: ${String(error).slice(0, 120)}`;
+            notifyStrip();
+          });
+        },
+        figureEnlarge: (part) => openInspection(part),
+        readingLayout: (change) => readingLayout.change(change),
+        onHistoryToggle: (toggle) => {
+          runBoardHistoryToggle = toggle;
+        },
+      }),
+    ),
     tasks: registerInstrument(
       tasksInstrument({
         open: (spec, part) => openSpec(spec, part),
@@ -644,37 +665,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
     notifyStrip();
   }
 
-  /** The controller ports the BOARD still carries by hand (its own
-   * task wires them through its definition): the citation acts
-   * ride the window's one open funnel, the copy observation and the
-   * elsewhere surface. The task list's services ride its definition
-   * now, so no cast here touches the controller's own type. */
-  function injectPorts(): void {
-    const board = instruments.board;
-    if (board !== undefined) {
-      (board.presentation as BoardUI).setReferencePorts({
-        open: (spec: string, part: string | null) => openSpec(spec, part),
-        figureEnlarge: (part: string) => {
-          openInspection(part);
-        },
-        copy: (payload: string) => copyPayload(payload),
-        elsewhere: (spec: string, act: ElsewhereAct) => {
-          openElsewhere(spec, act).catch((error: unknown) => {
-            diagnostics.report(
-              refusalContext,
-              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
-            );
-            note = `the open act failed: ${String(error).slice(0, 120)}`;
-            notifyStrip();
-          });
-        },
-      });
-    }
-    if (board !== undefined) {
-      (board.presentation as BoardUI).setReadingLayoutPort((change) => readingLayout.change(change));
-    }
-  }
-
   // Window commands own the picker. Reading interactions and their
   // captured field commands belong to the active instrument.
   const windowHost: HostMatcher = createHostMatcher(
@@ -690,9 +680,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         notifyWhichKey();
       },
       toggleHistory: () => {
-        if (activeSurface === "board" && instruments.board !== undefined) {
-          (instruments.board.presentation as BoardUI).toggleHistory();
-        }
+        if (activeSurface === "board") runBoardHistoryToggle();
       },
       linkByLabels: () => {
         void beginLinkAsk();
@@ -974,33 +962,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
     notifyStrip();
   }
 
-  // -- controller ports: the citation acts and the task-row acts ride
-  // the window's one open funnel, the copy observation and the
-  // elsewhere surface (scenario 9/13/17). No controller offers an act
-  // before these are injected; the follow composes its spec itself
-  // (formatLocation, never a colon join) and the open lands anchored
-  // exactly as a typed location would.
   let lastCopy: { payload: string; at: number } | null = null;
-  injectPorts();
 
   // -- the key routing seam: inspection (modal), then the window
   // context, then the active buffer ---
-  // the live select views (the trace's labels and typed buffer while
-  // a select session holds the keys). The board's session is its own
-  // (its task wires it); the frame's instruments (the tasks since
-  // the frame's instruments) hold theirs behind the lease the rendered props carry.
-  const selectViews: Record<string, import("./lib/select/session.ts").SelectSessionView | null> = {};
-  function watchSelect(surface: string): void {
-    const presentation = instruments[surface]?.presentation as
-      | { subscribeSelect?: (observer: (view: import("./lib/select/session.ts").SelectSessionView | null) => void) => void }
-      | undefined;
-    presentation?.subscribeSelect?.((view) => {
-      selectViews[surface] = view;
-    });
-  }
-  for (const claim of instrumentClaims) watchSelect(claim.instrument);
+  // the live select view (the trace's labels and typed buffer while a
+  // select session holds the keys): both instruments hold their
+  // session behind the lease the rendered props carry, so the trace
+  // reads the contract's face - one way, no instrument types
   /** The frame's select view for the shown surface, read off the
-   * contract's own face (never an instrument's type). */
+   * contract's own face. */
   function frameSelectView(): import("./lib/select/session.ts").SelectSessionView | null {
     const state = displayedFrame();
     if (state.kind !== "alive" || state.content.kind !== "available") return null;
@@ -1008,7 +979,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return targets?.selectView() ?? null;
   }
   function selectFacts(): Record<string, string> {
-    const view = frameSelectView() ?? selectViews[activeSurface] ?? null;
+    const view = frameSelectView();
     if (view === null || view === undefined) return {};
     return {
       "select.labels": view.labels.slice(0, 40).map((entry) => `${entry.label}=${entry.part}`).join(",") +

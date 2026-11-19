@@ -173,7 +173,7 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
       };
     },
 
-    readingContext(extra: readonly CommandBinding[] = []): InputContext {
+    readingContext(extra: readonly CommandBinding[] = [], owner?: string): InputContext {
       return frameReadingContext(
         {
           scrollDown: () => ports.viewport.scrollLines(1),
@@ -184,6 +184,7 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
           enterSelect: () => select.enter(),
         },
         extra,
+        owner,
       );
     },
 

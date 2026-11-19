@@ -25,9 +25,9 @@ test("each block's markdown is parsed once across targets and find", async () =>
   const { findUnitsOf } = await import("../src/lib/find/units.ts");
   const shown = board();
   const before = markdownParseCount();
-  boardTargetsOf(shown);
+  boardTargetsOf(shown.content);
   findUnitsOf(shown);
-  boardTargetsOf(shown);
+  boardTargetsOf(shown.content);
   // two blocks, two parses - however many readers
   assert.ok(markdownParseCount() - before <= 2, `parsed ${markdownParseCount() - before} times`);
 });

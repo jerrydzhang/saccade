@@ -31,7 +31,6 @@ export function frame(shown: Board, history: HistoryView | null = null): BoardDa
     board: shown,
     errors: [],
     renderOutcomes: [],
-    targets: [],
     folded: [],
     history,
   };

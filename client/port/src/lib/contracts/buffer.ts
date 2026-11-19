@@ -172,7 +172,7 @@ export interface TargetPresentations {
   menuView(): MenuView | null;
   menuSession(): MenuSession;
   subscribe(observer: () => void): Unsubscribe;
-  readingContext(extra?: readonly CommandBinding[]): InputContext;
+  readingContext(extra?: readonly CommandBinding[], owner?: string): InputContext;
   readingAnchor(): ReadingAnchor;
   /** Where a published anchor sits: found with its bounds, missing
    * when no published target carries it, pending when the target is

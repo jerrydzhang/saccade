@@ -21,15 +21,11 @@ import type {
   RefreshOutcome,
   Viewport,
 } from "../lib/contracts/buffer.ts";
-import type { InputContext } from "../lib/contracts/input.ts";
-import { boardReadingContext } from "../lib/input/contexts.ts";
-import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
-import { createBoardMenu } from "../lib/menu/acts.ts";
-import type { MenuView } from "../lib/menu/session.ts";
-export type { MenuView };
-import { boardTargetsOf, partAncestors, type BoardTarget } from "../lib/board/targets.ts";
+import { ctrl, key, sequence, type InputContext } from "../lib/contracts/input.ts";
+import { boardTargetsOf, partAncestors, targetFactsAt } from "../lib/board/targets.ts";
 export { boardTargetsOf } from "../lib/board/targets.ts";
-export type { BoardTarget, BoardTargetKind } from "../lib/board/targets.ts";
+import { actsFor, type BoardActDeps, type ReferencePorts } from "../lib/menu/acts.ts";
+import type { TargetDefinition, TargetAct } from "../lib/contracts/buffer.ts";
 import type {
   Address,
   BoardAnchor,
@@ -85,11 +81,6 @@ export type BoardData = Readonly<{
   board: Board | null;
   errors: readonly StructuredIssue[];
   renderOutcomes: readonly RenderOutcome[];
-  /** The logical targets of the shown frame, FROM THE MODEL (content
-   * parts, never DOM-derived): identity is the canonical part path.
-   * Labels exist only for visible presentations (the select
-   * session); target existence never depends on geometry. */
-  targets: readonly BoardTarget[];
   /** Folded group part paths: the header stays rendered, the content
    * does not. Model existence is untouched (scenario 12: folded-in
    * children keep existing, lose presentation). */
@@ -124,13 +115,7 @@ export interface BoardUI extends HydrationHost {
   findView(): FindView;
   subscribeFind(observer: (view: FindView) => void): () => void;
   typeFind(query: string): void;
-  /** The select session's live label view; null when inactive. */
-  subscribeSelect(observer: (view: SelectSessionView | null) => void): () => void;
-  /** The last label-selected target (identity = part path), if any. */
-  getSelection(): BoardTarget | null;
-  /** The menu's live view; null when closed. */
-  subscribeMenu(observer: (view: MenuView | null) => void): () => void;
-  /** space h: enter or leave history mode (t-49). */
+  /** space h: enter or leave history mode. */
   toggleHistory(): void;
   /** The follow state as information (the S15 diagnosis): the
    * followed address and whether the poll is armed. */
@@ -143,8 +128,6 @@ export interface BoardUI extends HydrationHost {
     address: string | null;
     requests: readonly string[];
   };
-  /** The menu session (invocation paths for the component). */
-  menuSession(): import("../lib/menu/session.ts").MenuSession;
   /** Fold or unfold a group part path (republishes the frame). */
   toggleFold(part: string): void;
   /** Whether a group part path is folded. */
@@ -157,40 +140,6 @@ export interface BoardUI extends HydrationHost {
   /** Why history mode would not open, shown in its card's place until
    * the next open or toggle; null when there is nothing to say. */
   subscribeHistoryRefusal(observer: (refusal: string | null) => void): () => void;
-  /** A plain click on an incorporation's source line: its first act
-   * (expand or collapse) through the shared menu path. */
-  incorporationPrimaryClick(part: string): void;
-  /** Open the act menu for a target (selection or right-click). */
-  openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
-  /** A plain click on a citation runs its FIRST act directly - the
-   * same action object every invocation path runs (scenario 9). The
-   * part names the citation's incorporation block. */
-  referencePrimaryClick(part: string): void;
-  /** A shifted or middle click on the citation: its `o` act, open at
-   * the link (t-47). */
-  referenceElsewhereClick(part: string): void;
-  /** A shifted or middle click on a prose ref: its `o` act. */
-  refElsewhereClick(part: string): void;
-  /** A plain click on a figure runs its first act (enlarge) through
-   * the shared menu path. */
-  figurePrimaryClick(part: string, kind?: "figure" | "diagram"): void;
-  /** A plain click on a prose ref: its first act (follow here). */
-  refPrimaryClick(part: string): void;
-  /** The window services the reference acts ride (the one open
-   * funnel and the copy observation); injected by the window, and no
-   * reference act is offered before then. */
-  setReferencePorts(ports: {
-    open(spec: string, part: string | null): void;
-    copy(payload: string): void;
-    elsewhere?(spec: string, act: "link" | "once" | "new"): void;
-    /** The figure's enlarge act (S04): the window opens its
-     * inspection surface for the part. */
-    figureEnlarge?(part: string): void;
-  }): void;
-  /** The window's reading layout (lib/board/reading-layout.ts): the
-   * zoom and column-width keys hand their change to the window, which
-   * holds the layout with the rest of its state. */
-  setReadingLayoutPort(port: (change: ReadingLayoutChange) => void): void;
   /** Update outcomes for the actual shown frame's generation;
    * rendering never enters or invalidates the loading queue. Also the
    * render's settle: its hydration is done. */
@@ -200,7 +149,30 @@ export interface BoardUI extends HydrationHost {
   reportRendered(generation: number): void;
 }
 
-/** The live select-session view the component paints chips from. */
+/** The window services the board's acts and keys ride, carried by
+ * the instrument's definition - no cast in the window assembly
+ * touches the controller's own type. */
+export type BoardServices = Readonly<{
+  /** The ONE open funnel (trail + anchored restore). */
+  open(spec: string, part: string | null): void;
+  /** The copy observation: the payload recorded, the clipboard
+   * attempted. */
+  copy(payload: string): void;
+  /** The elsewhere acts (o/i/w), present when the boot's binding
+   * facts have answered. */
+  elsewhere?(spec: string, act: "link" | "once" | "new"): void;
+  /** The figure's enlarge act: the window opens its inspection
+   * surface for the part. */
+  figureEnlarge?(part: string): void;
+  /** The reading layout (lib/board/reading-layout.ts): the zoom and
+   * column-width keys hand their change to the window, which holds
+   * the layout with the rest of its state. */
+  readingLayout(change: ReadingLayoutChange): void;
+  /** The window's space-h hands its chord here: the board registers
+   * the toggle its history mode answers. */
+  onHistoryToggle(toggle: () => void): void;
+}>;
+
 const EMPTY_FRAME: BoardData = {
   generation: 0,
   asked: "",
@@ -210,11 +182,10 @@ const EMPTY_FRAME: BoardData = {
   board: null,
   errors: [],
   renderOutcomes: [],
-  targets: [],
   folded: [],
 };
 
-export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<BoardUI, BoardAnchor> {
+export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardServices): InstrumentAttachment<BoardUI, BoardAnchor> {
   // Controller state: the open generation, the resolved location the
   // shown frame was read at, and the outcomes its hydration reported.
   const scope = createLoadScope<BoardData>(EMPTY_FRAME);
@@ -253,7 +224,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (address === null) return;
       return buffer.updates.refresh(async () => {
         const prepared = await load(address);
-        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
+        return prepared.kind === "ready" ? readyFrame(prepared.value, publishedTargets()) : prepared;
       });
     },
     // the DOM timer id and Node's Timeout meet across lib mixes; the
@@ -307,14 +278,18 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     machine: () => scope.frame().resolved?.machine ?? null,
     sourceAt(part) {
-      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "incorporation");
-      return target?.source ?? null;
+      const facts = targetFactsAt(scope.frame().board?.content ?? [], part);
+      return facts?.source ?? null;
     },
     onChange() {
       const view = expansions.view();
       for (const observer of [...expansionObservers]) observer(view);
     },
   });
+
+  // the window's space-h chord reaches the board's history mode
+  // through the definition's registration
+  services.onHistoryToggle(() => host.toggleHistory());
 
   const host: BoardUI = {
     displayedGeneration,
@@ -337,16 +312,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         }
         return `missing: ${String(error)}`;
       }
-    },
-    subscribeMenu(observer) {
-      menuObservers.add(observer);
-      observer(menuView());
-      return () => {
-        menuObservers.delete(observer);
-      };
-    },
-    menuSession() {
-      return boardMenu.session;
     },
     toggleFold(part) {
       if (foldedSet.has(part)) foldedSet.delete(part);
@@ -378,65 +343,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         expansionObservers.delete(observer);
       };
     },
-    incorporationPrimaryClick(part) {
-      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "incorporation");
-      if (target === undefined) return;
-      boardMenu.session.primaryClick({ kind: "incorporation", label: target.text, part });
-      notifyMenu();
-    },
-    openMenuFor(target, at) {
-      boardMenu.openFor(target, at);
-    },
-    referencePrimaryClick(part) {
-      // the same action object every path runs: the citation's target
-      // built from the MODEL (label = the address, as the prototype's
-      // menu head reads el.dataset.loc)
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      if (target === undefined || target.source === undefined) return;
-      const label = `${target.source.task}@r${target.source.revision}`;
-      boardMenu.session.primaryClick({ kind: "reference", label, part });
-      notifyMenu();
-    },
-    referenceElsewhereClick(part) {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      if (target === undefined || target.source === undefined) return;
-      const label = `${target.source.task}@r${target.source.revision}`;
-      boardMenu.session.keyClick({ kind: "reference", label, part }, "o");
-      notifyMenu();
-    },
-    refElsewhereClick(part: string) {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      if (target === undefined) return;
-      boardMenu.session.keyClick({ kind: "ref", label: target.text, part }, "o");
-      notifyMenu();
-    },
-    refPrimaryClick(part: string) {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      if (target === undefined) return;
-      boardMenu.session.primaryClick({ kind: "ref", label: target.text, part });
-      notifyMenu();
-    },
-    figurePrimaryClick(part: string, kind: "figure" | "diagram" = "figure") {
-      // the figure's own target kind; the primary act is enlarge
-      // (actsFor's figure branch), run through the SAME session path
-      // every invocation uses
-      // the label is the figure's own citation (the menu head), the
-      // same composition the copy act uses
-      const frame = scope.frame();
-      const match = /@r(\d+)$/.exec(frame.location);
-      const citation =
-        match !== null && frame.board !== null && frame.board.task.length > 0
-          ? `${frame.board.task}@r${match[1]}:${part}`
-          : part;
-      boardMenu.session.primaryClick({ kind, label: citation ?? part, part });
-      notifyMenu();
-    },
-    setReadingLayoutPort(port) {
-      readingLayoutPort = port;
-    },
-    setReferencePorts(ports) {
-      referencePorts = ports;
-    },
     reportRendered(generation) {
       if (!scope.isDestroyed()) placeHold(generation, false);
     },
@@ -450,12 +356,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         publishedOutcomesKey = key;
         return { ...frame, value: { ...frame.value, renderOutcomes: [...outcomes] } };
       });
-    },
-    subscribeSelect(observer) {
-      return selectSession.subscribe(observer);
-    },
-    getSelection() {
-      return selection;
     },
     toggleHistory() {
       void toggleHistory();
@@ -527,6 +427,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     }
     resolved = resolvedLocation;
     shownAsked = { machine: address.machine, path: address.path };
+    // the published targets: the contract shape, acts resolving when
+    // asked over the live board and services
     // The native gate: admission through the shared board-grammar
     // crate. Null without a bridge, where the mirror decoder alone
     // decides; a bridge that fails to answer refuses loudly.
@@ -572,7 +474,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           errors: [issue],
           generation: token,
           renderOutcomes: [],
-          targets: [],
           folded: [...foldedSet],
         },
       };
@@ -594,7 +495,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
             errors: [{ code: "decoder-mismatch", message }, ...result.errors],
             generation: token,
             renderOutcomes: [],
-            targets: [],
             folded: [...foldedSet],
           },
         };
@@ -610,12 +510,11 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           errors: result.errors,
           generation: token,
           renderOutcomes: [],
-          targets: [],
           folded: [...foldedSet],
         },
       };
     }
-    scope.adopt({
+    const frame: BoardData = {
       generation: token,
       asked: scope.asked(),
       location: formatLocation(resolvedLocation),
@@ -624,10 +523,34 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       board: result.board,
       errors: [],
       renderOutcomes: [],
-      targets: boardTargetsOf(result.board),
       folded: [...foldedSet],
-    });
-    return { kind: "ready", value: scope.frame() };
+    };
+    scope.adopt(frame);
+    publishedSignature = targetsSignature(publishedTargets());
+    return { kind: "ready", value: frame };
+  }
+
+  // -- the published targets -------------------------------------------
+  // The frame presents what the board publishes: every content part
+  // of the walk, as the one published shape. The acts resolve when
+  // asked - actsFor over the live board, folds, expansions and
+  // services - never frozen at publication.
+  const publishedTargets = (): readonly TargetDefinition[] =>
+    boardTargetsOf(scope.frame().board?.content ?? [], (def) =>
+      actsFor({ part: def.id, kind: def.kind, label: def.label }, boardActDeps()));
+
+  const targetsSignature = (targets: readonly TargetDefinition[]): string =>
+    JSON.stringify(targets.map((target) => [target.id, target.label, target.inside]));
+
+  let publishedSignature: string | null = null;
+
+  function refreshPublishedTargets(): void {
+    if (scope.isDestroyed()) return;
+    const next = publishedTargets();
+    const signature = targetsSignature(next);
+    if (signature === publishedSignature) return;
+    publishedSignature = signature;
+    buffer.updates.updateDisplayed((current) => ({ ...current, targets: next }));
   }
 
   // -- history mode (t-49, t-57; t-14 "The viewer", History) -----------
@@ -663,17 +586,12 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   let history: HistoryState | null = null;
   let historyIntent = 0;
 
-  function historyView(state: HistoryState, targets: readonly BoardTarget[] = scope.frame().targets): HistoryView {
+  function historyView(
+    state: HistoryState,
+    targets: readonly TargetDefinition[] = publishedTargets(),
+  ): HistoryView {
     const tracked = state.tracked;
-    const label =
-      tracked === null
-        ? null
-        : (targets.find((target) => target.part === tracked)?.text ?? "")
-            .split("\n")
-            .find((line) => line.trim().length > 0)
-            ?.replace(/[\uE000-\uE003]/g, "")
-            .replace(/^\s*#+\s*/, "")
-            .trim() ?? "";
+    const label = tracked === null ? null : (targets.find((target) => target.id === tracked)?.label ?? "");
     return {
       task: `t-${state.task}`,
       revision: state.revision,
@@ -714,14 +632,14 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     const top = buffer.viewport.metrics().position.top;
     let inside: { part: string; top: number } | null = null;
     let below: { part: string; top: number } | null = null;
-    for (const target of scope.frame().targets) {
-      if (blockPartOf(target.part) !== target.part) continue;
-      const bounds = buffer.geometry.bounds(target.part);
+    for (const target of publishedTargets()) {
+      if (blockPartOf(target.id) !== target.id) continue;
+      const bounds = buffer.geometry.bounds(target.id);
       if (bounds === null) continue;
       if (top >= bounds.top && top < bounds.bottom) {
-        if (inside === null || target.part.length > inside.part.length) inside = { part: target.part, top: bounds.top };
+        if (inside === null || target.id.length > inside.part.length) inside = { part: target.id, top: bounds.top };
       } else if (bounds.top >= top && (below === null || bounds.top < below.top)) {
-        below = { part: target.part, top: bounds.top };
+        below = { part: target.id, top: bounds.top };
       }
     }
     const chosen = inside ?? below;
@@ -860,7 +778,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         resolved = location;
         const token = scope.begin();
         hold = held === null ? null : { ...held, generation: token, after: token };
-        const targets = boardTargetsOf(diff.board);
+        const targets = publishedTargets();
         scope.adopt({
           generation: token,
           asked: scope.asked(),
@@ -870,11 +788,10 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           board: diff.board,
           errors: [],
           renderOutcomes: [],
-          targets,
           folded: [...foldedSet],
           history: historyView(state, targets),
         });
-        return readyFrame(scope.frame());
+        return readyFrame(scope.frame(), targets);
       } catch (error) {
         return { kind: "failed", issue: issueOf(error) };
       }
@@ -1012,20 +929,17 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       const address: Address = shown
         ? { machine: shown.machine, path: shown.path }
         : { machine: "", path: "" };
-      // The reading anchor (hybrid default, r49): the target identity
-      // when the reading position sits inside one, else the default
-      // position. Geometry is live measurement; a target with no
-      // measurable presentation is skipped, never guessed.
-      const viewTop = viewport.position.top;
-      for (const target of scope.frame().targets) {
-        const bounds = buffer.geometry.bounds(target.part);
-        if (bounds === null) continue;
-        if (viewTop >= bounds.top && viewTop < bounds.bottom) {
-          return {
-            address,
-            position: { kind: "anchor", anchor: { kind: "board-part", path: target.part }, bounds },
-          };
-        }
+      // The reading anchor is the frame's: the published target the
+      // reading position sits inside, named by its durable anchor (a
+      // part path). The board adds its own address and the anchor's
+      // kind. A target with no measurable presentation is skipped,
+      // never guessed.
+      const reading = presentations.readingAnchor();
+      if (reading.kind === "anchor") {
+        return {
+          address,
+          position: { kind: "anchor", anchor: { kind: "board-part", path: reading.anchor }, bounds: reading.bounds },
+        };
       }
       return { address, position: { kind: "default" } };
     },
@@ -1047,7 +961,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       try {
         return await buffer.updates.refresh(async () => {
           const prepared = await load(address);
-          return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
+          return prepared.kind === "ready" ? readyFrame(prepared.value, publishedTargets()) : prepared;
         });
       } finally {
         if (!scope.isDestroyed() && intent === openIntent) {
@@ -1066,8 +980,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         !Array.isArray(data) &&
         (data as { kind?: unknown }).kind === "board-part" &&
         typeof (data as { path?: unknown }).path === "string" &&
-        // the anchor must name a part of THIS frame's model
-        scope.frame().targets.some((target) => target.part === (data as { path: string }).path)
+        // the anchor must name a part of THIS frame's publication
+        presentations.locateAnchor((data as { path: string }).path).kind !== "missing"
       );
     },
     revealAnchor(anchor: BoardAnchor): AnchorLocation {
@@ -1075,7 +989,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       // containers needed to expose the actual anchor - never a
       // substituted container, never unrelated state. Unfolding
       // republishes the frame; geometry becomes usable on the next
-      // call, after the re-render.
+      // call, after the re-render. Finding and measuring the anchor
+      // is the frame's.
       const enclosing = partAncestors(anchor.path);
       let unfolded = false;
       for (const ancestor of enclosing) {
@@ -1090,9 +1005,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         }));
         return { kind: "pending" };
       }
-      const bounds = buffer.geometry.bounds(anchor.path);
-      if (bounds === null) return { kind: "pending" };
-      return { kind: "found", bounds };
+      return presentations.locateAnchor(anchor.path);
     },
     defaultPosition(_viewport: ReturnType<Viewport["metrics"]>): Point {
       return { left: 0, top: 0 };
@@ -1102,83 +1015,27 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
   };
 
-  // -- the select session (label selection; scenario 12) --------------
-  // 's' enters; labels go to VISIBLE targets only (geometry decides
-  // visibility; existence never depends on geometry); exact-single
-  // selects and exits; Escape exits; selection follows identity (the
-  // part path). The session logic is the shared, unit-tested module;
-  // the controller supplies model targets, geometry-decided
-  // visibility, and the buffer's own capture/restore.
-  let selection: BoardTarget | null = null;
-  const reading: InputContext = boardReadingContext({
-    scrollToTop: () => buffer.viewport.start(),
-    scrollToBottom: () => buffer.viewport.end(),
-    scrollDown: () => buffer.viewport.scrollLines(1),
-    scrollUp: () => buffer.viewport.scrollLines(-1),
-    scrollFraction: (direction, fraction) => buffer.viewport.scrollFraction(direction, fraction),
-    enterSelect: () => selectSession.enter(),
-    enterFind: () => {
-      if (displayedData()?.board != null) find.enter();
-    },
-    nextMatch: () => {
-      if (!jumpChange(1)) find.step(1);
-    },
-    prevMatch: () => {
-      if (!jumpChange(-1)) find.step(-1);
-    },
-    clearSearch: () => {
-      if (find.hasSearch()) find.clearSearch();
-      else if (history !== null && history.tracked !== null) toggleTrack();
-    },
-    historyStep: (direction) => stepHistory(direction),
-    historyTrack: () => toggleTrack(),
-    historyWalk: (direction) => void walkTracked(direction),
-    readingLayout: (change) => readingLayoutPort?.(change),
-  });
-
-  const selectSession = createSelectSession({
-    targets: () => scope.frame().targets,
-    visible(target) {
-      const metrics = buffer.viewport.metrics();
-      const viewTop = metrics.position.top;
-      const viewBottom = metrics.position.top + metrics.height;
-      const bounds = buffer.geometry.bounds(target.part);
-      if (bounds === null) return false;
-      return bounds.top < viewBottom && bounds.bottom > viewTop;
-    },
-    capture: (context) => buffer.interactions.capture(context),
-    onSelected(target) {
-      selection = target;
-      // scenario 9: selection opens the act menu (a no-op for
-      // act-less kinds)
-      boardMenu.openFor({ part: target.part, kind: target.kind, label: target.text.split("\n")[0] ?? target.text });
-    },
-  });
-
-  // -- the menu (scenario 9): selection opens the target's acts ------
-  const menuObservers = new Set<(view: MenuView | null) => void>();
-  let referencePorts: import("../lib/menu/acts.ts").ReferencePorts | null = null;
-  let readingLayoutPort: ((change: ReadingLayoutChange) => void) | null = null;
-  const boardMenu = createBoardMenu({
+  // -- the frame's presentation: select, menu, reading keys -----------
+  // The frame presents what the board publishes: 's' enters the
+  // frame's select session (labels to VISIBLE targets only, geometry
+  // deciding); selection opens the frame's act menu over the
+  // published acts; the reading keys are the frame's table under the
+  // board's own ids, with find, the history keys and the reading
+  // layout as the board's extras.
+  const presentations = buffer.presentations();
+  const boardActDeps = (): BoardActDeps => ({
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),
     isExpanded: (part) => expansions.isExpanded(part),
     toggleExpansion: (part) => expansions.toggle(part),
-    referenceOf: (part) => {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      if (target === undefined || target.source === undefined) return null;
-      return { task: target.source.task, revision: target.source.revision, select: target.source.select };
-    },
-    referencePorts: () => referencePorts,
+    referenceOf: (part) => targetFactsAt(scope.frame().board?.content ?? [], part)?.source ?? null,
+    referencePorts: () => ({
+      open: services.open,
+      copy: services.copy,
+      elsewhere: services.elsewhere,
+      figureEnlarge: services.figureEnlarge,
+    }),
     referenceMachine: () => scope.frame().resolved?.machine ?? null,
-    mathTex: (part) => {
-      const target = scope.frame().targets.find((entry) => entry.part === part && entry.kind === "math");
-      return target === undefined ? null : target.tex ?? null;
-    },
-    refOf: (part) => {
-      const target = scope.frame().targets.find((entry) => entry.part === part);
-      return target !== undefined && target.kind === "ref" ? target.text : null;
-    },
     partCitation: (part) => {
       // the SHOWN revision (a bare open displays its resolved pin)
       // plus the part's full canonical path - never the parent
@@ -1187,26 +1044,111 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (match === null || frame.board === null || frame.board.task.length === 0) return null;
       return `${frame.board.task}@r${match[1]}:${part}`;
     },
-    capture: (context) => buffer.interactions.capture(context),
+    refOf: (part) => targetFactsAt(scope.frame().board?.content ?? [], part)?.ref ?? null,
+    mathTex: (part) => targetFactsAt(scope.frame().board?.content ?? [], part)?.tex ?? null,
   });
-  function menuView(): MenuView | null {
-    if (!boardMenu.session.isOpen()) return null;
-    const target = boardMenu.session.target();
-    if (target === null) return null;
-    const acts = boardMenu.session.acts();
-    return {
-      open: true,
-      label: target.label,
-      acts: acts.map((act) => ({ key: act.key, label: act.action.label })),
-      at: boardMenu.session.at(),
-      part: target.part,
-    };
-  }
-  function notifyMenu(): void {
-    const view = menuView();
-    for (const observer of [...menuObservers]) observer(view);
-  }
-  boardMenu.setOnNotify(() => notifyMenu());
+
+  // The reading keys are the frame's table, under the board's own ids
+  // (the key trace pins board.scroll-down); the board's own keys -
+  // find and its stepping, Escape's search-clear, the reading layout
+  // chords, the history keys - ride as extras.
+  const reading = presentations.readingContext(
+    [
+      {
+        action: { id: "board.find", label: "find in this revision", run: () => {
+          if (displayedData()?.board != null) find.enter();
+        } },
+        keys: [sequence(key("/"))],
+      },
+      {
+        action: {
+          id: "board.find-next",
+          label: "next match of the committed search",
+          run: () => {
+            if (!jumpChange(1)) find.step(1);
+          },
+        },
+        keys: [sequence(key("n"))],
+      },
+      {
+        action: {
+          id: "board.find-prev",
+          label: "previous match of the committed search",
+          run: () => {
+            if (!jumpChange(-1)) find.step(-1);
+          },
+        },
+        // N is the character (its case carries Shift)
+        keys: [sequence(key("N"))],
+      },
+      {
+        action: {
+          id: "board.find-clear",
+          label: "clear the committed search (in history: stop tracking)",
+          run: () => {
+            if (find.hasSearch()) find.clearSearch();
+            else if (history !== null && history.tracked !== null) toggleTrack();
+          },
+        },
+        keys: [sequence(key("Escape"))],
+      },
+      ...(
+        [
+          ["zoom-in", "larger text", key("+")],
+          ["zoom-out", "smaller text", key("-")],
+          ["zoom-reset", "text at its normal size", key("=")],
+          ["widen", "a wider column", ctrl("+")],
+          ["narrow", "a narrower column", ctrl("-")],
+          ["width-reset", "the column at its normal width", ctrl("=")],
+        ] as const
+      ).map(([change, label, stroke]) => ({
+        action: { id: `board.${change}`, label, run: () => services.readingLayout(change) },
+        keys: [sequence(stroke)],
+      })),
+      {
+        action: {
+          id: "board.history-older",
+          label: "history: the revision before",
+          run: () => stepHistory(-1),
+        },
+        keys: [sequence(key("h"))],
+      },
+      {
+        action: {
+          id: "board.history-newer",
+          label: "history: the revision after",
+          run: () => stepHistory(1),
+        },
+        keys: [sequence(key("l"))],
+      },
+      {
+        action: {
+          id: "board.history-track",
+          label: "history: track the part being read, or stop",
+          run: () => toggleTrack(),
+        },
+        keys: [sequence(key("t"))],
+      },
+      {
+        action: {
+          id: "board.history-track-older",
+          label: "history: the change to the tracked part before",
+          run: () => void walkTracked(-1),
+        },
+        // H and L are the characters (their case carries Shift)
+        keys: [sequence(key("H"))],
+      },
+      {
+        action: {
+          id: "board.history-track-newer",
+          label: "history: the change to the tracked part after",
+          run: () => void walkTracked(1),
+        },
+        keys: [sequence(key("L"))],
+      },
+    ],
+    "board",
+  );
 
 
   // Live publication changes matches without rewinding the interaction
@@ -1222,8 +1164,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       follow.stop();
       offFindContent();
       find.close();
-      selectSession.exit();
-      boardMenu.session.outsidePointerDown();
     },
   };
 }

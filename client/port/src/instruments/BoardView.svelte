@@ -9,20 +9,17 @@ at the generation boundary. -->
   import { untrack } from "svelte";
   import { hydrate } from "../lib/board/hydrate.ts";
   import { paintMarks } from "../lib/find/marks.ts";
-import LabelOverlay from "../components/LabelOverlay.svelte";
-import ActMenu from "../components/ActMenu.svelte";
-import { partMeasureIn } from "../lib/select/measure.ts";
+import FrameSurface from "../components/FrameSurface.svelte";
+import type { TargetPresentations } from "../lib/contracts/buffer.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
   import { paintDiffMarks } from "../lib/board/history-diff.ts";
   import { paintExpansions } from "../lib/board/expansion-paint.ts";
-  import type { BoardData, BoardUI, FindView, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
+  import type { BoardData, BoardUI, FindView, RenderOutcome } from "./board.ts";
 
-  let { content, controller }: { content: BoardData; controller: BoardUI } = $props();
+  let { content, controller, targets = null }: { content: BoardData; controller: BoardUI; targets?: TargetPresentations | null } = $props();
 
   let host: HTMLElement | null = $state(null);
   let renderNotes: string[] = $state([]);
-  let select: SelectSessionView | null = $state(null);
-  let menu: MenuView | null = $state(null);
   let find: FindView = $state({
     open: false,
     query: "",
@@ -37,76 +34,18 @@ import { partMeasureIn } from "../lib/select/measure.ts";
   let findInput: HTMLInputElement | null = $state(null);
   let findValue = $state("");
 
-  // The select session's live view: chips painted over the labeled
-  // parts' rendered boxes. Presentation only - the narrowing logic
-  // lives in the controller, behind the shared matcher.
   $effect(() => {
-    const off = controller.subscribeSelect((view) => {
-      select = view;
-    });
-    const offMenu = controller.subscribeMenu((view) => {
-      menu = view;
-    });
-    const offFind = controller.subscribeFind((view) => {
+    const off = controller.subscribeFind((view) => {
       find = view;
       if (document.activeElement !== findInput) findValue = view.query;
     });
-    return () => {
-      off();
-      offMenu();
-      offFind();
-    };
+    return off;
   });
 
   $effect(() => {
     // Count/query notifications do not refocus a blurred field.
     if (findOpen) findInput?.focus({ preventScroll: true });
   });
-
-  // Right-click opens the same act list at the pointer (scenario 9's
-  // third invocation path); plain clicks on act-carrying parts run
-  // the first act directly (the fourth path).
-  function onContextMenu(event: MouseEvent): void {
-    const citation = (event.target as HTMLElement | null)?.closest?.('[data-port-control="citation"]');
-    if (citation instanceof HTMLElement) {
-      // the citation is its own target (the prototype's ref shape):
-      // the menu carries the reference acts, labeled by the address
-      const part = citation.getAttribute("data-port-part-of");
-      const address = citation.getAttribute("data-port-open") ?? "";
-      if (part !== null) {
-        event.preventDefault();
-        const box = host?.getBoundingClientRect();
-        const at =
-          box === undefined
-            ? undefined
-            : { x: event.clientX - box.left, y: event.clientY - box.top };
-        controller.openMenuFor({ part, kind: "reference", label: address }, at);
-      }
-      return;
-    }
-    const part = partFromEvent(event);
-    if (part === null) return;
-    const target = content.targets.find((entry) => entry.part === part);
-    if (target === undefined) return;
-    event.preventDefault();
-    const box = host?.getBoundingClientRect();
-    const at =
-      box === undefined
-        ? undefined
-        : { x: event.clientX - box.left, y: event.clientY - box.top };
-    controller.openMenuFor(
-      { part: target.part, kind: target.kind, label: target.text.split("\n")[0] ?? target.text },
-      at,
-    );
-  }
-
-  function partFromEvent(event: MouseEvent): string | null {
-    const element = (event.target as HTMLElement | null)?.closest?.("[data-port-part]");
-    if (element === null || element === undefined) return null;
-    const part = element.getAttribute("data-port-part");
-    return part === null ? null : part;
-  }
-
 
   // The render's own key: a frame republished for anything else (the
   // render outcomes this very render reports, a follow poll answering
@@ -279,14 +218,10 @@ footer under the sheet when the window is too narrow for a margin) -->
 <div class="port-board" data-port-history={content.history ? "" : undefined}>
   <div class="port-board-sheet">
     <div class="port-board-stage">
-      <div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
-      </div>
-      {#if select !== null}
-        <LabelOverlay chips={select.labels} measure={partMeasureIn(host)} typed={select.pendingLabel} />
-      {/if}
-      {#if menu !== null}
-        <ActMenu {menu} {host} session={controller.menuSession()} />
-      {/if}
+      <FrameSurface presentations={targets}>
+        <div class="port-board-view" bind:this={host} role="document">
+        </div>
+      </FrameSurface>
     </div>
   </div>
   {#if historyRefusal !== null && !content.history}

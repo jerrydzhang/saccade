@@ -1,9 +1,8 @@
-// The board's menu wiring: the per-kind act declarations (the staged
-// KINDS shape) and the board's menu host - selection opens, keys
-// route through the shared matcher, close-before-execute comes from
-// the session module. Pure: the controller supplies fold state, the
-// model's citation sources, and the window services the reference
-// acts ride.
+// The board's per-kind act declarations (the staged KINDS shape),
+// the publication's own builders: the controller wires them into the
+// published targets' acts, resolved when asked. Pure: the controller
+// supplies fold state, the model's citation sources, and the window
+// services the reference acts ride.
 //
 // The reference acts (t-36@r90, the prototype's KINDS at inst16.html
 // :36-46 as the contract): a citation's first act is 'f' "follow
@@ -13,12 +12,12 @@
 // (:partPath) when the citation names a part. The OPEN o/i/w acts
 // are the elsewhere slice, not this one.
 
-import type { Action, InputContext, KeyInput, KeyResolution } from "../input/input-context.ts";
+import type { Action } from "../input/input-context.ts";
+import { createActMenu } from "./create.ts";
 import { selectToPart } from "../board/targets.ts";
 import { refAddress } from "../board/refs.ts";
 import { formatLocation } from "../location.ts";
-import { createActMenu } from "./create.ts";
-import type { MenuAct, MenuSession, MenuTarget } from "./session.ts";
+import type { MenuAct, MenuTarget } from "./session.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
 
 /** A model-authored citation source (the incorporation block's). */
@@ -43,7 +42,20 @@ export type ReferencePorts = Readonly<{
   figureEnlarge?: (part: string) => void;
 }>;
 
-export interface BoardMenuDeps {
+export interface BoardMenuDeps extends BoardActDeps {
+  /** Capture input while open. Lease release returns to the CURRENT
+   * base; a menu never reinstalls its own saved reading context. */
+  capture(context: import("../input/input-context.ts").InputContext): { release(): void };
+}
+
+/** The board's menu host over the published builders - the same
+ * construction the frame's presentation runs; the board's tests drive
+ * it directly. */
+export function createBoardMenu(deps: BoardMenuDeps) {
+  return createActMenu((target) => actsFor(target, deps), { capture: (context) => deps.capture(context) });
+}
+
+export interface BoardActDeps {
   /** Whether a group part path is folded now. */
   isFolded(part: string): boolean;
   /** Fold or unfold a group part path. */
@@ -65,55 +77,19 @@ export interface BoardMenuDeps {
    * part's full path), or null when the shown frame carries no
    * pinned revision to cite. */
   partCitation(part: string): string | null;
-  /** A prose ref target's ref text (t-3@r14, i-2 ...), or null. */
+  /** A prose ref target's ref text (a sample ref), or null. */
   refOf?(part: string): string | null;
-  /** A math expression's TeX source, the copy act's payload (t-62),
-   * or null when the part names no rendered math. */
+  /** A math expression's TeX source, the copy act's payload, or null
+   * when the part names no rendered math. */
   mathTex?(part: string): string | null;
-  /** Capture input while open. Lease release returns to the CURRENT
-   * base; a menu never reinstalls its own saved reading context. */
-  capture(context: InputContext): { release(): void };
 }
 
-export interface BoardMenu {
-  session: MenuSession;
-  /** The context installed while the menu is open (null closed). */
-  context(): InputContext | null;
-  /** Selection (or a right-click) opens the menu when the target has
-   * acts; a no-op for act-less kinds (plain blocks). */
-  openFor(target: Readonly<{ part: string | null; kind: string; label: string }>, at?: { x: number; y: number }): void;
-  /** The view-change notification (open, act, close). */
-  setOnNotify(callback: () => void): void;
-}
-
-export function createBoardMenu(deps: BoardMenuDeps): BoardMenu {
-  return createActMenu(
-    (target) => actsFor(target, deps),
-    { capture: (context) => deps.capture(context) },
-  );
-}
-
-/** The per-kind act declarations. Groups fold/unfold (chunk C);
- * incorporations expand/collapse (t-58); math copies its LaTeX
- * (t-62); a citation's reference target follows here first (so a
- * plain click follows) and copies its payload (t-36@r90). Every other
- * kind carries no acts yet. */
-export function actsFor(
-  target: MenuTarget,
-  deps: Pick<
-    BoardMenuDeps,
-    | "isFolded"
-    | "toggleFold"
-    | "isExpanded"
-    | "toggleExpansion"
-    | "referenceOf"
-    | "referencePorts"
-    | "referenceMachine"
-    | "partCitation"
-    | "refOf"
-    | "mathTex"
-  >,
-): readonly MenuAct[] {
+/** The per-kind act declarations, the publication's builders. Groups
+ * fold/unfold; incorporations expand/collapse; math copies its LaTeX;
+ * a citation's reference target follows here first (so a plain click
+ * follows) and copies its payload. Every other kind carries no acts
+ * yet. */
+export function actsFor(target: MenuTarget, deps: BoardActDeps): readonly MenuAct[] {
   if (target.kind === "group" && target.part !== null) {
     const folded = deps.isFolded(target.part);
     const acts: MenuAct[] = [

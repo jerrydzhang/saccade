@@ -28,8 +28,9 @@ export interface PointerGuards {
    * acted - a middle press does not arrive as a click. */
   middlePress(): void;
   /** The release over the element, when armed: true, and the caller
-   * runs the modified click (the release decides, the press only
-   * arms). */
+   * runs the modified click. The release's own button is not trusted
+   * (this stack reports a middle release as button 0) - the press
+   * decides, the mouseup over the armed element acts. */
   middleRelease(): boolean;
   /** The pointer left the surface: the press is cancelled. */
   middleLeave(): void;
