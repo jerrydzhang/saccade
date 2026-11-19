@@ -16,8 +16,8 @@ export type Machine = string;
  * short. */
 export type CommandOutcome = {
   code: number | null;
-  stdout: Uint8Array;
-  stderr: Uint8Array;
+  stdout: Uint8Array<ArrayBuffer>;
+  stderr: Uint8Array<ArrayBuffer>;
   truncated: boolean;
   timedOut: boolean;
 };
@@ -33,7 +33,7 @@ export interface MachineAsks {
   /** One HTTP GET against a loopback address on the machine (the
    * project's own services answering there); the route starts with
    * "/". A machine that cannot carry the request says so by name. */
-  requestLocal(machine: Machine, address: LocalAddress, route: string): Promise<Uint8Array>;
+  requestLocal(machine: Machine, address: LocalAddress, route: string): Promise<Uint8Array<ArrayBuffer>>;
 }
 
 /** The bound one local request may take; the carrying command dies
@@ -121,7 +121,7 @@ export function coreAsks(invoke: TauriInvoke = tauriInvoke()): MachineAsks {
 export function directAsks(handlers: {
   readFile(machine: Machine, path: string): Promise<string>;
   runCommand(machine: Machine, argv: readonly string[]): Promise<CommandOutcome>;
-  requestLocal(machine: Machine, address: LocalAddress, route: string): Promise<Uint8Array>;
+  requestLocal(machine: Machine, address: LocalAddress, route: string): Promise<Uint8Array<ArrayBuffer>>;
 }): MachineAsks {
   return { ...handlers };
 }

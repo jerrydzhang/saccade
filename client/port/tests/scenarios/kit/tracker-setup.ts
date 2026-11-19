@@ -12,6 +12,9 @@ export default async function setup(project: TestProject): Promise<() => Promise
   }
   const origins = (process.env.SAC_PORT_SUITE_ORIGINS ?? "").split(" ").filter((origin) => origin.length > 0);
   const running = await startTracker(origins);
+  // the lane's declaration reader serves this repository's declaration
+  // file (vitest.config.ts laneDeclarationReader)
+  process.env.SAC_PORT_SUITE_REPO = running.tracker.repoPath;
   project.provide("tracker", running.tracker);
   return running.stop;
 }

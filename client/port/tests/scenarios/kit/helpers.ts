@@ -6,9 +6,10 @@ import { expect } from "vitest";
 
 import { inputOf, type AppDriver, type InputView, type PortObservation, type SeededTracker, type Tracker } from "./driver.ts";
 
-/** A location spec on the seeded tracker: host/repo/path. */
+/** A location spec on the seeded tracker: the declaration's project
+ * name, then the task path. */
 export function spec(tracker: SeededTracker, path: string): string {
-  return `${tracker.host}/${tracker.repo}/${path}`;
+  return `${tracker.repo}/${path}`;
 }
 
 /** Open the picker by its chord (space space) from a clear state. */
@@ -22,8 +23,7 @@ export async function openPicker(app: AppDriver): Promise<void> {
  * then wait until the shown board answers it. */
 export async function openLocation(app: AppDriver, location: string): Promise<PortObservation> {
   await submitLocation(app, location);
-  const path = location.slice(location.indexOf("/") + 1);
-  return waitShown(app, path);
+  return waitShown(app, location);
 }
 
 /** Submit a location through the picker (real typing and Enter);
@@ -34,19 +34,17 @@ export async function submitLocation(app: AppDriver, location: string): Promise<
   await app.press("Enter");
 }
 
-/** Show the seeded tracker's tasks on the control plane (t-54): open
- * "plane" through the picker, register the tracker through the
- * plane's add field (a, host/repo, Enter - registering opens nothing)
- * and switch to it with its rail entry; answers when its list shows. */
+/** Show the seeded tracker's tasks on the control plane: open
+ * "plane" through the picker and switch to the project's rail entry
+ * (the lane seeds the registration - kit/lane-asks.ts, native.ts - so
+ * no scenario types a path here; the control-plane scenario drives
+ * the real add field itself). Answers when its list shows. */
 export async function openPlane(app: AppDriver, tracker: SeededTracker): Promise<void> {
   await submitLocation(app, "plane");
   await expect.poll(async () => (await app.readout()).surface).toBe("tasks");
-  await app.press("a");
-  await expect.poll(() => app.shows("project-input")).toBe(true);
-  await app.type(`${tracker.host}/${tracker.repo}`);
-  await app.press("Enter");
-  await expect.poll(() => app.shows("project-input")).toBe(false);
-  await app.click(`project-${tracker.repo}`);
+  const project = `project-${tracker.repo}`;
+  await expect.poll(() => app.shows(project), { timeout: 20_000 }).toBe(true);
+  await app.click(project);
   await expect
     .poll(async () => {
       const tasks = (await app.readout()).tasks;
@@ -56,8 +54,9 @@ export async function openPlane(app: AppDriver, tracker: SeededTracker): Promise
 }
 
 /** Wait until the window shows the open it asked for, `path`
- * (repo/t-N or repo/t-N@rK), loaded; answers that readout. The shown
- * location is the revision that answered: repo/t-N@rK. */
+ * (the project's name, then t-N or t-N@rK), loaded; answers that
+ * readout. The shown location is the revision that answered:
+ * seedtracker/t-N@rK. */
 export async function waitShown(app: AppDriver, path: string, window?: string): Promise<PortObservation> {
   await expect
     .poll(async () => {

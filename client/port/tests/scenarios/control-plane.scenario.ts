@@ -1,11 +1,12 @@
-// The control plane (t-48, t-54): its own address, "plane", which
+// The control plane: its own address, "plane", which
 // names no tracker - a window with nothing opened shows it, and which
 // project it shows lives in the session, never in the window's place. The
-// task list carries a rail of the projects this device has reached,
+// task list carries a rail of the projects this device has registered,
 // the shown one marked; choosing a project switches this window in
 // place - the list it shows, never a new window. Registering a project
-// is its own act: a opens the add field, Enter registers host:port/name
-// and opens nothing. Rail entries are the list's own targets: s labels
+// is its own act: a opens the add field, Enter registers the repository
+// at machine:/path (its declaration file names the project) and opens
+// nothing. Rail entries are the list's own targets: s labels
 // them with the rows, and a label, a click or Enter runs the same act.
 // Agents join from Herdr core's words, which the lane's sandbox may not
 // run; their grouping is pinned by the unit tests
@@ -13,12 +14,11 @@
 import { expect, test } from "#scenario";
 import { openPlane, submitLocation } from "./kit/helpers.ts";
 
-/** A device that has reached no tracker yet: the app's registry
- * (client/port/src/lib/tracker.ts) is this origin's storage, shared by
- * every scenario of the run. */
-function forgetEveryTracker(): void {
-  localStorage.removeItem("saccade.trackers");
-  localStorage.removeItem("saccade.trackers.home");
+/** The device store is this origin's storage (the lane seeds it per
+ * launch); this scenario drives the real add field, so it clears the
+ * seed first - the empty-registry case. */
+function forgetEveryProject(): void {
+  localStorage.removeItem("saccade.projects");
 }
 
 test("a window with nothing opened shows the plane; with no project it says how to add one, and a adds one opening nothing", async ({ app, tracker }) => {
@@ -26,7 +26,7 @@ test("a window with nothing opened shows the plane; with no project it says how 
   await expect.poll(async () => (await app.readout()).tasks?.asked ?? null, { timeout: 20_000 }).toBe("plane");
   expect((await app.readout()).surface).toBe("tasks");
 
-  forgetEveryTracker();
+  forgetEveryProject();
   await submitLocation(app, "plane");
   await expect
     .poll(async () => {
@@ -34,7 +34,8 @@ test("a window with nothing opened shows the plane; with no project it says how 
       return { project: tasks === null ? "(no plane)" : tasks.project, status: tasks?.status ?? null };
     })
     .toEqual({ project: null, status: "loaded" });
-  await expect.poll(() => app.shows("plane-empty")).toBe(true);
+  // the rail's own snapshot refreshes on its poll, after the frame
+  await expect.poll(() => app.shows("plane-empty"), { timeout: 20_000 }).toBe(true);
   expect(await app.controlText("plane-empty")).toContain("press a");
   const depth = (await app.readout()).trail.depth;
 
@@ -47,14 +48,16 @@ test("a window with nothing opened shows the plane; with no project it says how 
   await app.press("Escape");
   await expect.poll(() => app.shows("project-input")).toBe(false);
 
+  // the real registration: the repository's machine and path; the
+  // declaration file there names the project
   await app.press("a");
   await expect.poll(() => app.shows("project-input")).toBe(true);
-  await app.type(`${tracker.host}/${tracker.repo}`);
-  expect((await app.readout()).tasks?.add.value).toBe(`${tracker.host}/${tracker.repo}`);
+  await app.type(`machine:${tracker.repoPath}`);
+  expect((await app.readout()).tasks?.add.value).toBe(`machine:${tracker.repoPath}`);
   await app.press("Enter");
   await expect.poll(() => app.shows("project-input")).toBe(false);
   const project = `project-${tracker.repo}`;
-  await expect.poll(() => app.shows(project)).toBe(true);
+  await expect.poll(() => app.shows(project), { timeout: 20_000 }).toBe(true);
   // registering opened nothing: no project shows yet, no trail entry,
   // no window
   const after = await app.readout();

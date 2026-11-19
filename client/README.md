@@ -32,6 +32,17 @@ where they are: never read, never cleaned. The app is the
 round 16 prototype's behaviour, built and tested scenario by scenario
 (t-36).
 
+A project is registered by where its repository is
+(`port/src/lib/projects.ts`): the add field takes
+`machine:/path/to/repository`, the declaration file there
+(`workbench.toml`, the same file the tracker reads its port from)
+names the project, and the device keeps the registered paths alone -
+the file is read again through the one core module whenever a fact is
+needed. A device that registered trackers by `host:port` under the
+old keys (`saccade.trackers`, `saccade.trackers.home`) re-registers
+its repositories by path; the old keys are never read and never
+cleaned, and no special case reads them.
+
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the
 features first asked for, but was never usable enough for any of them to
 be tried. Those features are the app's backlog - hypotheses to build

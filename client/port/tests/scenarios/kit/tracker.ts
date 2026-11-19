@@ -93,7 +93,7 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
     await waitUp(base, child, log);
     const tasks = seed(base);
     console.log(`[port-suite] seeded tracker ${base} (run root ${root})`);
-    return { tracker: { base, host: `127.0.0.1:${port}`, repo: REPO_NAME, tasks }, root, stop };
+    return { tracker: { base, repo: REPO_NAME, repoPath: repo, tasks }, root, stop };
   } catch (error) {
     await stop();
     throw error;

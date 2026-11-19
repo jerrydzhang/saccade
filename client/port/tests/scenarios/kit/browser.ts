@@ -3,8 +3,10 @@
 // this vite config, in a fresh iframe per test (a fresh window object, so no
 // listener or state survives between tests), driven by vitest browser
 // mode's real Playwright input in WebKit. There is no Tauri bridge
-// here: the port starts empty and reaches the tracker through the
-// host a typed location carries.
+// here: the lane installs the app's asks directly before boot
+// (kit/lane-asks.ts) and seeds the one registered path, so the app
+// reaches the tracker through its declaration file, exactly as a
+// registered project is reached.
 import { expect, test as base, inject } from "vitest";
 import { commands, locators, page, userEvent, type Locator } from "vitest/browser";
 
@@ -55,7 +57,10 @@ function keySyntax(key: string): string {
   return key;
 }
 
-async function launch(src: string): Promise<{ app: AppDriver; close: () => void }> {
+async function launch(src: string, seed: { machine: string; repoPath: string; base: string }): Promise<{ app: AppDriver; close: () => void }> {
+  // the lane's asks install reads this before it runs (kit/lane-asks.ts):
+  // the seeded repository's real path and address
+  (window as unknown as Record<string, unknown>).__saccadeLaneSeed = seed;
   const frame = document.createElement("iframe");
   frame.src = src;
   frame.setAttribute("data-port-suite", "app");
@@ -229,14 +234,23 @@ export type BridgedOptions = {
   words?: ShellWorld["words"];
 };
 
+// The lane's machine name: the browser lane has no core, so the
+// registered path's machine is the lane's own name; resolution reads
+// only the declaration and the seeded tracker's answers.
+const LANE_MACHINE = "lane";
+
 export const test = base.extend<{
   app: AppDriver;
   tracker: Tracker;
   bridged: (options?: BridgedOptions) => Promise<{ app: AppDriver; shell: Shell }>;
 }>({
   // eslint-disable-next-line no-empty-pattern
-  app: async ({}, use) => {
-    const { app, close } = await launch("/tests/scenarios/kit/app.html");
+  app: async ({ tracker }, use) => {
+    const { app, close } = await launch("/tests/scenarios/kit/app.html", {
+      machine: LANE_MACHINE,
+      repoPath: tracker.repoPath,
+      base: tracker.base,
+    });
     await use(app);
     close();
   },
@@ -248,7 +262,7 @@ export const test = base.extend<{
   // the app with a mocked shell: one webview labelled main and the
   // other windows the scenario names, plain entries in the world
   // eslint-disable-next-line no-empty-pattern
-  bridged: async ({}, use) => {
+  bridged: async ({ tracker }, use) => {
     const closers: (() => void)[] = [];
     await use(async (options = {}) => {
       const windows: ShellWindow[] = [{ label: "main" }];
@@ -257,7 +271,11 @@ export const test = base.extend<{
       }
       const world: ShellWorld = { label: "main", windows, testOpen: null, calls: [], keyTrace: options.keyTrace === true, words: options.words };
       (window as unknown as Record<string, ShellWorld>)[SHELL_WORLD_KEY] = world;
-      const { app, close } = await launch("/tests/scenarios/kit/shell-app.html");
+      const { app, close } = await launch("/tests/scenarios/kit/shell-app.html", {
+        machine: LANE_MACHINE,
+        repoPath: tracker.repoPath,
+        base: tracker.base,
+      });
       closers.push(close);
       const shell: Shell = {
         calls: world.calls,

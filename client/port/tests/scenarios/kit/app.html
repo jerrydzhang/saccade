@@ -10,6 +10,9 @@
     <script>
       window.__vitest_browser_runner__ = window.parent.__vitest_browser_runner__;
     </script>
+    <!-- this lane has no native shell: the asks install lands before
+    the app boots (kit/lane-asks.ts) -->
+    <script type="module" src="./lane-asks.ts"></script>
   </head>
   <body>
     <div id="app"></div>

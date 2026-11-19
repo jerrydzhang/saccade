@@ -12,10 +12,10 @@ export type { PortObservation };
 export type SeededTracker = {
   /** http://127.0.0.1:<port> */
   base: string;
-  /** 127.0.0.1:<port>, the form a location spec carries */
-  host: string;
-  /** the served repo's name, the location's first path segment */
+  /** the served repo's name, the declaration's project name */
   repo: string;
+  /** the served repo's absolute path: what the app registers */
+  repoPath: string;
   /** the t36 seed tasks (client/harness/t36_seeds.py), as t-N ids */
   tasks: { cited: string; citing: string; citingChild: string; landing: string };
 };

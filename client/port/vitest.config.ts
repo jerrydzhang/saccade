@@ -10,7 +10,10 @@
 //   sandbox; only scenarios tagged native or multi-window run there
 //   (the recipe passes the tag filter).
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { defineConfig, mergeConfig } from "vitest/config";
+import type { Plugin } from "vite";
 import { playwright } from "@vitest/browser-playwright";
 import viteConfig from "./vite.config.ts";
 import { freePort } from "./tests/scenarios/kit/tracker.ts";
@@ -63,12 +66,45 @@ function webkitEnv(): Record<string, string> {
   return env;
 }
 
+// The lane's declaration reader: the browser lane's readFile ask is
+// answered here - any request whose path ends /workbench.toml is
+// served the seeded repository's declaration file. That is the same
+// test-only trust the host reader carries, never human functionality;
+// the lane's pages are the only callers (kit/lane-asks.ts). The
+// seeded repository is named when the globalSetup starts the tracker
+// (kit/tracker-setup.ts, SAC_PORT_SUITE_REPO); the middleware reads
+// it lazily, since the config loads before the setup runs.
+const laneDeclarationReader = (): Plugin => ({
+  name: "lane-declaration-reader",
+  configureServer(server) {
+    server.middlewares.use((request, response, next) => {
+      const path = (request.url ?? "").split("?")[0]!;
+      if (!path.endsWith("/workbench.toml")) return next();
+      const repo = process.env.SAC_PORT_SUITE_REPO ?? "";
+      if (repo.length === 0) {
+        response.statusCode = 503;
+        response.end("the lane has no seeded repository");
+        return;
+      }
+      try {
+        const body = readFileSync(join(repo, "workbench.toml"));
+        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.end(body);
+      } catch {
+        response.statusCode = 404;
+        response.end("the seeded repository carries no declaration file");
+      }
+    });
+  },
+});
+
 export default mergeConfig(
   viteConfig,
   defineConfig({
     // the loopback literal, never the name: the session lane's sandbox
     // has no /etc/hosts, so "localhost" does not resolve there
     server: { host: "127.0.0.1" },
+    plugins: [laneDeclarationReader()],
     // the lane's suite mode binds the client tree read-only and names a
     // cache under its run root (client/harness/suite_payload.py)
     ...(process.env.SUITE_CACHE_DIR ? { cacheDir: process.env.SUITE_CACHE_DIR } : {}),

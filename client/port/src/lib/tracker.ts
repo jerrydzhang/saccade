@@ -1,168 +1,28 @@
-// Tracker-named boards: "<tracker>/t-N[@rK]" served by that tracker's
-// own read surface, /view/v1 (t-14 "Pages", t-24@r2). The tracker is
-// named by its repository directory; its server is the host this device
-// reached it at, remembered per tracker (t-34@r6 change 5: no settings
-// field - a location typed as host:port/tracker/... reaches a tracker
-// and registers it). The viewer reads /view/v1 only - the
-// root page is the version contract, the board page resolves a bare
-// location to its pinned revision and names the task, and the authored
-// board.yaml and its figures ride the file family at that pinned
-// revision, so one open's text and figures are one immutable tree.
-// /api/v1 stays sac's own API; nothing here touches it.
+// Tracker-named boards: "<project>/t-N[@rK]" served by that project's
+// tracker, reached through the one core module: the project's
+// declaration declares its tracker's loopback port, and every page and
+// file route here rides the module's request on the project's machine.
+// The project is the one the device registered by its repository path;
+// the declaration at that path names it. The viewer reads /view/v1
+// only - the root page is the version contract, the board page
+// resolves a bare location to its pinned revision and names the task,
+// and the authored board.yaml and its figures ride the file family at
+// that pinned revision, so one open's text and figures are one
+// immutable tree.
 
 import { SUPPORTED_GRAMMAR_VERSIONS } from "./board/decode.ts";
 import type { BoardSource, LoadedAsset, LoadedText, Location } from "./sources.ts";
 import { SourceUnavailableError } from "./board/errors.ts";
-import { baseFromHost, instrumentPath, parseTaskSpec } from "./location.ts";
-import { viewUrl } from "./location.ts";
+import { instrumentPath, parseTaskSpec, viewRoute } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
 import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
+import { theAsks, theProjects } from "./asks.ts";
 
-// The tracker's identity facts, from the root page (t-24@r14, r16).
+// The tracker's identity facts, from the root page.
 export type TrackerIdentity = {
   machineId: string | null;
   repoPath: string | null;
 };
-
-// Trackers this device has reached, by name: the host each answered at
-// (t-34@r6 change 5). The first tracker reached is the home: it holds
-// this device's window store. The former single setting (the server
-// host, one per device) still answers for any tracker not yet
-// registered, so a device set up before the registry keeps working.
-const TRACKERS_KEY = "saccade.trackers";
-const HOME_KEY = "saccade.trackers.home";
-const LEGACY_SERVER_KEY = "saccade.server.host";
-
-function readRegistry(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(TRACKERS_KEY);
-    const parsed: unknown = raw === null ? {} : JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: Record<string, string> = {};
-    for (const [name, host] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof host === "string" && host.trim().length > 0) out[name] = host;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-/** The legacy single server host, when a device set one before the
- * registry existed. */
-export function serverHost(): string | null {
-  try {
-    return localStorage.getItem(LEGACY_SERVER_KEY);
-  } catch {
-    return null;
-  }
-}
-
-/** Every tracker this device has reached, name to host. */
-export function knownTrackers(): Record<string, string> {
-  return readRegistry();
-}
-
-/** Remember the host a tracker was reached at; the first one becomes
- * the home. */
-export function registerTracker(name: string, host: string): void {
-  const registry = readRegistry();
-  registry[name] = host.trim();
-  try {
-    localStorage.setItem(TRACKERS_KEY, JSON.stringify(registry));
-    if (localStorage.getItem(HOME_KEY) === null) localStorage.setItem(HOME_KEY, name);
-  } catch {
-    // storage refused: the tracker stays reachable for this open only
-  }
-}
-
-/** Forget a tracker this device reached: it leaves the registry (and
- * so the control plane's rail) until its location is typed with the
- * host again. The tracker and its record are untouched. Any tracker
- * may go, the home and the last one too (the human, 2026-11-14): a
- * forgotten home hands the window store to the next tracker reached,
- * and windows bound this session keep their state until relaunch. */
-export function forgetTracker(name: string): "forgotten" | "unknown" {
-  const registry = readRegistry();
-  if (registry[name] === undefined) return "unknown";
-  const wasHome = homeTracker() === name;
-  delete registry[name];
-  try {
-    localStorage.setItem(TRACKERS_KEY, JSON.stringify(registry));
-    if (wasHome) {
-      const next = Object.keys(registry)[0];
-      if (next === undefined) localStorage.removeItem(HOME_KEY);
-      else localStorage.setItem(HOME_KEY, next);
-    }
-  } catch {
-    return "unknown";
-  }
-  return "forgotten";
-}
-
-/** The home tracker's name: the first tracker this device reached. */
-export function homeTracker(): string | null {
-  try {
-    const home = localStorage.getItem(HOME_KEY);
-    if (home !== null && readRegistry()[home] !== undefined) return home;
-  } catch {
-    // fall through
-  }
-  const names = Object.keys(readRegistry());
-  return names[0] ?? null;
-}
-
-function baseOrRefusal(host: string, what: string): URL {
-  const base = baseFromHost(host);
-  if (base === null) {
-    throw new SourceUnavailableError("lane-unavailable", `${what} '${host}' is not a host or URL`);
-  }
-  return base;
-}
-
-/** The server a named tracker answers at: its registered host, else the
- * legacy setting, else a refusal naming the typed form that reaches it. */
-export function trackerBase(name: string): URL {
-  const host = readRegistry()[name] ?? serverHost();
-  if (!host || host.trim().length === 0) {
-    throw new SourceUnavailableError(
-      "lane-unavailable",
-      `tracker '${name}' has not been reached from this device; add it on the plane (a, then host:8811/${name}) or type one of its boards once with the host, e.g. host:8811/${name}/t-1`,
-    );
-  }
-  return baseOrRefusal(host, `the host for tracker '${name}'`);
-}
-
-/** The home tracker's server: where this device's window store lives. */
-export function serverBase(): URL {
-  const home = homeTracker();
-  if (home !== null) return trackerBase(home);
-  const host = serverHost();
-  if (!host || host.trim().length === 0) {
-    throw new SourceUnavailableError(
-      "lane-unavailable",
-      "no tracker reached yet; add one on the plane (a, then host:8811/saccade) or type a board location with its host once, e.g. host:8811/saccade/t-1",
-    );
-  }
-  return baseOrRefusal(host, "the tracker server");
-}
-
-/** True when the tracker host is this machine's loopback: the hub, where
- * the local core reads the tracker's own files (t-24@r12). */
-/** The hub proof, per t-24@r14: the root page's machine id equals this
- * device's own machine id. Never address shape; null never equals
- * null; an unavailable id on either side means not the hub. */
-export async function trackerIsThisMachine(
-  ownMachineId: () => Promise<string | null>,
-  fetcher: Fetcher = (url) => fetch(url),
-): Promise<boolean> {
-  const own = (await ownMachineId()) ?? "";
-  if (own.length === 0) return false;
-  const root = await fetchPage(fetcher, viewUrl(serverBase(), ""));
-  const trackerId = root.machineId ?? "";
-  if (trackerId.length === 0) return false;
-  return trackerId === own;
-}
 
 type Contract = {
   tracker: string | null;
@@ -171,8 +31,8 @@ type Contract = {
   viewMajors: number[];
 };
 
-/** The task facts a window has seen, for the picker (t-24@r11: the
- * picker enumerates what the window can know). */
+/** The task facts a window has seen, for the picker (the picker
+ * enumerates what the window can know). */
 export type TaskFact = { spec: string; name: string | null };
 
 export class TrackerSource implements BoardSource {
@@ -184,15 +44,38 @@ export class TrackerSource implements BoardSource {
   readonly seenTasks: TaskFact[] = [];
 
   readonly tracker: string;
-  private readonly fetcher: Fetcher;
 
-  constructor(tracker: string, fetcher: Fetcher = (url) => fetch(url)) {
+  constructor(tracker: string) {
     this.tracker = tracker;
-    this.fetcher = fetcher;
   }
 
   get machine(): string {
     return `tracker:${this.tracker}`;
+  }
+
+  /** The route fetcher: the declared loopback address of the
+   * registered project naming itself as this source's tracker, asked
+   * through the one module on the project's machine. Resolved per
+   * call - the registry's answer is read fresh, so a register or a
+   * forget takes hold without a stale wire. */
+  private async wire(): Promise<Fetcher> {
+    const project = await theProjects().projectByName(this.tracker);
+    if (project === null) {
+      throw new SourceUnavailableError(
+        "lane-unavailable",
+        `no registered project names itself '${this.tracker}'; add it on the plane (a, then machine:/path/to/repository)`,
+      );
+    }
+    const port = project.declaration.port;
+    if (port === null) {
+      throw new SourceUnavailableError(
+        "lane-unavailable",
+        `the project '${this.tracker}' declares no [tracker] port; its declaration names the project alone`,
+      );
+    }
+    const machine = project.machine;
+    const address = { host: "127.0.0.1", port };
+    return async (route) => new Response(await theAsks().requestLocal(machine, address, route));
   }
 
   /** The version contract, checked before any board read: the server
@@ -202,8 +85,7 @@ export class TrackerSource implements BoardSource {
   private async checkContract(): Promise<Contract> {
     if (this.contract !== null) return this.contract;
     const load = (async () => {
-      const base = trackerBase(this.tracker);
-      const root = await fetchPage(this.fetcher, viewUrl(base, ""));
+      const root = await fetchPage(await this.wire(), viewRoute(""));
       if (root.tracker !== null && root.tracker !== undefined && root.tracker !== this.tracker) {
         throw new SourceUnavailableError(
           "machine-unknown",
@@ -257,13 +139,11 @@ export class TrackerSource implements BoardSource {
   }
 
   /** The board page at a pinned revision: the open's resolver and the
-   * task-facts source. Cached per revision; a failure clears. */
-  /** The board page at a pinned revision: the open's resolver and the
    * task-facts source. Cached per PINNED revision only - an immutable
    * revision's page never moves; a bare location never touches the
    * cache, so a later open re-resolves instead of replaying an old
    * current. A failure clears its entry. */
-  private boardPage(pinned: string): Promise<ViewPage> {
+  private boardPage(fetcher: Fetcher, pinned: string): Promise<ViewPage> {
     const spec = parseTaskSpec(pinned);
     const cacheable = spec !== null && spec.revision !== null;
     if (cacheable) {
@@ -272,8 +152,7 @@ export class TrackerSource implements BoardSource {
     }
     const load = (async () => {
       await this.checkContract();
-      const base = trackerBase(this.tracker);
-      const page = await fetchPage(this.fetcher, viewUrl(base, pinned));
+      const page = await fetchPage(fetcher, viewRoute(pinned));
       if (page.kind !== "document") {
         throw new SourceUnavailableError(
           "core-protocol",
@@ -296,7 +175,10 @@ export class TrackerSource implements BoardSource {
    * a bare location resolves through the board page. The page rides
    * along only for a bare resolution; a pinned read never blocks on
    * one - its facts are learned in the background. */
-  private async resolvePinned(path: string): Promise<{ pinned: string; page: ViewPage | null }> {
+  private async resolvePinned(
+    fetcher: Fetcher,
+    path: string,
+  ): Promise<{ pinned: string; page: ViewPage | null }> {
     const spec = parseTaskSpec(path);
     if (!spec) {
       throw new SourceUnavailableError(
@@ -308,13 +190,13 @@ export class TrackerSource implements BoardSource {
       const pinned = path.trim();
       // the facts a pinned open contributes to the picker arrive
       // out of band; the read itself rides the pinned file routes
-      void this.boardPage(pinned).catch(() => {});
+      void this.boardPage(fetcher, pinned).catch(() => {});
       return { pinned, page: null };
     }
     // a bare location re-resolves through the board page on EVERY
     // open: a later open never replays the revision an earlier one
     // answered
-    const page = await this.boardPage(`t-${spec.task}`);
+    const page = await this.boardPage(fetcher, `t-${spec.task}`);
     return { pinned: page.location, page };
   }
 
@@ -337,8 +219,7 @@ export class TrackerSource implements BoardSource {
    * every open, and these are the barest of them all). */
   async instrumentPage(path: "tasks" | "agents"): Promise<ViewPage> {
     await this.checkContract();
-    const base = trackerBase(this.tracker);
-    const page = await fetchPage(this.fetcher, viewUrl(base, path));
+    const page = await fetchPage(await this.wire(), viewRoute(path));
     if (page.kind !== "document" || page.location !== path) {
       throw new SourceUnavailableError(
         "core-protocol",
@@ -357,7 +238,7 @@ export class TrackerSource implements BoardSource {
 
   /** The tracker's identity facts (its root page, read once per
    * contract): the rail places an agent no tracker registered by the
-   * repo path (t-55). */
+   * repo path. */
   async identity(): Promise<TrackerIdentity> {
     return (await this.checkContract()).identity;
   }
@@ -369,9 +250,9 @@ export class TrackerSource implements BoardSource {
         `'${location.path}' is an instrument page, not board text; the instruments read it as a view document`,
       );
     }
-    const { pinned, page } = await this.resolvePinned(location.path);
-    const base = trackerBase(this.tracker);
-    const bytes = await fetchFileBytes(this.fetcher, viewUrl(base, `${pinned}/file/board.yaml`));
+    const fetcher = await this.wire();
+    const { pinned, page } = await this.resolvePinned(fetcher, location.path);
+    const bytes = await fetchFileBytes(fetcher, viewRoute(`${pinned}/file/board.yaml`));
     const text = new TextDecoder().decode(bytes);
     // a bare location resolved: the caller renders the revision that
     // answered, and its figures read the same immutable revision
@@ -384,36 +265,31 @@ export class TrackerSource implements BoardSource {
    * guard compares against it (a stale window never overwrites a
    * revision that landed after its load). */
   async currentBoardPage(task: number): Promise<ViewPage> {
-    return this.boardPage(`t-${task}`);
+    return this.boardPage(await this.wire(), `t-${task}`);
   }
 
   /** Raw bytes of a board-tree file at a pinned revision: the
    * publish act re-posts the figures unchanged. */
   async loadAssetBytes(pinned: string, path: string): Promise<Uint8Array> {
     await this.checkContract();
-    const base = trackerBase(this.tracker);
-    return fetchFileBytes(this.fetcher, viewUrl(base, `${pinned}/file/${path}`));
+    return fetchFileBytes(await this.wire(), viewRoute(`${pinned}/file/${path}`));
   }
 
   /** The cited components at a select path: the incorporation expand's
    * only source - expanding shows just the cited parts. */
   async citedComponents(pinned: string, selectPath: string): Promise<ViewPage> {
     await this.checkContract();
-    const base = trackerBase(this.tracker);
-    return fetchPage(this.fetcher, viewUrl(base, `${pinned}/content${selectPath}`));
+    return fetchPage(await this.wire(), viewRoute(`${pinned}/content${selectPath}`));
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const { pinned } = await this.resolvePinned(location.path);
+    const fetcher = await this.wire();
+    const { pinned } = await this.resolvePinned(fetcher, location.path);
     const resolved = resolveRelative("", relative);
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    const base = trackerBase(this.tracker);
-    const bytes = await fetchFileBytes(
-      this.fetcher,
-      viewUrl(base, `${pinned}/file/${resolved.joined}`),
-    );
+    const bytes = await fetchFileBytes(fetcher, viewRoute(`${pinned}/file/${resolved.joined}`));
     return { bytes, path: relative };
   }
 
@@ -428,17 +304,15 @@ export class TrackerSource implements BoardSource {
       );
     }
     await this.checkContract();
-    const base = trackerBase(this.tracker);
-    return fetchPage(this.fetcher, viewUrl(base, `${path.trim()}/history`));
+    return fetchPage(await this.wire(), viewRoute(`${path.trim()}/history`));
   }
 
-  /** The component changes between two revisions of a task (t-57):
-   * the diff page's `changes`, the alignment history mode shows. A
-   * tracker that serves none predates them: refused, never guessed. */
+  /** The component changes between two revisions of a task: the diff
+   * page's `changes`, the alignment history mode shows. A tracker that
+   * serves none predates them: refused, never guessed. */
   async revisionChanges(task: number, from: number, to: number): Promise<PageChange[]> {
     await this.checkContract();
-    const base = trackerBase(this.tracker);
-    const page = await fetchPage(this.fetcher, viewUrl(base, `t-${task}@r${from}..r${to}/diff`));
+    const page = await fetchPage(await this.wire(), viewRoute(`t-${task}@r${from}..r${to}/diff`));
     if (page.changes === undefined) {
       throw new SourceUnavailableError(
         "core-protocol",
@@ -458,16 +332,15 @@ export class TrackerSource implements BoardSource {
         `'${pinned}' is not a pinned task spec (t-N@rK)`,
       );
     }
-    const base = trackerBase(this.tracker);
-    const bytes = await fetchFileBytes(this.fetcher, viewUrl(base, `${pinned}/file/board.yaml`));
+    const bytes = await fetchFileBytes(await this.wire(), viewRoute(`${pinned}/file/board.yaml`));
     return new TextDecoder().decode(bytes);
   }
 
   /** Re-read the current revision's board text right now: the
-   * publish guard compares against it (t-17: a stale window never
+   * publish guard compares against it (a stale window never
    * overwrites a revision that landed after its load). */
   async currentBoardText(task: number): Promise<{ pinned: string; text: string }> {
-    const page = await this.boardPage(`t-${task}`);
+    const page = await this.boardPage(await this.wire(), `t-${task}`);
     const pinned = page.location;
     const text = await this.boardTextAt(pinned);
     return { pinned, text };

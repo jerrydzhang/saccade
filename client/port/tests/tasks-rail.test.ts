@@ -151,7 +151,9 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
 import { vi, onTestFinished } from "vitest";
 import { agentPart, projectPart, railTargetsOf } from "../src/lib/tasks/rail.ts";
 import { taskRowActs, tasksMenuLabel } from "../src/lib/tasks/menu.ts";
-import { forgetTracker, homeTracker, knownTrackers, registerTracker } from "../src/lib/tracker.ts";
+import { theProjects } from "../src/lib/asks.ts";
+import { directAsks } from "../src/lib/asks.ts";
+import { parseRegisteredPath } from "../src/lib/projects.ts";
 
 function railWithAgent() {
   const words: WordsSnapshot = { generation: 1, connected: true, words: { t12: { state: "working", at: 1 } } };
@@ -162,40 +164,37 @@ function railWithAgent() {
     ],
     words,
     "saccade",
-    "pyrimel",
   );
 }
 
-test("the rail's targets: each project, then its agents, carrying home and shown", () => {
+test("the rail's targets: each project, then its agents, carrying the shown mark", () => {
   const targets = railTargetsOf(railWithAgent());
   assert.deepEqual(
-    targets.map((target) => [target.part, target.kind, target.text, target.task, target.home, target.current, target.within]),
+    targets.map((target) => [target.part, target.kind, target.text, target.task, target.current, target.within]),
     [
-      [projectPart("pyrimel"), "project", "pyrimel", null, true, false, undefined],
-      [projectPart("saccade"), "project", "saccade", null, false, true, undefined],
+      [projectPart("pyrimel"), "project", "pyrimel", null, false, undefined],
+      [projectPart("saccade"), "project", "saccade", null, true, undefined],
       // an agent sits inside its project (t-63: its label is nested)
-      [agentPart("saccade", "i-3"), "agent", "theory (i-3) t-2", "t-2", false, true, projectPart("saccade")],
+      [agentPart("saccade", "i-3"), "agent", "theory (i-3) t-2", "t-2", true, projectPart("saccade")],
     ],
   );
 });
 
-test("a project's acts: f shows it on this plane first; a adds a project; d forgets any project, the home and the shown one too", () => {
+test("a project's acts: f shows it on this plane first; a adds a project; d forgets any project, the shown one too", () => {
   const forgotten: string[] = [];
   const opened: [string, string | null | undefined][] = [];
   let adds = 0;
   const elsewhere: string[] = [];
-  const target = (name: string, home: boolean, current: boolean) => ({
+  const target = (name: string, current: boolean) => ({
     part: projectPart(name),
     kind: "project" as const,
     text: name,
     project: name,
     task: null,
-    home,
     current,
-    host: name === "jernerics" ? "localhost:8814" : null,
     address: null,
   });
-  const rail = [target("jernerics", false, false), target("pyrimel", true, false), target("saccade", false, true)];
+  const rail = [target("jernerics", false), target("pyrimel", false), target("saccade", true)];
   const deps = {
     machine: () => "tracker:saccade",
     rowLink: () => null,
@@ -220,9 +219,9 @@ test("a project's acts: f shows it on this plane first; a adds a project; d forg
   assert.deepEqual(opened, [["plane", "jernerics"]]);
   assert.equal(adds, 1, "a opens the add field and opens nothing");
   assert.deepEqual(forgotten, ["jernerics"]);
-  // the heading names the host it was reached at
-  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }, rail[0]), "jernerics (localhost:8814)");
-  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }, rail[1]), "pyrimel");
+  // the heading is the target's own label
+  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }), "jernerics");
+  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }), "pyrimel");
 });
 
 test("an agent's acts are its first task's, composed against its own project", () => {
@@ -244,7 +243,7 @@ test("an agent's acts are its first task's, composed against its own project", (
   assert.deepEqual(elsewhere, [["saccade/t-2", "link"]]);
 });
 
-test("forgetting drops a tracker from the registry; a forgotten home hands over to the next, the last leaves none", () => {
+test("registering reads the declaration through the module; the store keeps paths alone; forgetting drops the path", async () => {
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
@@ -254,19 +253,69 @@ test("forgetting drops a tracker from the registry; a forgotten home hands over 
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
-  registerTracker("saccade", "localhost:8811");
-  registerTracker("pyrimel", "localhost:8813");
-  assert.equal(homeTracker(), "saccade");
-  assert.equal(forgetTracker("nobody"), "unknown");
-  assert.equal(forgetTracker("saccade"), "forgotten");
-  assert.deepEqual(Object.keys(knownTrackers()), ["pyrimel"]);
-  assert.equal(homeTracker(), "pyrimel");
-  assert.equal(forgetTracker("pyrimel"), "forgotten");
-  assert.deepEqual(knownTrackers(), {});
-  assert.equal(homeTracker(), null);
-  // the next tracker reached becomes the home
-  registerTracker("jernerics", "localhost:8814");
-  assert.equal(homeTracker(), "jernerics");
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "pyrimel"\n\n[tracker]\nport = 8813\n',
+      runCommand: async () => {
+        throw new Error("no commands here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const projects = theProjects();
+  const registered = parseRegisteredPath("box:/srv/pyrimel");
+  assert.ok(registered !== null);
+  await projects.register(registered);
+  assert.deepEqual(projects.registeredPaths(), [{ machine: "box", path: "/srv/pyrimel" }]);
+  assert.deepEqual(JSON.parse(store.get("saccade.projects") ?? "[]"), ["box:/srv/pyrimel"], "the device store keeps the registered paths alone");
+  const named = await projects.projectByName("pyrimel");
+  assert.equal(named?.declaration.port, 8813);
+  // registering again is a no-op, not a duplicate
+  await projects.register(registered);
+  assert.deepEqual(projects.registeredPaths(), [{ machine: "box", path: "/srv/pyrimel" }]);
+  projects.forget(registered);
+  assert.deepEqual(projects.registeredPaths(), []);
+  assert.equal(store.get("saccade.projects"), "[]");
+});
+
+test("a declaration with no tracker section registers and lists; one that names nothing does not", async () => {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => `name = "bare"\n`,
+      runCommand: async () => {
+        throw new Error("no commands here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const projects = theProjects();
+  const registered = parseRegisteredPath("box:/srv/bare");
+  assert.ok(registered !== null);
+  const declaration = await projects.register(registered);
+  assert.deepEqual(declaration, { name: "bare", port: null }, "a declaration without a tracker section names the project alone");
+  const listed = await projects.projects();
+  assert.deepEqual(listed.map((project) => project.declaration.name), ["bare"]);
+  assert.deepEqual(await projects.projectByName("bare"), listed[0]);
+  assert.equal(await projects.projectByName("nope"), null);
 });
 
 test("a federating core's machine-first addresses join the tracker's bare ones; two machines with one address join neither", () => {

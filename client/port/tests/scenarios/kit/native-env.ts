@@ -2,8 +2,11 @@
 // globalSetup can refuse before any tracker starts (kit/tracker-setup.ts).
 
 // the session lane's own env names (client/harness/entry.py
-// session_env); WAYLAND_DISPLAY names the lane's private compositor
-const REQUIRED = ["TAURI_DRIVER_BIN", "WEBKIT_DRIVER_BIN", "APP_BIN", "WAYLAND_DISPLAY", "SAC_APP_SESSION_TOKEN"] as const;
+// session_env); WAYLAND_DISPLAY names the lane's private compositor;
+// SAC_APP_HERDR_MACHINE names the core the lane runs (the registered
+// paths' machine - the app's own ask face reaches the tracker through
+// it)
+const REQUIRED = ["TAURI_DRIVER_BIN", "WEBKIT_DRIVER_BIN", "APP_BIN", "WAYLAND_DISPLAY", "SAC_APP_SESSION_TOKEN", "SAC_APP_HERDR_MACHINE"] as const;
 type Pinned = Record<(typeof REQUIRED)[number], string>;
 
 /** Refuse outside the session lane's sandbox, naming what is missing
