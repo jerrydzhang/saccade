@@ -109,8 +109,9 @@ Every module is a test-infrastructure module; each line says why it exists.
   a refusal for machine assets (its boards ride the fixture source). It
   also seeds the device store with the one
   registered path (the seeded repository's real path), so scenarios register
-  nothing by typing; the control-plane scenario drives the real add field
-  itself (Space a, machine:/path), and clears the seed for its
+  nothing by typing; the control-plane scenario drives the real add
+  field itself (Space a, machine:/path - the machine read from the
+  seeded store in the native lane), and clears the seed for its
   empty-registry case.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.

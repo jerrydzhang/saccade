@@ -23,6 +23,15 @@ export type InstrumentDefinition<
   A extends AnchorData,
 > = Readonly<{
   kind: string;
+  /** The help column's title: the surface's own keys. */
+  title: string;
+  /** The locations this instrument shows (the frame reads the
+   * registered set; the frame never names an instrument). */
+  claims(address: import("../contracts/places.ts").Address): boolean;
+  /** The location form this instrument offers for a registered
+   * project's name (the task list claims `name/tasks`), or null when
+   * it offers none. */
+  projectView(project: string): string | null;
   Component: Component<InstrumentProps<T, UI>>;
-  connect: (buffer: BufferAccess<T>) => InstrumentAttachment<UI, A>;
+  connect: (buffer: BufferAccess<T>, services: import("../instruments/registry.ts").WindowServices) => InstrumentAttachment<UI, A>;
 }>;

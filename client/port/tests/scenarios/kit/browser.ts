@@ -79,6 +79,12 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
       if (!door) throw new Error("the port readout door is gone");
       return JSON.parse(JSON.stringify(door.readout())) as PortObservation;
     },
+    async seededPath() {
+      const raw = portWindow().localStorage.getItem("saccade.projects");
+      const first = JSON.parse(raw ?? "[]")[0];
+      if (typeof first !== "string") throw new Error("the lane's seeded path is missing");
+      return first;
+    },
     async press(...keys) {
       for (const key of keys) await userEvent.keyboard(keySyntax(key));
     },

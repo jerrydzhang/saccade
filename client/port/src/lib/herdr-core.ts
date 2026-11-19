@@ -47,8 +47,19 @@ function bridgeRefusal(error: unknown): SourceUnavailableError {
 /** The asks answered through the native shell's bridge - the local
  * core. Only tests pass the invoke. The machine named "host" is the
  * shell's own test-only file reader: it rides no core, so the bridge's
- * `on` stays unset for it. */
-export function coreAsks(invoke: TauriInvoke = tauriInvoke()): MachineAsks {
+ * `on` stays unset for it. The window's one bridge-backed instance is
+ * held here: the registry holds its asks, and a fresh instance every
+ * ask would defeat the registry's per-session caches. Tests pass
+ * their own invoke and get their own instance. */
+let bridgeAsks: MachineAsks | null = null;
+
+export function coreAsks(invoke?: TauriInvoke): MachineAsks {
+  if (invoke !== undefined) return buildCoreAsks(invoke);
+  if (bridgeAsks === null) bridgeAsks = buildCoreAsks(tauriInvoke());
+  return bridgeAsks;
+}
+
+function buildCoreAsks(invoke: TauriInvoke): MachineAsks {
   const on = (machine: Machine): Record<string, unknown> =>
     machine === "host" ? {} : { on: machine };
   return {

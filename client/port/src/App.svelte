@@ -35,7 +35,12 @@ from the registry's reviewed erasure boundary. -->
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
   let inspection = $state<import("./lib/figures/inspection.ts").InspectionState | null>(null);
-  let railState = $state<FrameRailView>({ visible: false, add: { open: false, value: "", problem: null }, pane: null });
+  let railState = $state<FrameRailView>({
+    visible: false,
+    registered: false,
+    add: { open: false, value: "", problem: null },
+    pane: null,
+  });
   let rail = $state<Rail>({ projects: [], unregistered: [], herdr: null });
   let railSelectLabels = $state<readonly { part: string; label: string; nested?: boolean }[]>([]);
   let railSelectTyped = $state("");
@@ -249,7 +254,18 @@ from the registry's reviewed erasure boundary. -->
       {/if}
       <div class="port-frame-body">
         {#if frame !== null && frame.kind === "alive"}
-          {#if frame.content.kind === "available"}
+          {#if frame.content.kind === "empty"}
+            <!-- the empty window: the frame's surface, no instrument
+            involved - three lines and nothing else; the third appears
+            with the registry's state -->
+            <div class="port-empty" data-port-control="empty-surface" role="document">
+              <p class="port-empty-line" data-port-control="empty-open">Space Space open something</p>
+              <p class="port-empty-line" data-port-control="empty-projects">Space r show projects</p>
+              {#if !railState.registered}
+                <p class="port-empty-line" data-port-control="empty-register">Space a register a project</p>
+              {/if}
+            </div>
+          {:else if frame.content.kind === "available"}
             {@const pair = frame.content.value}
             {@const Component = pair.Component}
             <Component {...pair.props} />

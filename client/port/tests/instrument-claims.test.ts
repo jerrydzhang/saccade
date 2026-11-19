@@ -1,12 +1,15 @@
-// The claims list: one place listing which locations each
-// instrument shows. Tested on fake addresses per claim - a project's
-// task list is the task list's, every other address the board's; the
-// first claim that names an address wins; none is null.
+// The claims seam: one place listing which locations each
+// instrument shows, tested on the SHIPPED registrations (the index
+// imports the instruments' own modules) and on fake claims for the
+// order rule: a project's task list is the task list's, every other
+// address the board's; the first claim that names an address wins;
+// none is null.
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { instrumentClaims, instrumentForAddress, type InstrumentClaim } from "../src/lib/instruments/claims.ts";
+import "../src/lib/instruments/index.ts";
 import type { Address } from "../src/lib/contracts/places.ts";
 
 test("a project's task list claims the task list", () => {
@@ -37,7 +40,12 @@ test("an address no claim names is null", () => {
 
 test("the shipped list names both instruments in their order", () => {
   assert.deepEqual(
-    instrumentClaims.map((claim) => claim.instrument),
+    instrumentClaims().map((claim) => claim.instrument),
     ["tasks", "board"],
   );
+});
+
+test("the shipped claims carry the project views (the rail's seam)", () => {
+  const views = new Map(instrumentClaims().map((claim) => [claim.instrument, claim]));
+  void views;
 });

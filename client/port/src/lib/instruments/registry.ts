@@ -50,6 +50,21 @@ function packComponent<P extends Record<string, unknown>>(
 }
 import type { WhichKeyView } from "../input/key-matcher.ts";
 
+export interface WindowServices {
+  /** The ONE open funnel (trail + anchored restore). */
+  open(spec: string, part?: string | null): void;
+  /** The elsewhere acts (o/i/w), present when the boot's binding
+   * facts have answered. */
+  elsewhere?(spec: string, act: "link" | "once" | "new"): void;
+  /** The copy observation: the payload recorded, the clipboard
+   * attempted. */
+  copy(text: string): void;
+  /** The frame rail's live view (the rows' agent marks read its
+   * words). */
+  railWords?(observer: (rail: unknown) => void): () => void;
+  [name: string]: unknown;
+}
+
 export type WindowEnvironment = Readonly<{
   /** The which-key suspension probe (the r110 tunable): while true,
    * the instrument's own matcher freezes its sequence expiry - the
@@ -59,6 +74,8 @@ export type WindowEnvironment = Readonly<{
   viewport: Viewport;
   diagnostics: BufferDiagnostics;
   buffers: BufferFactory;
+  /** The window's services door: the instruments read their slices. */
+  services: WindowServices;
   /** The frame's own targets (the rail's), presented beside the
    * publication's: one select session and one act menu span the
    * content and the rail. */
@@ -93,19 +110,51 @@ export interface RunningInstrument {
 }
 export interface RegisteredInstrument {
   readonly kind: string;
+  /** The help column's title. */
+  readonly title: string;
+  /** The locations this instrument shows (the claims seam). */
+  claims(address: import("../contracts/places.ts").Address): boolean;
+  /** The location form this instrument offers for a registered
+   * project's name, or null. */
+  projectView(project: string): string | null;
   construct(environment: WindowEnvironment): RunningInstrument;
 }
+
+/** The registered instruments, in registration order: the frame reads
+ * this list and never names one. */
+const registered: RegisteredInstrument[] = [];
+
+export function registeredInstruments(): readonly RegisteredInstrument[] {
+  return registered;
+}
+
+/** The instrument registered under a kind, or undefined. */
+export function instrumentOfKind(kind: string): RegisteredInstrument | undefined {
+  return registered.find((entry) => entry.kind === kind);
+}
+
+/** The registered instrument whose claims name the address, in
+ * registration order; null when none does. */
+export function instrumentForAddress(
+  address: import("../contracts/places.ts").Address,
+): RegisteredInstrument | null {
+  return registered.find((entry) => entry.claims(address)) ?? null;
+}
+
 export function registerInstrument<
   T extends object, UI extends object, A extends AnchorData,
 >(definition: InstrumentDefinition<T, UI, A>): RegisteredInstrument {
-  return {
+  const registration: RegisteredInstrument = {
     kind: definition.kind,
+    title: definition.title,
+    claims: definition.claims,
+    projectView: definition.projectView,
     construct(environment) {
       const built: BuiltBuffer<T, UI> = environment.buffers.create<T, UI, A>({
         context: environment.context,
         viewport: environment.viewport,
         diagnostics: environment.diagnostics,
-        connect: definition.connect,
+        connect: (buffer) => definition.connect(buffer, environment.services),
         ...(environment.expirySuspended !== undefined
           ? { expirySuspended: environment.expirySuspended }
           : {}),
@@ -139,6 +188,8 @@ export function registerInstrument<
 };
     },
   };
+  registered.push(registration);
+  return registration;
 }
 
 // App.ts: called only when the window needs a NEW buffer. Revisiting a

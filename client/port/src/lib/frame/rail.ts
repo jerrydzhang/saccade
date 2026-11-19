@@ -23,6 +23,7 @@ import {
 import { theProjects } from "../asks.ts";
 import { sourceFor, tauriInvoke } from "../sources.ts";
 import { formatLocation } from "../location.ts";
+import { projectViewFor } from "../instruments/claims.ts";
 import type { InputContext } from "../contracts/input.ts";
 import type { TargetDefinition } from "../contracts/buffer.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
@@ -235,7 +236,10 @@ export function createFrameRail(deps: FrameRailDeps) {
             action: {
               id: "rail.project.show",
               label: "show its tasks here",
-              run: () => deps.open(`${project}/tasks`),
+              run: () => {
+                const view = claimedView(project);
+                if (view !== null) deps.open(view);
+              },
             },
           },
           {
@@ -343,3 +347,9 @@ export function createFrameRail(deps: FrameRailDeps) {
 
 export type FrameRail = ReturnType<typeof createFrameRail>;
 export type { AddView };
+
+/** The location form the instruments claim for a project's name
+ * (the claims seam), as the open funnel takes it. */
+function claimedView(project: string): string | null {
+  return projectViewFor(project);
+}

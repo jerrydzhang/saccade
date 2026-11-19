@@ -156,6 +156,7 @@ import { parseRegisteredPath } from "../src/lib/projects.ts";
 import { sourceFor } from "../src/lib/sources.ts";
 import { TrackerSource } from "../src/lib/tracker.ts";
 import { createFrameRail } from "../src/lib/frame/rail.ts";
+import "../src/lib/instruments/index.ts";
 
 function railWithAgent() {
   const words: WordsSnapshot = { generation: 1, connected: true, words: { t12: { state: "working", at: 1 } } };

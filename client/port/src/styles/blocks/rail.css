@@ -187,3 +187,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* the empty window's surface: three lines, the frame's own - no
+ * instrument involved */
+.port-empty {
+  padding: 48px 24px;
+}
+.port-empty-line {
+  margin: 0 0 12px;
+  color: var(--port-color-ink);
+  font-size: 1rem;
+}

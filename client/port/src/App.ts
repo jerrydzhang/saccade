@@ -17,11 +17,14 @@
 
 import {
   constructInstrument,
-  registerInstrument,
+  registeredInstruments,
+  instrumentOfKind,
   type RenderPair,
   type RunningInstrument,
   type WindowEnvironment,
-} from "./lib/instruments/registry.ts";
+  type WindowServices,
+} from "./lib/instruments/index.ts";
+import { instrumentClaims, instrumentForAddress } from "./lib/instruments/claims.ts";
 import {
   createBufferFactory,
   createDiagnostics,
@@ -29,10 +32,7 @@ import {
   type SliceBufferViewport,
   type SliceDiagnostics,
 } from "./components/Buffer.ts";
-import { boardInstrument, parseOpenSpec } from "./instruments/board.ts";
-import type { BoardUI } from "./instruments/board.ts";
-import { tasksInstrument } from "./instruments/tasks.ts";
-import { instrumentClaims, instrumentForAddress } from "./lib/instruments/claims.ts";
+import { parseLocation } from "./lib/location.ts";
 import type { TargetPresentations } from "./components/Buffer.ts";
 import { formatLocation } from "./lib/location.ts";
 import { createFrameRail } from "./lib/frame/rail.ts";
@@ -82,17 +82,13 @@ import { createReadingLayoutHolder } from "./lib/board/reading-layout.ts";
  * neighborhood - the human tunes). */
 export const WHICH_KEY_DELAY_MS = 400;
 
-/** Help's column title for each surface's own keys. */
-const SURFACE_KEYS_TITLE: Readonly<Record<"board" | "tasks", string>> = {
-  board: "this board",
-  tasks: "the project's tasks",
-};
-
 /** The frame rail's live view: the pane renders from it. The pane
  * element registers itself (attachRailPane) so the rail targets'
- * bounds measure in it. */
+ * bounds measure in it; `registered` says whether any project is on
+ * the rail (the empty window's third line). */
 export interface FrameRailView {
   visible: boolean;
+  registered: boolean;
   add: Readonly<{ open: boolean; value: string; problem: string | null }>;
   pane: HTMLElement | null;
 }
@@ -218,7 +214,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         return machine.slice("tracker:".length);
       }
       if (typeof content?.asked === "string") {
-        const parsed = parseOpenSpec(content.asked);
+        const parsed = parseOpenSpecLocal(content.asked);
         if (parsed !== null && parsed.machine.startsWith("tracker:")) {
           return parsed.machine.slice("tracker:".length);
         }
@@ -268,7 +264,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   function railStateView(): FrameRailView {
-    return { visible: railVisible && !railCramped, add: frameRail.add.view(), pane: railPane };
+    return {
+      visible: railVisible && !railCramped,
+      registered: frameRail.railNow().projects.length > 0,
+      add: frameRail.add.view(),
+      pane: railPane,
+    };
   }
 
   // cramped: the window too narrow for a rail beside its content - the
@@ -306,83 +307,58 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (lease !== null) railLeaseOff = lease.subscribe(() => notifyRailState());
   }
 
-  // The window's instruments, one per claim: the claims list
-  // names them and each constructs at assembly through the registry's
-  // one path - the definitions carry their own window services, so
-  // the assembly never branches per instrument and never casts to an
-  // instrument's own type. Exactly one surface is ACTIVE - keys, the
-  // trail and the readout route to it; the others keep their state
-  // (the trail's return lands back on them).
+  // The window's services door, built once: the instruments read
+  // their slices through the registry (the assembly names none of
+  // them). Exactly one surface is ACTIVE - keys, the trail and the
+  // readout route to it; the others keep their state (the trail's
+  // return lands back on them).
   const instruments: Record<string, RunningInstrument> = {};
-  let activeSurface: string = "board";
+  let activeSurface: string = instrumentForAddress({ machine: "", path: "" }) ?? "";
 
   let runBoardHistoryToggle: () => void = () => {};
-  const registrations: Record<string, ReturnType<typeof registerInstrument>> = {
-    board: registerInstrument(
-      boardInstrument({
-        open: (spec, part) => openSpec(spec, part),
-        copy: (payload) => copyPayload(payload),
-        elsewhere: (spec, act) => {
-          openElsewhere(spec, act).catch((error: unknown) => {
-            diagnostics.report(
-              refusalContext,
-              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
-            );
-            note = `the open act failed: ${String(error).slice(0, 120)}`;
-            notifyStrip();
-          });
-        },
-        figureEnlarge: (part) => openInspection(part),
-        readingLayout: (change) => readingLayout.change(change),
-        onHistoryToggle: (toggle) => {
-          runBoardHistoryToggle = toggle;
-        },
-      }),
-    ),
-    tasks: registerInstrument(
-      tasksInstrument({
-        open: (spec) => openSpec(spec),
-        railWords: (observer) => frameRail.subscribeRail(observer),
-        elsewhere: (spec, act) => {
-          openElsewhere(spec, act).catch((error: unknown) => {
-            diagnostics.report(
-              refusalContext,
-              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
-            );
-            note = `the open act failed: ${String(error).slice(0, 120)}`;
-            notifyStrip();
-          });
-        },
-        copy: (text) => copyPayload(text),
-      }),
-    ),
+  const windowServices: WindowServices = {
+    open: (spec: string, part?: string | null) => openSpec(spec, part),
+    copy: (payload: string) => copyPayload(payload),
+    elsewhere: (spec: string, act: "link" | "once" | "new") => {
+      openElsewhere(spec, act).catch((error: unknown) => {
+        diagnostics.report(
+          refusalContext,
+          knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+        );
+        note = `the open act failed: ${String(error).slice(0, 120)}`;
+        notifyStrip();
+      });
+    },
+    railWords: (observer: (rail: never) => void) => frameRail.subscribeRail(observer as never),
+    figureEnlarge: (part: string) => openInspection(part),
+    readingLayout: (change: Parameters<typeof readingLayout.change>[0]) => readingLayout.change(change),
+    onHistoryToggle: (toggle: () => void) => {
+      runBoardHistoryToggle = toggle;
+    },
   };
 
-  function surfaceOfAddress(address: Address): PortObservation["surface"] | null {
-    // the claims list names the instrument; none claims nothing. The
-    // shipped claims name exactly the observation's two surfaces.
-    const named = instrumentForAddress(address);
-    return named === "board" || named === "tasks" ? named : null;
+  function surfaceOfAddress(address: Address): string | null {
+    // the claims list names the instrument; none claims nothing
+    return instrumentForAddress(address);
   }
 
-  /** The observation's surface union: the claims' instrument names
-   * are exactly its two values; anything else is a build waiting to
-   * extend the observation, not a surface. */
-  function surfaceName(name: string): PortObservation["surface"] {
-    if (name === "board" || name === "tasks") return name;
-    throw new Error(`no observation surface named ${name}`);
+  /** The parseable location form: the frame's own wrapper over the
+   * grammar (no instrument involvement). */
+  function parseOpenSpecLocal(spec: string): Address | null {
+    return parseLocation(spec);
   }
 
   function instrumentFor(surface: string): RunningInstrument {
     const existing = instruments[surface];
     if (existing !== undefined) return existing;
-    const registration = registrations[surface];
+    const registration = instrumentOfKind(surface);
     if (registration === undefined) throw new Error(`no instrument is registered as ${surface}`);
     const instrument = constructInstrument(registration, {
       context: { bufferId: `${windowId}-${surface}-1`, windowId },
       viewport,
       diagnostics,
       buffers,
+      services: windowServices,
       expirySuspended: () => whichKey !== null,
       frameTargets: {
         targets: () => (railVisible && !railCramped ? frameRail.targets() : []),
@@ -415,9 +391,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   // Every instrument constructs at assembly (one uniform path); the
-  // the board starts active (the window shows what it shows; a
-  // window with no location stays the empty window).
-  for (const claim of instrumentClaims) instrumentFor(claim.instrument);
+  // board starts active (the window shows what it shows; a window
+  // with no location stays the empty window).
+  for (const claim of instrumentClaims()) instrumentFor(claim.instrument);
 
   // The open-location picker: the window's open surface, submitting
   // through the ONE open funnel below (openSpec). Text-entry
@@ -479,7 +455,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (typeof shownTracker === "string" && shownTracker.startsWith("tracker:")) trackerMachine = shownTracker;
     for (const candidate of trackerMachine !== null ? [] : [openHere, ...recent]) {
       if (typeof candidate !== "string") continue;
-      const address = parseOpenSpec(candidate);
+      const address = parseOpenSpecLocal(candidate);
       if (address !== null && address.machine.startsWith("tracker:")) {
         trackerMachine = address.machine;
         break;
@@ -966,7 +942,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
   // every instrument's frames feed the window (the active one
   // forwards; the others are kept for their own return)
-  for (const claim of instrumentClaims) {
+  for (const claim of instrumentClaims()) {
     frameUnsubscribes[claim.instrument] = subscribeSurface(instrumentFor(claim.instrument), claim.instrument);
   }
 
@@ -1103,7 +1079,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // surface)
   const refusalContext = { bufferId: `${windowId}-board-1`, windowId };
   function openSpec(spec: string, part?: string | null): void {
-    const address = parseOpenSpec(spec);
+    const address = parseOpenSpecLocal(spec);
     if (address === null) {
       note = `not a location: ${JSON.stringify(spec)}`;
       diagnostics.report(refusalContext, knownIssue({ code: "asset-denied", message: note }));
@@ -1450,7 +1426,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     refreshFocusState();
     const metrics = viewport.metrics();
     return buildReadout({
-      surface: surfaceName(activeSurface),
+      surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
       bound,
@@ -1476,11 +1452,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
           : { part: inspection.part, zoom: inspection.zoom, x: inspection.x, y: inspection.y },
       follow:
         activeSurface === "board" && instruments.board !== undefined
-          ? ((instruments.board.presentation as BoardUI | null)?.followState() ?? null)
+          ? ((instruments.board.presentation as { followState?(): PortObservation["follow"] } | null)?.followState?.() ?? null)
           : null,
       presentation:
         activeSurface === "board" && instruments.board !== undefined
-          ? ((instruments.board.presentation as BoardUI | null)?.presentationStats() ?? null)
+          ? ((instruments.board.presentation as { presentationStats?(): PortObservation["presentation"] } | null)?.presentationStats?.() ?? null)
           : null,
       input: inputView(),
       reading: readingLayout.current(),
@@ -1531,10 +1507,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
       // help's columns by the context the keys come from: the
       // active instrument's table, then the window's
       const instrument = instruments[activeSurface];
+      const title = instrumentOfKind(activeSurface)?.title ?? activeSurface;
       return helpGroups([
-        ...(instrument !== undefined
-          ? [{ title: SURFACE_KEYS_TITLE[activeSurface as keyof typeof SURFACE_KEYS_TITLE], view: instrument.inputAll() }]
-          : []),
+        ...(instrument !== undefined ? [{ title, view: instrument.inputAll() }] : []),
         { title: "the window", view: windowHost.allView() },
       ]);
     },

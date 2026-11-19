@@ -73,10 +73,12 @@ export function shownPlaceOf(
 
 export type PortObservation = {
   app: Readonly<{ name: "saccade-app"; slice: number }>;
-  /** The surface whose buffer the window shows: the other surface's
+  /** The surface whose buffer the window shows: the registration
+   * kind of the instrument that shows it (a project's task list is
+   * "tasks", everything else the board's).
    * retained buffer keeps its state and re-activates on its trail
    * return. */
-  surface: "board" | "tasks";
+  surface: string;
   window: Readonly<{
     label: string | null;
     /** The live window carrying this window's link (the o act's
@@ -372,7 +374,7 @@ export function tasksViewOf(
 
 export function buildReadout(
   input: Readonly<{
-    surface: "board" | "tasks";
+    surface: string;
     windowLabel: string | null;
     link: string | null;
     bound: boolean;
