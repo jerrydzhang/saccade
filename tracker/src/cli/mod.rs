@@ -183,12 +183,12 @@ enum Cmd {
         within: Option<String>,
     },
     /// Serve the console and /api/v1 over HTTP (the repo's tracker by
-    /// default; --db names a different file). The port comes from
-    /// workbench.toml at the repository's root - the one source, so
-    /// the app reading the same file cannot disagree.
+    /// default; --db names a different file)
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
+        #[arg(long, default_value_t = 8811)]
+        port: u16,
         /// An extra origin whose browser pages may read this server
         /// (the served frontend's origin in the viewer lanes);
         /// repeatable, on top of the shells' own origins
@@ -813,11 +813,12 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     // serve starts a server, so it never resolves a client destination
     if let Cmd::Serve {
         bind,
+        port,
         allow_origin,
         allow_host,
     } = &cli.command
     {
-        return serve_door(cli, bind, allow_origin, allow_host);
+        return serve_door(cli, bind, port, allow_origin, allow_host);
     }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {

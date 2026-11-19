@@ -10,8 +10,8 @@ use saccade::store::{Context, Tier};
 use saccade::types::actor::ActorName;
 
 use crate::common::{
-    attempts_lines, declare_port, envelope, get_json, json_of, post_command, scratch_db, scrubbed,
-    spawn_serve, spawn_server, suite_state,
+    attempts_lines, envelope, get_json, json_of, post_command, scratch_db, scrubbed, spawn_serve,
+    spawn_server, suite_state,
 };
 
 /// The records face keeps degraded rows and refuses corruption.
@@ -204,7 +204,6 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         "user.name",
         "smoke",
     ]);
-    declare_port(&project, 0);
     let (mut serve, url) = spawn_serve(
         bin,
         scratch.db.as_path(),
@@ -550,7 +549,6 @@ fn board_size_refusals_name_the_total_and_the_request_limit() {
         .args(["init", "--quiet", project.to_str().unwrap()])
         .output()
         .expect("git init");
-    declare_port(&project, 0);
     let (mut serve, url) = spawn_serve(
         bin,
         scratch.db.as_path(),
@@ -733,7 +731,6 @@ fn board_wire_routes_hold_their_contracts() {
     let scratch = scratch_db("board-wire");
     let project = scratch.dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    declare_port(&project, 0);
     let (mut serve, url) = spawn_serve(
         bin,
         scratch.db.as_path(),

@@ -229,8 +229,9 @@ class SeedServer:
         self.log_path = root / "logs" / "seed-serve.log"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.process: subprocess.Popen[bytes] | None = None
-        # the port's one source: the declaration at the served repo's
-        # root, the same file a registering app reads
+        # the declaration the registering app reads, at the served
+        # repo's root; the port it names is the one the flag passes, so
+        # the file and the server cannot disagree
         (self.repo / "workbench.toml").write_text(
             f'name = "{SEED_REPO_NAME}"\n\n[tracker]\nport = {self.port}\n'
         )
@@ -248,7 +249,7 @@ class SeedServer:
             env = {**os.environ, "XDG_STATE_HOME": str(self.root / "state")}
             self.process = subprocess.Popen(
                 [self.sac_bin, "serve", "--db", str(self.db), "--repo", str(self.repo),
-                 "--bind", "127.0.0.1"],
+                 "--bind", "127.0.0.1", "--port", str(self.port)],
                 stdout=log, stderr=log,
                 env=env,
             )

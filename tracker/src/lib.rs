@@ -5,7 +5,6 @@ pub mod host;
 pub mod record;
 pub mod serve;
 pub mod telemetry;
-pub mod workbench;
 
 // the module re-exports stay: the wire, the CLI, and the tests
 // name these modules at the root, and the concerns are containers

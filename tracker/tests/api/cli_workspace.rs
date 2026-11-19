@@ -9,8 +9,8 @@ use saccade::api::AppState;
 use saccade::store::RecordId;
 
 use crate::common::{
-    bind_next_ask, bounded_sac, declare_port, fake_hc, fake_hc_spawn, fake_host, get_json, hc_argv,
-    json_of, post_json, pty_stdio, scratch_db, scratch_repo, scrubbed, sh, spawn_serve,
+    bind_next_ask, bounded_sac, fake_hc, fake_hc_spawn, fake_host, get_json, hc_argv, json_of,
+    post_json, pty_stdio, scratch_db, scratch_repo, scrubbed, sh, spawn_serve,
     spawn_serving_subprocess, stub_pi, suite_state,
 };
 
@@ -173,7 +173,6 @@ async fn identity_reads_the_scope_and_the_retired_words_refuse_at_the_parser() {
     // share one XDG_STATE_HOME
     let db2 = scratch_db("ws-cli-discovered");
     let (root2, _first2, _head2) = scratch_repo(db2.parent().unwrap());
-    declare_port(&root2, 0);
     let state_home2 = db2.parent().unwrap().join("state-home");
     let root2c = std::fs::canonicalize(&root2).unwrap();
     let tracker2 = state_home2
@@ -1645,7 +1644,6 @@ async fn the_list_reports_every_standing_workspace_through_the_cli_face() {
         ("FAKE_HC_TERMINALS", host_state.display().to_string()),
     ];
     let serve_envs: Vec<(&str, &str)> = host_envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    declare_port(&root, 0);
     let (_serve, url) = spawn_serve(
         bin,
         &db,
@@ -1945,7 +1943,6 @@ exec "$real" "$@"
         ),
     ];
     let serve_envs: Vec<(&str, &str)> = serve_envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    declare_port(&root, 0);
     let (serve, url) = spawn_serve(
         bin,
         &db,

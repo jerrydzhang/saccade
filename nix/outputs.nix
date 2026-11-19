@@ -443,7 +443,7 @@ in
                 env.SACCADE_HERDR = "/etc/profiles/per-user/jerry/bin/herdr-core";
                 exec = "${
                   saccade.packages.${system}.default
-                }/bin/sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0";
+                }/bin/sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811";
                 restart = {
                   on = "on_failure";
                   max = 10;

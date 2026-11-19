@@ -35,10 +35,13 @@ round 16 prototype's behaviour, built and tested scenario by scenario
 A project is registered by where its repository is
 (`port/src/lib/projects.ts`): the add field takes
 `machine:/path/to/repository`, the declaration file there
-(`workbench.toml`, the same file the tracker reads its port from)
-names the project, and the device keeps the registered paths alone -
+(`workbench.toml`) names the project and the loopback port its tracker
+answers on, and the device keeps the registered paths alone -
 the file is read again through the one core module whenever a fact is
-needed. A device that registered trackers by `host:port` under the
+needed. The tracker is started with its own `--port`; the file names
+the same port, and the app checks the tracker it reached serves the
+registered repository, refusing with both paths when it does not. A
+device that registered trackers by `host:port` under the
 old keys (`saccade.trackers`, `saccade.trackers.home`) re-registers
 its repositories by path; the old keys are never read and never
 cleaned, and no special case reads them.

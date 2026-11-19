@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --allow-origin --allow-host --history --within
+            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
                 set prev_value 1
                 continue
             case '-*'
@@ -81,7 +81,7 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --allow-origin --allow-host --history --within
+        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
             return 0
     end
     return 1

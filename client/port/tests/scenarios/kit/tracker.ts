@@ -67,11 +67,11 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   const log = join(root, "logs", "seed-serve.log");
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
-  // the port's one source: the declaration at the served repo's root,
-  // the same file a registering app reads
+  // the port's two places agree by construction here: the declaration
+  // the app reads and the flag the server starts with carry one port
   writeFileSync(join(repo, "workbench.toml"), `name = "${REPO_NAME}"\n\n[tracker]\nport = ${port}\n`);
   const out = openSync(log, "a");
-  const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1"];
+  const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1", "--port", String(port)];
   for (const origin of origins) args.push("--allow-origin", origin);
   // the state root is the run's own: `sac serve` opens the seeded
   // repo's board store under XDG_STATE_HOME, so the pin keeps it out

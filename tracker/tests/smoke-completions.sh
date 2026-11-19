@@ -65,14 +65,12 @@ export PATH
 git -C "$SMOKE" init -q repo
 git -C "$SMOKE/repo" -c user.email=smoke@example -c user.name=smoke commit -q --allow-empty -m smoke
 mkdir -p "$SMOKE/repo/realdir"
-printf 'name = "smoke"\n\n[tracker]\nport = 0\n' > "$SMOKE/repo/workbench.toml"
 mkdir -p "$XDG_DATA_HOME/fish/vendor_completions.d"
 
-# the server serves the scratch tracker; port 0 in the declaration
-# asks the kernel for a free port, and the resolved address is
-# published in the hint beside the tracker's database, exactly where
-# discovery looks
-"$BIN" serve --repo "$SMOKE/repo" --bind 127.0.0.1 >"$SMOKE/serve.log" 2>&1 &
+# the server serves the scratch tracker; port 0 asks the kernel for a
+# free port, and the resolved address is published in the hint beside
+# the tracker's database, exactly where discovery looks
+"$BIN" serve --repo "$SMOKE/repo" --bind 127.0.0.1 --port 0 >"$SMOKE/serve.log" 2>&1 &
 SERVE_PID=$!
 # SMOKE_KEEP=1 preserves the scratch dir for inspection
 trap 'kill $SERVE_PID 2>/dev/null; if [ "${SMOKE_KEEP:-}" != 1 ]; then rm -rf "$SMOKE"; fi' EXIT

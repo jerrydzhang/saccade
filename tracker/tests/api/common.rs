@@ -168,29 +168,6 @@ pub(crate) fn scratch_repo(dir: &std::path::Path) -> (std::path::PathBuf, String
     (root, first, head)
 }
 
-/// The declaration file a spawned serve reads its port from: the one
-/// source, written into the repo the serve names.
-pub(crate) fn declare_port(repo: &std::path::Path, port: u16) {
-    let name = repo.file_name().unwrap().to_string_lossy();
-    std::fs::write(
-        repo.join("workbench.toml"),
-        format!("name = \"{name}\"\n\n[tracker]\nport = {port}\n"),
-    )
-    .unwrap();
-}
-
-/// A fresh repository for a spawned serve, carrying its declaration:
-/// every spawn names its own repo, so the scratch repo builder's
-/// commits never collide across calls.
-pub(crate) fn serve_suite_repo() -> std::path::PathBuf {
-    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = suite_state().join(format!("serve-repo-{n}"));
-    let (repo, _, _) = scratch_repo(&dir);
-    declare_port(&repo, 0);
-    repo
-}
-
 pub(crate) fn sh(dir: &std::path::Path, args: &[&str]) -> String {
     let out = saccade::boards::git_command()
         .arg("-C")
@@ -622,7 +599,6 @@ pub(crate) fn spawn_serving_subprocess(
     extra_envs: &[(&str, &str)],
 ) -> (String, ServerProc) {
     let mut cmd = scrubbed(std::process::Command::new(bin));
-    declare_port(repo, 0);
     cmd.args([
         "--db",
         db.to_str().unwrap(),
@@ -631,6 +607,8 @@ pub(crate) fn spawn_serving_subprocess(
         "serve",
         "--bind",
         "127.0.0.1",
+        "--port",
+        "0",
     ])
     .env(
         "PATH",
@@ -806,16 +784,11 @@ pub(crate) fn spawn_serve(
     extra: &[&str],
     envs: &[(&str, &str)],
 ) -> (ServerProc, String) {
-    let repo = serve_suite_repo();
-    let mut cmd = scrubbed(std::process::Command::new(bin));
-    cmd.args(["serve", "--db"]).arg(db);
-    // a caller naming its own repository wins: the suite repo only
-    // backs the port's file for spawns that name none
-    if !extra.contains(&"--repo") {
-        cmd.arg("--repo").arg(&repo);
-    }
     let mut child = ServerProc(
-        cmd.args(extra)
+        scrubbed(std::process::Command::new(bin))
+            .args(["serve", "--port", "0", "--db"])
+            .arg(db)
+            .args(extra)
             .envs(envs.iter().copied())
             .env("XDG_STATE_HOME", suite_state())
             .current_dir(suite_cwd())
