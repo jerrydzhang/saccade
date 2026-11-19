@@ -3,8 +3,8 @@
 use serde_json::{Value, json};
 
 use crate::common::{
-    bind_next_ask, fake_hc, fake_host, get_json, json_of, post_json, scratch_db, scratch_repo,
-    scrubbed, sh, spawn_serve, spawn_serving_subprocess, stub_pi,
+    bind_next_ask, declare_port, fake_hc, fake_host, get_json, json_of, post_json, scratch_db,
+    scratch_repo, scrubbed, sh, spawn_serve, spawn_serving_subprocess, stub_pi,
 };
 
 fn post_workspace(base_url: &str, path: &str, body: &Value) -> (u16, String) {
@@ -168,19 +168,11 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     assert!(err.contains("runs through the server"), "{err}");
 
     // serve refuses --server in any combination
-    let (ok, _, err) = sac(&["--server", &url_a, "serve", "--port", "0"], &[]);
+    let (ok, _, err) = sac(&["--server", &url_a, "serve"], &[]);
     assert!(!ok, "serve with --server must refuse");
     assert!(err.contains("serve starts a server"), "{err}");
     let (ok, _, err) = sac(
-        &[
-            "--db",
-            db_a.to_str().unwrap(),
-            "--server",
-            &url_a,
-            "serve",
-            "--port",
-            "0",
-        ],
+        &["--db", db_a.to_str().unwrap(), "--server", &url_a, "serve"],
         &[],
     );
     assert!(!ok, "serve with both flags must refuse");
@@ -227,9 +219,10 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     assert!(out.contains("unresolved"), "{out}");
 
     // the repo-derived serve publishes beside its db; the client finds it
+    declare_port(&root, 0);
     let mut serve_cmd = scrubbed(std::process::Command::new(bin));
     serve_cmd
-        .args(["serve", "--port", "0"])
+        .args(["serve"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .env("XDG_STATE_HOME", &state)
@@ -349,7 +342,7 @@ async fn the_declared_repo_carries_the_serving_effects() {
     // repo-derived serve from outside any repo has no tracker to serve
     let mut probe_cmd = scrubbed(std::process::Command::new(bin));
     probe_cmd
-        .args(["serve", "--port", "0"])
+        .args(["serve"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .env("XDG_STATE_HOME", &state_home)
@@ -368,8 +361,9 @@ async fn the_declared_repo_carries_the_serving_effects() {
     };
     assert!(refused, "repo-less serve must refuse");
 
+    declare_port(&root, 0);
     let mut serve = scrubbed(std::process::Command::new(bin))
-        .args(["serve", "--port", "0", "--db"])
+        .args(["serve", "--db"])
         .arg(&db)
         .arg("--repo")
         .arg(&root)

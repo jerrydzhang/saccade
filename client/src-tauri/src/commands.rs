@@ -427,6 +427,55 @@ fn read_asset_local_core(base: &str, relative: &str) -> Result<Vec<u8>, BridgeEr
     Ok(bytes)
 }
 
+/// One fixed argv on a machine through the local core's exec: no
+/// shell, no environment, no working directory - the argv runs as
+/// given, bounded by the core's own budget. This is the ask the
+/// frontend's one core module makes for its non-read work; the argv's
+/// purpose lives with the caller, never here.
+#[derive(Serialize, Debug)]
+pub struct ExecOutcome {
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub truncated: bool,
+    pub timed_out: bool,
+}
+
+#[tauri::command]
+pub fn exec_on(on: String, argv: Vec<String>) -> Result<ExecOutcome, BridgeError> {
+    if argv.is_empty() {
+        return Err(deny("empty argv"));
+    }
+    if argv.iter().any(|arg| arg.contains('\0')) {
+        return Err(deny("NUL byte in argv"));
+    }
+    let client = core_client()?;
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let outcome = match client.exec(&on, &refs) {
+        Ok(outcome) => outcome,
+        Err(fail) => {
+            let _ = log_bridge(
+                "exec_on",
+                &core_machine_label(&on),
+                &format!("failed: {}", fail.code()),
+            );
+            return Err(core_failure(fail));
+        }
+    };
+    let _ = log_bridge(
+        "exec_on",
+        &core_machine_label(&on),
+        &format!("exit {:?}, {} stdout bytes", outcome.code, outcome.stdout.len()),
+    );
+    Ok(ExecOutcome {
+        code: outcome.code,
+        stdout: outcome.stdout,
+        stderr: outcome.stderr,
+        truncated: outcome.truncated,
+        timed_out: outcome.timed_out,
+    })
+}
+
 /// A static identity statement for the machine-readable surface: what this
 /// binary is, never a claim about any session or tracker state.
 #[tauri::command]

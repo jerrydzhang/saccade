@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::common::{
-    ServerProc, bounded_sac, envelope, fake_hc_spawn, get_json, json_of, post_command, post_json,
-    scratch_db, scratch_repo, scrubbed, sh, spawn_serve, spawn_serving_subprocess, stub_pi,
-    suite_state,
+    ServerProc, bounded_sac, declare_port, envelope, fake_hc_spawn, get_json, json_of,
+    post_command, post_json, scratch_db, scratch_repo, scrubbed, sh, spawn_serve,
+    spawn_serving_subprocess, stub_pi, suite_state,
 };
 
 /// The host's real state parent, as the unhelped environment resolves
@@ -68,6 +68,7 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
+    declare_port(&root, 0);
     let (serve, url) = spawn_serve(
         bin,
         &db,
@@ -1065,6 +1066,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     let _ = boards.repair(&[("0".to_string(), commit.as_str().to_string())]);
 
     let log = std::fs::File::create(dir.join("serve.log")).unwrap();
+    declare_port(&repo, 0);
     let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args([
         "--db",
@@ -1074,8 +1076,6 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
         "serve",
         "--bind",
         "127.0.0.1",
-        "--port",
-        "0",
     ])
     .stdout(log.try_clone().unwrap())
     .stderr(log);
@@ -1092,6 +1092,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     std::fs::remove_dir_all(saccade::paths::state_dir_in(&suite_state(), &repo).join("boards.git"))
         .unwrap();
     let log2 = std::fs::File::create(dir.join("serve2.log")).unwrap();
+    declare_port(&repo, 0);
     let mut cmd2 = scrubbed(std::process::Command::new(bin));
     cmd2.args([
         "--db",
@@ -1101,8 +1102,6 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
         "serve",
         "--bind",
         "127.0.0.1",
-        "--port",
-        "0",
     ])
     .stdout(log2.try_clone().unwrap())
     .stderr(log2);

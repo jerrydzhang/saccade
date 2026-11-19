@@ -149,7 +149,7 @@ export class FixtureSource implements BoardSource {
   }
 }
 
-interface TauriInvoke {
+export interface TauriInvoke {
   (cmd: string, args?: Record<string, unknown>): Promise<unknown>;
 }
 

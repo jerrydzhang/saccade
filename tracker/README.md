@@ -14,10 +14,13 @@ devenv process manager runs it from the pinned release, started with
 `flake.nix`; this is the line it runs:
 
 ```
-sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811
+sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0
 ```
 
-with `restart.on = "on_failure"` (max 10) and a readiness probe on
+The port comes from `workbench.toml` at the repository's root - the
+one file the app and the tracker both read, so the two cannot
+disagree; a serve with no repository to read it refuses. With
+`restart.on = "on_failure"` (max 10) and a readiness probe on
 `GET /` at port 8811. The dogfood server is production: read-only
 doors only, unless the task itself is the change.
 

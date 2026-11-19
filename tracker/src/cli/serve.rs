@@ -3,7 +3,6 @@ use super::*;
 pub(super) fn serve_door(
     cli: &Cli,
     bind: &str,
-    port: &u16,
     allow_origin: &[String],
     allow_host: &[String],
 ) -> Result<String, Fail> {
@@ -13,19 +12,19 @@ pub(super) fn serve_door(
         ));
     }
     // the serving repo is the one resolved here - effects and bytes
-    // belong to the declared tracker, never the caller's cwd
-    let repo_root = resolve_repo(cli).ok();
+    // belong to the declared tracker, never the caller's cwd. It is
+    // also the port's only source: the declaration file lives at its
+    // root, so a serve without a repository has nothing to bind.
+    let repo_root = resolve_repo(cli).map_err(|_| {
+        Fail::Usage(
+            "serve reads its port from workbench.toml at the repository's root; no repository resolved (--repo names one)"
+                .into(),
+        )
+    })?;
+    let port = saccade::workbench::tracker_port(&repo_root).map_err(Fail::Usage)?;
     let db_path = match &cli.db {
         Some(db) => db.clone(),
-        None => {
-            let root = repo_root.as_ref().ok_or_else(|| {
-                Fail::Usage(
-                    "no repo resolved: --repo names the tracker, --db names the file to serve"
-                        .into(),
-                )
-            })?;
-            saccade::paths::db_at(root)
-        }
+        None => saccade::paths::db_at(&repo_root),
     };
     let _ = tracing_subscriber::fmt()
         .json()
@@ -40,9 +39,9 @@ pub(super) fn serve_door(
         .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
     match runtime.block_on(saccade::serve::run(
         &db_path,
-        repo_root,
+        Some(repo_root),
         bind,
-        *port,
+        port,
         allow_origin.to_vec(),
         allow_host.to_vec(),
     )) {

@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::common::{
-    ScratchDir, ServerProc, envelope, get_json, json_of, post_command, post_json,
+    ScratchDir, ServerProc, declare_port, envelope, get_json, json_of, post_command, post_json,
     run_with_terminals, scratch_db, scrubbed, spawn_serve,
 };
 
@@ -51,6 +51,7 @@ fn view_page_project(tag: &str) -> (ScratchDir, std::path::PathBuf, ServerProc, 
         "-m",
         "seed",
     ]);
+    declare_port(&project, 0);
     let (serve, url) = spawn_serve(
         bin,
         scratch.db.as_path(),

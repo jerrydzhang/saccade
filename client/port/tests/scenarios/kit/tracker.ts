@@ -6,7 +6,7 @@
 // file under a new temp root, and the server is spawned and stopped
 // by its own handle. The run root (db, repo, serve log) is kept.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, openSync, accessSync, constants } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, accessSync, constants, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -67,8 +67,11 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   const log = join(root, "logs", "seed-serve.log");
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
+  // the port's one source: the declaration at the served repo's root,
+  // the same file a registering app reads
+  writeFileSync(join(repo, "workbench.toml"), `name = "${REPO_NAME}"\n\n[tracker]\nport = ${port}\n`);
   const out = openSync(log, "a");
-  const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1", "--port", String(port)];
+  const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1"];
   for (const origin of origins) args.push("--allow-origin", origin);
   // the state root is the run's own: `sac serve` opens the seeded
   // repo's board store under XDG_STATE_HOME, so the pin keeps it out
