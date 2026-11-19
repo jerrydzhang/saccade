@@ -503,18 +503,28 @@ test("the control plane: rail entries are targets - s labels them after the rows
 
 // -- the plane's own address and the add field ----------------------
 
-import { knownTrackers } from "../src/lib/tracker.ts";
+import { theProjects } from "../src/lib/asks.ts";
+import { directAsks } from "../src/lib/asks.ts";
+import { parseRegisteredPath } from "../src/lib/projects.ts";
 
-function stubRegistry(seed: Record<string, string> = {}): void {
+function stubRegistry(seed: string[] = [], declaration = 'name = "tasks-test"\n\n[tracker]\nport = 9\n'): void {
   const store = new Map<string, string>();
-  if (Object.keys(seed).length > 0) {
-    store.set("saccade.trackers", JSON.stringify(seed));
-    store.set("saccade.trackers.home", Object.keys(seed)[0]!);
-  }
+  if (seed.length > 0) store.set("saccade.projects", JSON.stringify(seed));
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
     removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => declaration,
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
   });
   onTestFinished(() => {
     vi.unstubAllGlobals();
@@ -541,7 +551,7 @@ function railOfHarness(h: Harness): import("../src/lib/tasks/rail.ts").Rail {
   return rail as unknown as import("../src/lib/tasks/rail.ts").Rail;
 }
 
-test("an empty plane: no project known is no error; a opens the add field, Enter registers host:port/name and opens nothing", async (t) => {
+test("an empty plane: no project known is no error; a opens the add field, Enter registers machine:/path and opens nothing", async (t) => {
   stubRegistry();
   const h = harness(t, [], ROW_BOUNDS);
   assert.equal(await h.attachment.places.request({ machine: "plane", path: "" }), "applied");
@@ -556,16 +566,20 @@ test("an empty plane: no project known is no error; a opens the add field, Enter
   assert.equal(h.press("x"), "allow-default", "typing stays the field's own");
   h.attachment.presentation.typeAdd("not a project");
   h.press("Enter");
+  await vi.waitFor(() => {
+    assert.match(h.attachment.presentation.addView().problem ?? "", /machine:\/path/);
+  });
   assert.equal(h.attachment.presentation.addView().open, true, "a refused address keeps the field open");
-  assert.match(h.attachment.presentation.addView().problem ?? "", /host:port\/name/);
-  assert.deepEqual(knownTrackers(), {});
+  assert.deepEqual(theProjects().registeredPaths(), []);
 
-  h.attachment.presentation.typeAdd("127.0.0.1:9/pyrimel");
+  h.attachment.presentation.typeAdd("box:/srv/tasks-test");
   assert.equal(h.attachment.presentation.addView().problem, null, "typing clears the refusal");
   h.press("Enter");
+  await vi.waitFor(() => {
+    assert.deepEqual(theProjects().registeredPaths(), [{ machine: "box", path: "/srv/tasks-test" }]);
+  });
   assert.equal(h.attachment.presentation.addView().open, false);
-  assert.deepEqual(knownTrackers(), { pyrimel: "127.0.0.1:9" });
-  assert.ok(railOfHarness(h).projects.some((project) => project.name === "pyrimel"), "the rail lists it");
+  assert.ok(railOfHarness(h).projects.some((project) => project.name === "tasks-test"), "the rail lists it");
   assert.deepEqual(h.opened, [], "registering opens nothing");
   assert.deepEqual(h.elsewhere, []);
   assert.equal(frameOf(h).project, null, "the shown project stays");
@@ -578,8 +592,8 @@ test("an empty plane: no project known is no error; a opens the add field, Enter
   assert.equal(h.press("j"), "consume", "the reading context has the keys again");
 });
 
-test("a bare plane shows the home project; an unreachable one keeps the rail and says why", async (t) => {
-  stubRegistry({ "tasks-test": "127.0.0.1:9" });
+test("a bare plane shows the first registered project; an unreachable one keeps the rail and says why", async (t) => {
+  stubRegistry(["box:/srv/tasks-test"]);
   const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
   await h.attachment.places.request({ machine: "plane", path: "" });
   const shown = frameOf(h);
@@ -611,9 +625,9 @@ test("a bare plane shows the home project; an unreachable one keeps the rail and
   );
   assert.ok(railOfHarness(h).projects.some((project) => project.name === "tasks-test"));
 
-  // a bare plane again keeps a known shown project, else the home
+  // a bare plane again keeps the shown project while it is registered
   await h.attachment.places.request({ machine: "plane", path: "" });
-  assert.equal(frameOf(h).project, "tasks-test", "ghost is not known: the home shows");
+  assert.equal(frameOf(h).project, "tasks-test", "ghost is not registered: the registered project shows");
 });
 
 test("an agent no tracker registered is a rail target: s labels it, its menu is y alone, Enter copies hc attach <address> (t-55)", async (t) => {
@@ -645,19 +659,34 @@ test("an agent no tracker registered is a rail target: s labels it, its menu is 
         command === "words_wait" && args.since < 1 ? Promise.resolve(snapshot) : new Promise(() => {}),
     },
   });
-  // the project is one this device reached: the rail's first read
-  // covers it
+  // the project is one this device registered: the rail's first read
+  // covers it. The window carries the shell's bridge (the words feed)
+  // beside the lane-installed asks (the declaration reads)
   const store = new Map<string, string>();
+  store.set("saccade.projects", JSON.stringify(["box:/srv/tasks-test"]));
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
     removeItem: (key: string) => void store.delete(key),
   });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "tasks-test"\n\n[tracker]\nport = 9\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+    __TAURI_INTERNALS__: {
+      invoke: (command: string, args: { since: number }) =>
+        command === "words_wait" && args.since < 1 ? Promise.resolve(snapshot) : new Promise(() => {}),
+    },
+  });
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
-  const { registerTracker } = await import("../src/lib/tracker.ts");
-  registerTracker("tasks-test", "localhost:8811");
   const stray = terminalPart("other/t63");
   const foot = terminalPart("t7r");
   const bounds = new Map([

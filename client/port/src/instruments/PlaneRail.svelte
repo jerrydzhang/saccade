@@ -109,7 +109,7 @@ the add field's typing is the controller's. -->
         data-port-control="project-input"
         data-port-captured-input=""
         type="text"
-        placeholder="host:port/name"
+        placeholder="machine:/path/to/repository"
         aria-label="add a project"
         oninput={(event) => controller.typeAdd(event.currentTarget.value)}
       />

@@ -1,5 +1,5 @@
-// The control plane's rail (t-48), its pure half: the projects this
-// device has reached and, under each, the agents that are running now,
+// The control plane's rail, its pure half: the projects this device
+// has registered and, under each, the agents that are running now,
 // grouped by Herdr's word. "Running" is Herdr core's say alone: an
 // incarnation from a project's agents page shows only while the local
 // core's word table carries a live row for its terminal address, and
@@ -78,11 +78,6 @@ export type RailAgent = {
 export type RailProject = {
   name: string;
   current: boolean;
-  /** The home tracker: it holds this device's window store, so it is
-   * never forgotten. */
-  home: boolean;
-  /** The host this device reached it at, when registered. */
-  host: string | null;
   /** Herdr's words in importance order (WORD_ORDER), empty sections
    * left out. */
   groups: { state: string; agents: RailAgent[] }[];
@@ -244,9 +239,7 @@ export function railOf(
     repoPath?: string | null;
   }[],
   words: WordsSnapshot,
-  current: string | null,
-  home: string | null = null,
-  hosts: Readonly<Record<string, string>> = {},
+  current: string | null = null,
 ): Rail {
   const ordered = [...projects].sort((a, b) => a.name.localeCompare(b.name));
   // the keys some registration names: its joined terminal, or - when
@@ -339,8 +332,6 @@ export function railOf(
       return {
         name: project.name,
         current: project.name === current,
-        home: project.name === home,
-        host: hosts[project.name] ?? null,
         groups,
         problem: project.problem,
       };
@@ -368,9 +359,7 @@ export type RailTarget = Readonly<{
   task: string | null;
   /** The agent's terminal as the local core names it; null on a project. */
   address: string | null;
-  home: boolean;
   current: boolean;
-  host: string | null;
 }>;
 
 export const projectPart = (name: string): string => `rail/project/${name}`;
@@ -402,9 +391,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
       project: project.name,
       task: null,
       address: null,
-      home: project.home,
       current: project.current,
-      host: project.host,
     });
     for (const group of project.groups) {
       for (const agent of group.agents) {
@@ -416,9 +403,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
           project: project.name,
           task: agent.tasks[0] ?? null,
           address: agent.address,
-          home: project.home,
           current: project.current,
-          host: project.host,
         });
       }
     }
@@ -431,9 +416,7 @@ export function railTargetsOf(rail: Rail): RailTarget[] {
       project: null,
       task: null,
       address: agent.address,
-      home: false,
       current: false,
-      host: null,
     });
   }
   return out;

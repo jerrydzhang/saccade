@@ -6,7 +6,7 @@
 // file under a new temp root, and the server is spawned and stopped
 // by its own handle. The run root (db, repo, serve log) is kept.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, openSync, accessSync, constants } from "node:fs";
+import { mkdirSync, mkdtempSync, openSync, accessSync, constants, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -67,6 +67,9 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   const log = join(root, "logs", "seed-serve.log");
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
+  // the port's two places agree by construction here: the declaration
+  // the app reads and the flag the server starts with carry one port
+  writeFileSync(join(repo, "workbench.toml"), `name = "${REPO_NAME}"\n\n[tracker]\nport = ${port}\n`);
   const out = openSync(log, "a");
   const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1", "--port", String(port)];
   for (const origin of origins) args.push("--allow-origin", origin);
@@ -90,7 +93,7 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
     await waitUp(base, child, log);
     const tasks = seed(base);
     console.log(`[port-suite] seeded tracker ${base} (run root ${root})`);
-    return { tracker: { base, host: `127.0.0.1:${port}`, repo: REPO_NAME, tasks }, root, stop };
+    return { tracker: { base, repo: REPO_NAME, repoPath: repo, tasks }, root, stop };
   } catch (error) {
     await stop();
     throw error;

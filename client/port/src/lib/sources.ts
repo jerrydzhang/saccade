@@ -1,9 +1,9 @@
 // Board sources: one interface, explicit machine + path. The fixture
 // adapter serves the deterministic development fixtures; the host adapter
-// reads through the narrow Tauri file commands in the native shell; the
-// remote adapter reads a machine-named location through the local
-// herdr-core's read-only face; anywhere else refuses loudly. No silent
-// adapter swapping.
+// reads through the narrow Tauri file commands in the native shell (the
+// lanes' test-only reader); the remote adapter reads a machine-named
+// location through the shell bridge's read-only face; anywhere else
+// refuses loudly. No silent adapter swapping.
 //
 // Port carry (t-36 slice 1, the source/transport layer allowlist): the
 // module is the old tree's sources.ts with one port-specific adaptation -
@@ -13,13 +13,14 @@
 // key logic speaks.
 
 import { resolveRelative } from "./resolve.ts";
-import { TrackerSource, homeTracker, serverHost, trackerIsThisMachine } from "./tracker.ts";
+import { TrackerSource } from "./tracker.ts";
 import { LANE_CODES, SourceUnavailableError, type LaneCode } from "./board/errors.ts";
+import { theAsks } from "./asks.ts";
 
 // "fixture" and "host" are this viewer's own machines; "host" is the
-// test-only local-file reader (t-24@r11: the lanes' fixture reader,
-// never presented as human functionality); any other non-empty name is
-// a machine from the local core's list.
+// test-only local-file reader (the lanes' fixture reader, never
+// presented as human functionality); any other non-empty name is a
+// machine from the local core's list.
 export type Machine = string;
 
 export type Location = {
@@ -149,7 +150,7 @@ export class FixtureSource implements BoardSource {
   }
 }
 
-interface TauriInvoke {
+export interface TauriInvoke {
   (cmd: string, args?: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -167,60 +168,31 @@ export function tauriInvoke(): TauriInvoke {
   return invoke;
 }
 
-// The bridge rejects with its BridgeError {code, message}; keep the
-// structured code and human message instead of flattening them into a
-// string. An unknown code is a bridge bug, surfaced as one.
-function bridgeFailure(error: unknown): SourceUnavailableError {
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as { code?: unknown; message?: unknown };
-    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
-      const known = (LANE_CODES as readonly string[]).includes(candidate.code);
-      const code = known ? (candidate.code as LaneCode) : "bridge-invalid";
-      return new SourceUnavailableError(code, candidate.message);
-    }
-  }
-  return new SourceUnavailableError("read-failed", String(error));
-}
-
 export class HostFileSource implements BoardSource {
   readonly machine = "host" as const;
 
   async loadText(location: Location): Promise<LoadedText> {
-    const invoke = tauriInvoke();
-    try {
-      const result = (await invoke("read_declaration", {
-        path: location.path,
-      })) as { text: string };
-      return { text: result.text, location };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return { text: await theAsks().readFile(this.machine, location.path), location };
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const invoke = tauriInvoke();
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    try {
-      const bytes = (await invoke("read_asset", {
-        base: baseDir,
-        relative,
-      })) as number[];
-      return { bytes: new Uint8Array(bytes), path: relative };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return {
+      bytes: await theAsks().readAsset(this.machine, baseDir, relative),
+      path: relative,
+    };
   }
 }
 
-// A machine-named board: every read rides the LOCAL core's read-only
-// face (file.read for text, fixed-argv exec for bytes and remote path
-// resolution), and containment is proven on the remote side. Adding
-// machines, logging in or updating cores is the human's own host setup;
-// every machine state arrives here as a structured error, never a retry.
+// A machine-named board: every read rides the one module's asks on
+// that machine (the text read, and the asset read beside it), and
+// containment is proven on the remote side. Adding machines, logging in
+// or updating cores is the human's own host setup; every machine state
+// arrives here as a structured error, never a retry.
 export class RemoteSource implements BoardSource {
   readonly machine: string;
 
@@ -229,127 +201,19 @@ export class RemoteSource implements BoardSource {
   }
 
   async loadText(location: Location): Promise<LoadedText> {
-    const invoke = tauriInvoke();
-    try {
-      const result = (await invoke("read_declaration", {
-        path: location.path,
-        on: this.machine,
-      })) as { text: string };
-      return { text: result.text, location };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return { text: await theAsks().readFile(this.machine, location.path), location };
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const invoke = tauriInvoke();
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    try {
-      const bytes = (await invoke("read_asset", {
-        base: baseDir,
-        relative,
-        on: this.machine,
-      })) as number[];
-      return { bytes: new Uint8Array(bytes), path: relative };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
-  }
-}
-
-// A bare path is a file on the TRACKER's machine (t-24@r12), read
-// through Herdr core like any named machine - never the device the
-// human sits at. The hub proof is machine identity (t-24@r14): the
-// tracker root page's machine id equals this device's own
-// /etc/machine-id, and then the local core's own machine is read with
-// no declaration. Otherwise - a different machine, or an unavailable
-// id on either side - the client configuration's `tracker-machine`
-// declaration applies, and without it the open refuses saying what to
-// set. No bridge (no local core), no tracker-machine read at all.
-
-/** The Herdr machine a bare-path read or edit rides (t-24@r12, r14):
- * "" for the local core's own machine on the hub, else the declared
- * tracker machine. One rule for the reads and the suite's one write
- * (the explainer annotation submit, t-24@r21). */
-export async function trackerCoreMachine(): Promise<string> {
-  let invoke: TauriInvoke;
-  try {
-    invoke = tauriInvoke();
-  } catch (error) {
-    if (error instanceof SourceUnavailableError) {
-      throw new SourceUnavailableError(
-        "lane-unavailable",
-        "a bare path reads on the tracker's machine through Herdr core; no Herdr connection exists here - name a machine explicitly (machine:/path)",
-      );
-    }
-    throw error;
-  }
-  let ownId: string | null = null;
-  try {
-    ownId = (await invoke("machine_id")) as string | null;
-  } catch (error) {
-    throw bridgeFailure(error);
-  }
-  let declared: string | null = null;
-  try {
-    declared = (await invoke("tracker_machine")) as string | null;
-  } catch (error) {
-    throw bridgeFailure(error);
-  }
-  if (declared !== null && declared.trim().length > 0) return declared.trim();
-  if (homeTracker() === null && serverHost() === null) {
-    throw new SourceUnavailableError(
-      "lane-unavailable",
-      "a bare path reads on the tracker's machine; no tracker has been reached from this device yet - add one on the plane (a, then host:8811/saccade) or type a board location with its host once (host:8811/saccade/t-1), or set tracker-machine in the client configuration",
-    );
-  }
-  const hub = await trackerIsThisMachine(async () => ownId);
-  if (hub) return ""; // the local core's own machine: the hub itself
-  throw new SourceUnavailableError(
-    "lane-unavailable",
-    "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
-  );
-}
-
-export class TrackerMachineSource implements BoardSource {
-  readonly machine = "tracker-machine" as const;
-
-  async loadText(location: Location): Promise<LoadedText> {
-    const coreMachine = await trackerCoreMachine();
-    const invoke = tauriInvoke();
-    try {
-      const result = (await invoke("read_declaration", {
-        path: location.path,
-        on: coreMachine,
-      })) as { text: string };
-      return { text: result.text, location };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
-  }
-
-  async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const coreMachine = await trackerCoreMachine();
-    const invoke = tauriInvoke();
-    const baseDir = location.path.replace(/\/[^/]*$/, "");
-    const resolved = resolveRelative(baseDir, relative);
-    if (!resolved.ok) {
-      throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
-    }
-    try {
-      const bytes = (await invoke("read_asset", {
-        base: baseDir,
-        relative,
-        on: coreMachine,
-      })) as number[];
-      return { bytes: new Uint8Array(bytes), path: relative };
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
+    return {
+      bytes: await theAsks().readAsset(this.machine, baseDir, relative),
+      path: relative,
+    };
   }
 }
 
@@ -367,7 +231,6 @@ export function trackerSourcesForPicker(): TrackerSource[] {
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();
-  if (machine === "tracker-machine") return new TrackerMachineSource();
   // A tracker-named board rides that tracker's own read surface.
   if (machine.startsWith("tracker:")) {
     let source = trackerSources.get(machine);

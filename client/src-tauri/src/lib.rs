@@ -41,6 +41,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::read_declaration,
             commands::read_asset,
+            commands::local_request,
             commands::edit_declaration,
             commands::viewer_identity,
             commands::test_open,

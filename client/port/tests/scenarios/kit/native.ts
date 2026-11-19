@@ -89,7 +89,7 @@ async function waitListening(port: number, driver: ChildProcess, log: string): P
 
 // a launch on `reuse` (an earlier launch's home) keeps that app's data
 // directory: the relaunch journey (S20)
-async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver; close: () => Promise<void>; home: string }> {
+async function launch(runRoot: string, registered: string, reuse?: string): Promise<{ app: AppDriver; close: () => Promise<void>; home: string }> {
   const env = pinned();
   const home = reuse ?? mkdtempSync(join(runRoot, "app-"));
   const xdg: Record<string, string> = {};
@@ -134,6 +134,14 @@ async function launch(runRoot: string, reuse?: string): Promise<{ app: AppDriver
     await stopDriver();
     throw error;
   }
+  // the device store: the lane seeds the registered path alone, so the
+  // app's project resolution reads the seeded repository's declaration
+  // through its own ask face (the core the lane runs). The rail's poll
+  // picks the seeding up within its interval; nothing here types into
+  // the app
+  await browser.execute((seed: string) => {
+    localStorage.setItem("saccade.projects", JSON.stringify([seed]));
+  }, registered);
   const readoutHere = async (): Promise<PortObservation> => {
     const text = await browser.execute(() =>
       JSON.stringify((window as unknown as { __saccadePort: { readout(): unknown } }).__saccadePort.readout()));
@@ -357,9 +365,11 @@ const runRoot = (): string =>
 
 export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
   // eslint-disable-next-line no-empty-pattern
-  app: async ({}, use) => {
+  app: async ({ tracker }, use) => {
     const root = runRoot();
-    let current = await launch(root);
+    const machine = pinned().SAC_APP_HERDR_MACHINE;
+    const registered = `${machine}:${tracker.repoPath}`;
+    let current = await launch(root, registered);
     // the test holds a delegate, so relaunch can swap the session (its
     // own driver, stopped by its own handle) under the same app object
     const app = new Proxy({} as AppDriver, {
@@ -368,7 +378,7 @@ export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
           return async () => {
             const home = current.home;
             await current.close();
-            current = await launch(root, home);
+            current = await launch(root, registered, home);
           };
         }
         return (current.app as unknown as Record<string, unknown>)[key];

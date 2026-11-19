@@ -28,7 +28,7 @@
 // the add field, the return places.
 //
 // The control plane: beside the list, a rail of the projects
-// this device has reached (switching shows a project's tasks here) and,
+// this device has registered (switching shows a project's tasks here) and,
 // under each, its running agents grouped by Herdr's word (lib/tasks/rail.ts).
 // The rail's entries are published as targets like the rows: s labels
 // them with the rows, and a click, a right-click or a label runs the
@@ -36,7 +36,9 @@
 // before the rail.
 //
 // Registering a project is its own act (lib/tasks/add.ts): `a`
-// opens the plane's add field, Enter registers host:port/name and the
+// opens the plane's add field, Enter registers the repository whose
+// machine:/path the human typed (its declaration file names the
+// project) and the
 // rail lists it; nothing opens. With no project known, the plane says
 // so and names `a` - an empty plane, never an error. The `a` key is
 // the task list's one reading-key extra; everything else it reads is
@@ -68,8 +70,10 @@ import type { StructuredIssue } from "../lib/board/errors.ts";
 import { PLANE_MACHINE, formatLocation, isPlane } from "../lib/location.ts";
 import { createAddProject, type AddView } from "../lib/tasks/add.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
-import { TrackerSource, forgetTracker, homeTracker, knownTrackers, registerTracker } from "../lib/tracker.ts";
+import { TrackerSource } from "../lib/tracker.ts";
+import { theProjects } from "../lib/asks.ts";
 import { tauriInvoke } from "../lib/sources.ts";
+import type { RegisteredPath } from "../lib/projects.ts";
 import {
   NO_WORDS,
   agentFactsOf,
@@ -206,28 +210,31 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   }
 
   // projects forgotten this session: the shown one stays off the rail
-  // though the window still shows it, until it is reached again
+  // though the window still shows it, until it is registered again
   const forgotten = new Set<string>();
+  // the registered projects' names and addresses, as the last registry
+  // read saw them (the rail's list, and the forget act's resolution)
+  let registeredNames: string[] = [];
+  let pathsByName = new Map<string, RegisteredPath>();
 
-  /** The shown project when it belongs on the rail. */
   function railCurrent(): string | null {
     const current = currentProject();
     if (current === null) return null;
-    if (knownTrackers()[current] !== undefined) forgotten.delete(current);
+    if (registeredNames.includes(current)) forgotten.delete(current);
     return forgotten.has(current) ? null : current;
   }
 
   function railNow(): Rail {
-    // every reached project is listed, read or not yet
-    const known = knownTrackers();
-    const names = new Set([...Object.keys(known), ...agentPages.map((entry) => entry.name)]);
+    // every registered project is listed, read or not yet, the shown
+    // one among them
+    const names = new Set([...registeredNames, ...agentPages.map((entry) => entry.name)]);
     const current = railCurrent();
     if (current !== null) names.add(current);
     const projects = [...names].map(
       (name) =>
         agentPages.find((entry) => entry.name === name) ?? { name, agents: null, problem: null, repoPath: null },
     );
-    return railOf(projects, words, currentProject(), homeTracker(), known);
+    return railOf(projects, words, current);
   }
 
   // -- the published targets -------------------------------------------
@@ -264,7 +271,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     railTargetsOf(railNow()).map((entry) => ({
       id: entry.part,
       kind: entry.kind,
-      label: tasksMenuLabel({ kind: entry.kind, label: entry.text }, entry),
+      label: tasksMenuLabel({ kind: entry.kind, label: entry.text }),
       inside: entry.within ?? null,
       clickable: true,
       acts: () => taskRowActs({ part: entry.part, kind: entry.kind, label: entry.text }, actDeps()),
@@ -291,9 +298,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   }
 
   function forget(project: string): void {
-    forgetTracker(project);
+    const registered = pathsByName.get(project);
+    if (registered !== undefined) theProjects().forget(registered);
     forgotten.add(project);
     agentPages = agentPages.filter((entry) => entry.name !== project);
+    registeredNames = registeredNames.filter((name) => name !== project);
     notifyRail();
   }
 
@@ -304,8 +313,19 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   }
 
   async function readAgentPages(): Promise<void> {
-    const names = Object.keys(knownTrackers());
+    // the registry reads every registered declaration through the
+    // module; a device with no asks (no shell, no lane install) has no
+    // registered projects at all
+    let projects: { machine: string; path: string; declaration: { name: string } }[] = [];
+    try {
+      projects = await theProjects().projects();
+    } catch {
+      projects = [];
+    }
+    registeredNames = projects.map((project) => project.declaration.name);
+    pathsByName = new Map(projects.map((project) => [project.declaration.name, { machine: project.machine, path: project.path }]));
     const current = railCurrent();
+    const names = [...registeredNames];
     if (current !== null && !names.includes(current)) names.push(current);
     agentPages = await Promise.all(
       names.map(async (name) => {
@@ -385,9 +405,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   const addObservers = new Set<(view: AddView) => void>();
   const add = createAddProject({
     capture: (context) => buffer.interactions.capture(context),
-    register(tracker, host) {
-      registerTracker(tracker, host);
-      forgotten.delete(tracker);
+    async register(registered) {
+      const declaration = await theProjects().register(registered);
+      forgotten.delete(declaration.name);
+      if (!registeredNames.includes(declaration.name)) registeredNames = [...registeredNames, declaration.name];
+      pathsByName.set(declaration.name, registered);
       notifyRail();
       // its agents read now rather than at the next poll
       if (railRunning) void readAgentPages().then(() => railRunning && notifyRail());
@@ -423,15 +445,20 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   };
 
   /** The project a plane address shows: the one it names, else the
-   * one this plane already shows, else the home, else any reached -
-   * only a project this device still knows, for a bare "plane". */
-  function projectFor(address: Address): string | null {
+   * one this plane already shows, else the first registered - only a
+   * project this device still knows, for a bare "plane". */
+  async function projectFor(address: Address): Promise<string | null> {
     const named = address.path.trim();
     if (named.length > 0) return named;
-    const known = knownTrackers();
     const current = currentProject();
-    if (current !== null && known[current] !== undefined) return current;
-    return homeTracker() ?? Object.keys(known)[0] ?? null;
+    let names: string[] = [];
+    try {
+      names = (await theProjects().projects()).map((project) => project.declaration.name);
+    } catch {
+      names = [];
+    }
+    if (current !== null && names.includes(current)) return current;
+    return names[0] ?? null;
   }
 
   /** Publish a loaded frame with its targets: the domain data rides
@@ -463,7 +490,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
         issue: failureIssue("asset-denied", `${asked} is not the plane; this surface serves the control plane`),
       };
     }
-    const project = projectFor(address);
+    const project = await projectFor(address);
     const base = (shown: string | null, problem: string | null): TasksData => ({
       generation: token,
       asked: scope.asked(),
@@ -594,7 +621,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     {
       action: {
         id: "tasks.add-project",
-        label: "add a project (host:port/name)",
+        label: "add a project (machine:/path/to/repository)",
         run: () => add.enter(),
       },
       keys: [sequence(key("a"))],

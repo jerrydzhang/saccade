@@ -50,9 +50,7 @@ import { createExpansions, type Expansion } from "../lib/board/expansion.ts";
 export type { Expansion } from "../lib/board/expansion.ts";
 export type { FindView } from "../lib/find/interaction.ts";
 import type { HydrationHost } from "../lib/board/hydrate.ts";
-import { formatLocation, instrumentPath } from "../lib/location.ts";
-import { hostedTrackerLocation, parseLocation } from "../lib/location.ts";
-import { registerTracker } from "../lib/tracker.ts";
+import { formatLocation, instrumentPath, parseLocation } from "../lib/location.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 
@@ -1169,8 +1167,5 @@ export function connectBoard(buffer: BufferAccess<BoardData>, services: BoardSer
 }
 
 export function parseOpenSpec(spec: string): Address | null {
-  // a location typed with its host reaches that tracker and remembers it
-  const hosted = hostedTrackerLocation(spec);
-  if (hosted) registerTracker(hosted.tracker, hosted.host);
   return parseLocation(spec);
 }

@@ -91,7 +91,7 @@ return anchor's identity), data-port-open names the row's link. -->
     <PlaneRail {rail} {controller} {hovered} />
     <div class="port-tasks-view">
       {#if content.status !== "loading" && content.project === null && rail.projects.length === 0}
-        <div class="port-tasks-none" data-port-control="plane-empty">no project yet: press a and type its host:port/name</div>
+        <div class="port-tasks-none" data-port-control="plane-empty">no project yet: press a and type machine:/path/to/repository</div>
       {:else if content.status !== "loading" && content.project === null}
         <div class="port-tasks-none" data-port-control="plane-empty">choose a project on the rail, or press a to add one</div>
       {:else if content.problem !== null}

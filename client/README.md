@@ -32,6 +32,20 @@ where they are: never read, never cleaned. The app is the
 round 16 prototype's behaviour, built and tested scenario by scenario
 (t-36).
 
+A project is registered by where its repository is
+(`port/src/lib/projects.ts`): the add field takes
+`machine:/path/to/repository`, the declaration file there
+(`workbench.toml`) names the project and the loopback port its tracker
+answers on, and the device keeps the registered paths alone -
+the file is read again through the one core module whenever a fact is
+needed. The tracker is started with its own `--port`; the file names
+the same port, and the app checks the tracker it reached serves the
+registered repository, refusing with both paths when it does not. A
+device that registered trackers by `host:port` under the
+old keys (`saccade.trackers`, `saccade.trackers.home`) re-registers
+its repositories by path; the old keys are never read and never
+cleaned, and no special case reads them.
+
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the
 features first asked for, but was never usable enough for any of them to
 be tried. Those features are the app's backlog - hypotheses to build
@@ -73,10 +87,11 @@ The native test project runs only through the gated session lane:
   `saccade-app`, and the tauri conf embedding `port/dist`
   (identifier `dev.saccade.app`)
 - `src-tauri/src/` - the shell library the crate compiles: read-only
-  declaration and asset commands with path guards, board admission
-  through the shared `board-grammar` crate, the suite's window acts
-  (`suite.rs`: windows, links, focus, the window jump), the window
-  registry (the run's one memory of its windows), the look
+  declaration and asset commands with path guards, the one local
+  request command (loopback, a bounded curl argv composed here), board
+  admission through the shared `board-grammar` crate, the suite's
+  window acts (`suite.rs`: windows, links, focus, the window jump),
+  the window registry (the run's one memory of its windows), the look
   configuration, the
   key trace's stderr door
 - `src-tauri/core-client/` - the pure read-only herdr-core client,

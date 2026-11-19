@@ -229,6 +229,12 @@ class SeedServer:
         self.log_path = root / "logs" / "seed-serve.log"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.process: subprocess.Popen[bytes] | None = None
+        # the declaration the registering app reads, at the served
+        # repo's root; the port it names is the one the flag passes, so
+        # the file and the server cannot disagree
+        (self.repo / "workbench.toml").write_text(
+            f'name = "{SEED_REPO_NAME}"\n\n[tracker]\nport = {self.port}\n'
+        )
 
     def start(self) -> None:
         # the server shells out to git; the caller's PATH must carry it

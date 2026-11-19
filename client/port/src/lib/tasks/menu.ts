@@ -149,10 +149,10 @@ function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
   return acts;
 }
 
-/** A project's acts (t-48): f shows its tasks on this plane - the
+/** A project's acts: f shows its tasks on this plane - the
  * first act, so Enter and a plain click switch - a adds another
- * project (t-54), and d forgets it. Any project may be forgotten, the home and
- * the shown one included (the human, 2026-11-14: with one project,
+ * project, and d forgets it. Any project may be forgotten, the shown
+ * one included (the human, 2026-11-14: with one project,
  * forgetting it must be possible). */
 function projectActs(
   target: RailTarget,
@@ -174,7 +174,7 @@ function projectActs(
       key: "a",
       action: {
         id: "tasks.project.add",
-        label: "add a project (host:port/name)",
+        label: "add a project (machine:/path/to/repository)",
         run: () => deps.addProject(),
       },
     },
@@ -183,18 +183,16 @@ function projectActs(
     key: "d",
     action: {
       id: "tasks.project.forget",
-      label: "forget this project (type its host to reach it again)",
+      label: "forget this project (type its path to reach it again)",
       run: () => deps.forget(project),
     },
   });
   return acts;
 }
 
-/** The menu heading for a target: a project names the host it was
- * reached at, so a stray entry shows what it is. */
-export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>, rail: RailTarget | undefined): string {
-  if (target.kind !== "project" || rail === undefined || rail.host === null) return target.label;
-  return `${target.label} (${rail.host})`;
+/** The menu heading for a target: the target's own label. */
+export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>): string {
+  return target.label;
 }
 
 export function taskRowActs(

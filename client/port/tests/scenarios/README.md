@@ -98,6 +98,19 @@ Every module is a test-infrastructure module; each line says why it exists.
   listener or state crosses tests); input is vitest's Playwright `userEvent`.
   Needed because vitest isolates per file, not per test, and the app's window
   listeners do not detach.
+- `kit/lane-asks.ts` (installed by `kit/app.html` before the app boots, and
+  first of `kit/shell-entry.ts`'s imports): the browser lane's asks. This
+  lane has no native shell, so the app's one ask face
+  (`window.__saccadeAsks`, read at boot by `src/lib/asks.ts`) is answered
+  directly: the declaration read by `vitest.config.ts`'s declaration reader
+  (a middleware serving the seeded repository's `workbench.toml` for any
+  path ending `/workbench.toml` - the same test-only trust the host reader
+  carries), the tracker requests as real fetches of the seeded tracker, and
+  a refusal for machine assets (its boards ride the fixture source). It
+  also seeds the device store with the one
+  registered path (the seeded repository's real path), so scenarios register
+  nothing by typing; the control-plane scenario drives the real add field
+  itself, and clears the seed for its empty case.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.
 - `kit/pointer-commands.ts`: the browser project's real mouse drag and wheel
@@ -126,9 +139,9 @@ WebKit is the nix-pinned Playwright WebKit (`PLAYWRIGHT_BROWSERS_PATH` from
 the `saccade-app` devshell; npm `playwright` is pinned to the same 1.63.0, so
 nothing is downloaded). It runs display-less on the devshell's pinned mesa
 with software EGL (the retired browser lane's recipe), so the recipe enters
-`nix develop .#saccade-app`. There is no Tauri bridge in a browser, so the
-port starts empty and reaches the tracker through the host a typed location
-carries; the tracker allows exactly the vitest server's origin.
+`nix develop .#saccade-app`. There is no Tauri bridge in a browser: the lane
+installs the app's asks before boot (`kit/lane-asks.ts`) and the tracker
+allows exactly the vitest server's origin.
 
 ## Native
 
@@ -141,6 +154,14 @@ own private Weston, then `vitest --project native` in the read-only bound
 `tauri-driver` with fresh XDG dirs under the run root, so every test gets a
 fresh app: one window, no launch restore. WebdriverIO is the client, in
 classic WebDriver mode (WebKitWebDriver has no BiDi).
+
+The sandbox runs a core (the harness starts it and names it in
+`SAC_APP_HERDR_MACHINE`), so the app's own ask face answers: the fixture
+seeds the device store with one registered path, the seeded repository under
+the core's machine, and the app reaches the tracker through the declaration
+file exactly as on a real device. Nothing here types into the app; the
+registration is the store seed, and a scenario that wants the add field
+drives it itself (the control-plane scenario, browser-only).
 
 ```sh
 SACCADE_DB=<the caller-side tracker db> just app-test-native

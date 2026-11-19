@@ -1,9 +1,10 @@
-// The control plane's add field (t-54): registering a project is its
+// The control plane's add field: registering a project is its
 // own act, separate from opening anything. `a` (the plane's reading
 // context, and a project's act menu) opens a small inline field; the
-// human types host:port/name, Enter registers that tracker
-// (lib/tracker.ts registerTracker) and the rail lists it - nothing
-// opens, the shown project stays. Escape leaves the field.
+// human types machine:/path/to/repository, Enter registers the
+// repository whose declaration file names the project (the registry
+// reads the file through the one core module) and the rail lists it -
+// nothing opens, the shown project stays. Escape leaves the field.
 //
 // The shape is Find's (lib/find/interaction.ts): a pure session plus
 // a text-entry context of declared field commands, captured through
@@ -12,7 +13,7 @@
 
 import { key, sequence, textEntryContext } from "../contracts/input.ts";
 import type { InputContext } from "../contracts/input.ts";
-import { projectAddress } from "../location.ts";
+import { parseRegisteredPath, type RegisteredPath } from "../projects.ts";
 
 export type AddView = Readonly<{
   open: boolean;
@@ -26,8 +27,10 @@ export const ADD_CLOSED: AddView = { open: false, value: "", problem: null };
 
 export interface AddProjectDeps {
   capture(context: InputContext): { release(): void };
-  /** Register the tracker at the host (it joins the rail). */
-  register(tracker: string, host: string): void;
+  /** Register the repository at the path (it joins the rail).
+   * Refusals arrive as the field's problem; resolution reads the
+   * declaration through the module, so this is async. */
+  register(registered: RegisteredPath): Promise<void>;
 }
 
 export function createAddProject(deps: AddProjectDeps) {
@@ -46,23 +49,34 @@ export function createAddProject(deps: AddProjectDeps) {
     notify();
   }
 
-  function submit(): void {
-    if (!view.open) return;
-    const address = projectAddress(view.value);
-    if (address === null) {
+  let submitting = false;
+
+  async function submit(): Promise<void> {
+    if (!view.open || submitting) return;
+    const registered = parseRegisteredPath(view.value);
+    if (registered === null) {
       view = {
         ...view,
-        problem: `'${view.value.trim()}' is not a project address; type host:port/name (the port defaults to 8811)`,
+        problem: `'${view.value.trim()}' is not a repository path; type machine:/path/to/repository`,
       };
       notify();
       return;
     }
-    deps.register(address.tracker, address.host);
+    submitting = true;
+    try {
+      await deps.register(registered);
+    } catch (error) {
+      submitting = false;
+      view = { ...view, problem: error instanceof Error ? error.message : String(error) };
+      notify();
+      return;
+    }
+    submitting = false;
     close();
   }
 
   const context = textEntryContext(() => [
-    { action: { id: "tasks.add.submit", label: "add the project", run: submit }, keys: [sequence(key("Enter"))] },
+    { action: { id: "tasks.add.submit", label: "add the project", run: () => void submit() }, keys: [sequence(key("Enter"))] },
     { action: { id: "tasks.add.close", label: "leave the field", run: close }, keys: [sequence(key("Escape"))] },
   ]);
 
