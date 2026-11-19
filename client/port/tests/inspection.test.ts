@@ -57,6 +57,7 @@ test("the inspection context: its own keys act, everything else is consumed iner
 
 test("the readout carries the inspection while open, null when closed", () => {
   const base = {
+    railAdd: { open: false, value: "", problem: null },
     windowLabel: "main",
     link: null,
     bound: true,

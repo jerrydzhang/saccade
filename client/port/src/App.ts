@@ -34,7 +34,8 @@ import type { BoardUI } from "./instruments/board.ts";
 import { tasksInstrument } from "./instruments/tasks.ts";
 import { instrumentClaims, instrumentForAddress } from "./lib/instruments/claims.ts";
 import type { TargetPresentations } from "./components/Buffer.ts";
-import { PLANE_LOCATION, isPlane } from "./lib/location.ts";
+import { formatLocation } from "./lib/location.ts";
+import { createFrameRail } from "./lib/frame/rail.ts";
 import type { Address } from "./lib/contracts/places.ts";
 import {
   PORT_SURFACE,
@@ -60,7 +61,6 @@ import {
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
 import { TrackerSource } from "./lib/tracker.ts";
-import { formatLocation } from "./lib/location.ts";
 import { sourceFor } from "./lib/sources.ts";
 import { tasksPageOf } from "./lib/tasks/page.ts";
 import type { PickContext } from "./lib/picker/model.ts";
@@ -85,8 +85,17 @@ export const WHICH_KEY_DELAY_MS = 400;
 /** Help's column title for each surface's own keys. */
 const SURFACE_KEYS_TITLE: Readonly<Record<"board" | "tasks", string>> = {
   board: "this board",
-  tasks: "the plane",
+  tasks: "the project's tasks",
 };
+
+/** The frame rail's live view: the pane renders from it. The pane
+ * element registers itself (attachRailPane) so the rail targets'
+ * bounds measure in it. */
+export interface FrameRailView {
+  visible: boolean;
+  add: Readonly<{ open: boolean; value: string; problem: string | null }>;
+  pane: HTMLElement | null;
+}
 
 export interface StripView {
   location: string | null;
@@ -133,6 +142,16 @@ export interface PortWindow {
   inspectionWheel(deltaY: number): void;
   inspectionPan(x: number, y: number): void;
   subscribeInspection(observer: (state: InspectionState | null) => void): () => void;
+  /** The frame rail: the pane registers its element (the rail
+   * targets' bounds measure in it), the view carries the rail's
+   * visibility, the add field and the pane. */
+  attachRailPane(element: HTMLElement | null): void;
+  subscribeRailState(observer: (view: FrameRailView) => void): () => void;
+  /** The frame rail's live view (projects, agents, the shown mark). */
+  subscribeRail(observer: (rail: import("./lib/tasks/rail.ts").Rail) => void): () => void;
+  typeAdd(value: string): void;
+  submitAdd(): void;
+  closeAdd(): void;
   readout(): PortObservation;
 }
 
@@ -140,6 +159,152 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const diagnostics: SliceDiagnostics = createDiagnostics();
   const buffers = createBufferFactory(windowId);
   const viewport: SliceBufferViewport = createViewport();
+
+  // The frame's rail: the projects this device has registered and
+  // their running agents. The rail is the frame's own surface - any
+  // window can show it, none starts with it (hidden until Space r or
+  // Space a) - and its entries are ordinary targets of the shown
+  // buffer: the window injects them into the presented set, so one
+  // select session and one act menu span the content and the rail.
+  // The pane element registers itself from the view (attachRailPane);
+  // the rail targets' bounds measure in it, translated into the
+  // content's coordinates exactly as the geometry does.
+  let railVisible = false;
+  let railPane: HTMLElement | null = null;
+  const railStateObservers = new Set<(view: FrameRailView) => void>();
+  let frameInputHost: import("./lib/input/host.ts").HostMatcher | null = null;
+
+  function frameInstall(context: import("./lib/contracts/input.ts").InputContext | null): void {
+    frameInputHost?.dispose();
+    frameInputHost =
+      context === null
+        ? null
+        : createHostMatcher(context, { expirySuspended: () => whichKey !== null });
+  }
+
+  // The frame's own capture: the rail's add field holds the keys
+  // through it while open; the pane's captured-field strokes route
+  // here (the window's key seam checks the pane's marker).
+  const frameCapture = (context: import("./lib/contracts/input.ts").InputContext): { release(): void } => {
+    frameInstall(context);
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        frameInstall(null);
+      },
+    };
+  };
+
+  /** The project this window shows: the task list's, or the board's
+   * task (the shown location's project name). The instruments build
+   * before the window's frames exist; until one shows, there is no
+   * project. */
+  function shownProject(): string | null {
+    let state: ReturnType<typeof displayedFrame>;
+    try {
+      state = displayedFrame();
+    } catch {
+      return null;
+    }
+    if (state.kind !== "alive") return null;
+    if (state.content.kind === "available") {
+      const content = state.content.value.props["content"] as
+        | { resolved?: { machine?: unknown } | null; asked?: unknown }
+        | undefined;
+      const machine = content?.resolved?.machine;
+      if (typeof machine === "string" && machine.startsWith("tracker:")) {
+        return machine.slice("tracker:".length);
+      }
+      if (typeof content?.asked === "string") {
+        const parsed = parseOpenSpec(content.asked);
+        if (parsed !== null && parsed.machine.startsWith("tracker:")) {
+          return parsed.machine.slice("tracker:".length);
+        }
+      }
+    }
+    return null;
+  }
+
+  const frameRail = createFrameRail({
+    capture: frameCapture,
+    open: (spec) => openSpec(spec),
+    elsewhere: (spec, act) => {
+      openElsewhere(spec, act).catch((error: unknown) => {
+        diagnostics.report(
+          refusalContext,
+          knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+        );
+        note = `the open act failed: ${String(error).slice(0, 120)}`;
+        notifyStrip();
+      });
+    },
+    copy: (text) => copyPayload(text),
+    shownProject,
+  });
+
+  // the add field's view rides the pane's own view: every add change
+  // re-notifies the pane (the rail's entries re-notify through the
+  // service's own observers)
+  frameRail.add.subscribe(() => notifyRailState());
+
+  function railBounds(id: string): { left: number; top: number; right: number; bottom: number } | null {
+    const element = viewport.attachedElement();
+    if (element === null || railPane === null) return null;
+    const part = railPane.querySelector(`[data-port-part=${JSON.stringify(id)}]`);
+    if (!(part instanceof HTMLElement)) return null;
+    const host = element.getBoundingClientRect();
+    const box = part.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) return null;
+    const left = element.scrollLeft - host.left - element.clientLeft;
+    const top = element.scrollTop - host.top - element.clientTop;
+    return { left: box.left + left, top: box.top + top, right: box.right + left, bottom: box.bottom + top };
+  }
+
+  function notifyRailState(): void {
+    const view = railStateView();
+    for (const observer of [...railStateObservers]) observer(view);
+  }
+
+  function railStateView(): FrameRailView {
+    return { visible: railVisible && !railCramped, add: frameRail.add.view(), pane: railPane };
+  }
+
+  // cramped: the window too narrow for a rail beside its content - the
+  // rail hides itself (the bound is the layout's, a named tunable)
+  let railCramped = false;
+  const RAIL_MIN_WIDTH = 640;
+
+  /** The select-session labels over the shown buffer's presented set,
+   * while select mode is open: the rail's chips ride the same
+   * session's labels, measured in the pane. */
+  function railSelectLabels(): readonly { part: string; label: string; nested?: boolean }[] {
+    const state = displayedFrame();
+    if (state.kind !== "alive" || state.content.kind !== "available") return [];
+    const targets = state.content.value.props["targets"] as TargetPresentations | undefined;
+    const view = targets?.selectView();
+    if (view === null || view === undefined) return [];
+    return view.labels;
+  }
+
+  // The shown buffer's presentations change (select opens, labels
+  // narrow): the rail's chips ride them. Subscribed when the frame
+  // state moves; the lease lives on the frame's published props.
+  let railLease: TargetPresentations | null = null;
+  let railLeaseOff: (() => void) | null = null;
+  function watchRailLease(): void {
+    const state = displayedFrame();
+    const lease =
+      state.kind === "alive" && state.content.kind === "available"
+        ? (state.content.value.props["targets"] as TargetPresentations | undefined) ?? null
+        : null;
+    if (lease === railLease) return;
+    railLeaseOff?.();
+    railLeaseOff = null;
+    railLease = lease;
+    if (lease !== null) railLeaseOff = lease.subscribe(() => notifyRailState());
+  }
 
   // The window's instruments, one per claim: the claims list
   // names them and each constructs at assembly through the registry's
@@ -176,7 +341,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
     ),
     tasks: registerInstrument(
       tasksInstrument({
-        open: (spec, part) => openSpec(spec, part),
+        open: (spec) => openSpec(spec),
+        railWords: (observer) => frameRail.subscribeRail(observer),
         elsewhere: (spec, act) => {
           openElsewhere(spec, act).catch((error: unknown) => {
             diagnostics.report(
@@ -218,6 +384,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
       diagnostics,
       buffers,
       expirySuspended: () => whichKey !== null,
+      frameTargets: {
+        targets: () => (railVisible && !railCramped ? frameRail.targets() : []),
+        bounds: (id) => railBounds(id),
+      },
     });
     instrument.activate();
     instrument.subscribeInputPending(() => {
@@ -245,8 +415,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   // Every instrument constructs at assembly (one uniform path); the
-  // board starts active (the window shows what it shows, the plane
-  // opens when nothing was asked).
+  // the board starts active (the window shows what it shows; a
+  // window with no location stays the empty window).
   for (const claim of instrumentClaims) instrumentFor(claim.instrument);
 
   // The open-location picker: the window's open surface, submitting
@@ -302,7 +472,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // the tracker machine rides the parser's own mapping (a host form
     // becomes a tracker: machine) - never a raw split of the string
     let trackerMachine: string | null = null;
-    // the plane names no tracker: the project it shows is its frame's
+    // the shown tracker machine names the project's tracker
     const shownTracker = (current.kind === "alive" && current.content.kind === "available"
       ? (current.content.value.props["content"] as { resolved?: { machine?: unknown } | null } | undefined)?.resolved?.machine
       : undefined);
@@ -688,6 +858,17 @@ export function createPortWindow(windowId = "main"): PortWindow {
       unlink: () => {
         void clearTheLink();
       },
+      toggleRail: () => {
+        railVisible = !railVisible;
+        notifyRailState();
+      },
+      registerProject: () => {
+        if (!railVisible) {
+          railVisible = true;
+          notifyRailState();
+        }
+        frameRail.add.enter();
+      },
       showHelp: () => {
         helpOpen = true;
         notifyWhichKey();
@@ -777,7 +958,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return instrument.subscribe((state) => {
       lastFrames[surface] = state;
       if (surface !== activeSurface) return;
+      watchRailLease();
       for (const observer of [...frameObservers]) observer(state);
+      notifyRailState();
       notifyStrip();
     });
   }
@@ -943,14 +1126,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
     const target = instrumentFor(surface);
     setActive(surface);
-    // the plane's part is the project it shows (its window place's
-    // part): the address carries it, no anchor reveals it
-    const plane = isPlane(address);
     const place = {
       bufferId: target.id,
-      address: plane ? { ...address, path: part ?? "" } : address,
+      address,
       position:
-        !plane && typeof part === "string" && part.length > 0
+        typeof part === "string" && part.length > 0
           ? {
               kind: "anchor" as const,
               anchor: { kind: "board-part" as const, path: part },
@@ -959,6 +1139,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
           : { kind: "default" as const },
     };
     target.places.restore(place);
+    frameRail.refresh();
+    notifyRailState();
     notifyStrip();
   }
 
@@ -1064,8 +1246,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     const target = event.target as HTMLElement | null;
     const field = target !== null &&
       (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-    // Declared captured fields use their active buffer's text-entry
-    // context. Other fields (including the window picker) stay native.
+    // Declared captured fields use their own realm's text-entry
+    // context. Other fields (including the window picker) stay
+    // native.
     if (field && !target?.closest("[data-port-captured-input]")) {
       trace?.set("route", "native-field");
       return;
@@ -1097,6 +1280,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
       alt: event.altKey,
       meta: event.metaKey,
     };
+    // the frame rail pane's captured field (the add field) routes to
+    // the frame's own matcher, every other captured field to the
+    // active buffer's
+    if (field && target?.closest("[data-port-frame-capture]") !== null) {
+      trace?.set("route", "frame-captured");
+      if (frameInputHost === null) return;
+      const frameDisposition = frameInputHost.apply(frameInputHost.stroke(stroke));
+      if (frameDisposition === "consume") event.preventDefault();
+      return;
+    }
     trace?.set("route", field ? "captured-field" : "window-then-buffer");
     let windowAnswer: string | null = null;
     const disposition = field
@@ -1171,13 +1364,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   async function boot(): Promise<void> {
+    frameRail.start();
     const requested = await openTestBoard();
     if (!requested) {
-      // nothing was asked for (no restore, no test open): the control
-      // plane opens now, not after the settle below - that
-      // wait exists to report on an asked open
-      const shown = displayedFrame();
-      if (shown.kind === "alive" && shown.content.kind === "empty") openSpec(PLANE_LOCATION);
+      // nothing was asked for (no restore, no test open): a window
+      // with no location is the empty window - it stays one (the
+      // frame's empty surface names the ways out)
       console.log(`[port] observation: ${JSON.stringify(readout())}`);
       return;
     }
@@ -1211,21 +1403,12 @@ export function createPortWindow(windowId = "main"): PortWindow {
       const failure = diagnostics.entries().at(-1);
       console.error(`[viewer] test open board FAILED: ${failure ? failure.message : "no board"}`);
     }
-    // E4 (the ratified floor): a window with
-    // nothing opened - a cold profile, a new window, a restore whose
-    // saved location no longer parses - opens to the control plane,
-    // never a blank page. With no project known yet the plane says how
-    // to add one (a). Any open that shows something - the lane's test
-    // open, a restore, a delivery - leaves the surface to its own
-    // routing.
+    // A window whose asked open shows nothing is the failure worth
+    // logging (the lane's test open, a restore that carried nothing);
+    // a window with no location is the empty window and stays one.
     const after = displayedFrame();
     if (after.kind !== "alive" || (after.content.kind !== "available" && after.content.kind !== "unavailable")) {
-      // an open was asked for (a restore, the lanes' test open) and
-      // nothing shows: that is the failure worth logging (the line
-      // once sat on the other branch and fired after every open that
-      // DID show something)
       if (requested) console.error("[viewer] test open board FAILED: no board");
-      openSpec(PLANE_LOCATION);
     }
     console.log(`[port] observation: ${JSON.stringify(readout())}`);
   }
@@ -1301,6 +1484,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
           : null,
       input: inputView(),
       reading: readingLayout.current(),
+      railAdd: frameRail.add.view(),
     });
   }
 
@@ -1407,9 +1591,25 @@ export function createPortWindow(windowId = "main"): PortWindow {
         inspectionObservers.delete(observer);
       };
     },
+    attachRailPane(element: HTMLElement | null): void {
+      railPane = element;
+      notifyRailState();
+    },
+    subscribeRailState(observer) {
+      railStateObservers.add(observer);
+      observer(railStateView());
+      return () => {
+        railStateObservers.delete(observer);
+      };
+    },
+    subscribeRail: (observer) => frameRail.subscribeRail(observer),
+    typeAdd: (value) => frameRail.add.type(value),
+    submitAdd: () => void frameRail.add.submit(),
+    closeAdd: () => frameRail.add.close(),
     destroy() {
       window.removeEventListener("keydown", windowKeyDown);
       windowHost.dispose();
+      frameRail.stop();
       for (const unsubscribe of Object.values(frameUnsubscribes)) unsubscribe();
       for (const instrument of Object.values(instruments)) instrument.destroy();
     },

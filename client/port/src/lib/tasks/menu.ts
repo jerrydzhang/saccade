@@ -12,14 +12,8 @@
 //   i  open in... (ask; keep the link)
 //   w  open in a new window
 //
-// The control plane's rail entries (t-48) are targets of this same
-// menu: a project's f shows its tasks on this plane (its first act -
-// Enter and a plain click switch; the plane's project is the window's
-// own state, t-54), a adds another project and d forgets it, any
-// project; an agent's first act is y, copying `hc attach <address>` -
-// the address as the local core names it (t-55) - so Enter and a plain
-// click copy it; its first task's board acts follow. An agent no
-// tracker registered has y alone.
+// The rail's acts are the frame's (lib/frame/rail.ts): the rail is
+// the frame's surface, not this instrument's.
 //
 // The o/i/w acts are the window's elsewhere surface (S18's OPEN acts,
 // window-wide since ea51669): they appear only when the window has
@@ -28,24 +22,26 @@
 // prototype's 'l' (launch) or 'e' (inline activity), which the
 // agreement superseded.
 
-import { commandContext, key, sequence } from "../input/input-context.ts";
-import type { Action, InputContext, KeyInput, KeyResolution } from "../input/input-context.ts";
-import { PLANE_LOCATION, formatLocation } from "../location.ts";
+import type { Action, InputContext } from "../input/input-context.ts";
+import { formatLocation } from "../location.ts";
 import { createMenuSession, type MenuAct, type MenuSession, type MenuTarget } from "../menu/session.ts";
 import type { ElsewhereAct } from "../elsewhere.ts";
-import type { RailTarget } from "./rail.ts";
+import type { Rail } from "./rail.ts";
 
 /** The window services the task-row acts ride: opening goes through
  * the window's ONE open funnel (trail + restore), the elsewhere acts
  * through the window's OPEN surface. The window injects them; until
  * then no acts are offered. */
 export type TaskPorts = Readonly<{
-  /** Open a location here; the plane's part is the project it shows. */
-  open(spec: string, part?: string | null): void;
+  /** Open a location here. */
+  open(spec: string): void;
   elsewhere?(spec: string, act: ElsewhereAct): void;
   /** Copy text to the clipboard; injected so tests observe it and
    * the menu never touches the DOM's clipboard itself. */
   copy?(text: string): void;
+  /** The frame rail's live view, for the rows' agent marks: the rail
+   * is the frame's; the rows read its words. */
+  railWords?(observer: (rail: Rail) => void): () => void;
 }>;
 
 import { createActMenu } from "../menu/create.ts";
@@ -60,12 +56,6 @@ export interface TasksMenuDeps {
   rowLink(part: string): string | null;
   /** The window's services, or null before injection. */
   ports(): TaskPorts | null;
-  /** The rail entry a rail part names (t-48), or undefined. */
-  railTarget(part: string): RailTarget | undefined;
-  /** Forget a reached project (lib/tracker.ts forgetTracker). */
-  forget(project: string): void;
-  /** Open the plane's add field (lib/tasks/add.ts). */
-  addProject(): void;
   /** Capture input while open. Lease release returns to the CURRENT
    * base; a menu never reinstalls its own saved reading context. */
   capture(context: InputContext): { release(): void };
@@ -82,8 +72,8 @@ export interface TasksMenu {
   setOnNotify(callback: () => void): void;
 }
 
-/** The acts on a task's board, composed spec in hand: a task row's, and
- * an agent's for its first task (t-14: tasks and agents have no here). */
+/** The acts on a task's board, composed spec in hand: a task row's,
+ * and an agent's for its first task. */
 function boardActs(spec: string, ports: TaskPorts, reference = true): MenuAct[] {
   // F6 (the ratified primary, t-36 r109): the FIRST act is o 'open
   // board through the link' - Enter and a plain click run it. With one
@@ -124,72 +114,6 @@ function boardActs(spec: string, ports: TaskPorts, reference = true): MenuAct[] 
   return acts;
 }
 
-/** An agent's acts: y first - the attach command for its terminal,
- * the address exactly as the local core names it (t-55) - so Enter and
- * a plain click copy it (the human, 2026-11-14: to reach the task,
- * select the task); then its first task's board acts, when it owns
- * one. */
-function agentActs(target: RailTarget, ports: TaskPorts): MenuAct[] {
-  const acts: MenuAct[] = [];
-  const copy = ports.copy;
-  const address = target.address;
-  if (copy !== undefined && address !== null) {
-    acts.push({
-      key: "y",
-      action: {
-        id: "tasks.agent.attach",
-        label: `copy hc attach ${address}`,
-        run: () => copy(`hc attach ${address}`),
-      },
-    });
-  }
-  if (target.project !== null && target.task !== null) {
-    acts.push(...boardActs(formatLocation({ machine: `tracker:${target.project}`, path: target.task }), ports, false));
-  }
-  return acts;
-}
-
-/** A project's acts: f shows its tasks on this plane - the
- * first act, so Enter and a plain click switch - a adds another
- * project, and d forgets it. Any project may be forgotten, the shown
- * one included (the human, 2026-11-14: with one project,
- * forgetting it must be possible). */
-function projectActs(
-  target: RailTarget,
-  deps: Pick<TasksMenuDeps, "ports" | "forget" | "addProject">,
-  ports: TaskPorts,
-): MenuAct[] {
-  const project = target.project;
-  if (project === null) return [];
-  const acts: MenuAct[] = [
-    {
-      key: "f",
-      action: {
-        id: "tasks.project.show",
-        label: "show its tasks here",
-        run: () => ports.open(PLANE_LOCATION, project),
-      },
-    },
-    {
-      key: "a",
-      action: {
-        id: "tasks.project.add",
-        label: "add a project (machine:/path/to/repository)",
-        run: () => deps.addProject(),
-      },
-    },
-  ];
-  acts.push({
-    key: "d",
-    action: {
-      id: "tasks.project.forget",
-      label: "forget this project (type its path to reach it again)",
-      run: () => deps.forget(project),
-    },
-  });
-  return acts;
-}
-
 /** The menu heading for a target: the target's own label. */
 export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>): string {
   return target.label;
@@ -197,16 +121,10 @@ export function tasksMenuLabel(target: Readonly<{ kind: string; label: string }>
 
 export function taskRowActs(
   target: MenuTarget,
-  deps: Pick<TasksMenuDeps, "machine" | "rowLink" | "ports" | "railTarget" | "forget" | "addProject">,
+  deps: Pick<TasksMenuDeps, "machine" | "rowLink" | "ports">,
 ): readonly MenuAct[] {
   const ports = deps.ports();
   if (ports === null || target.part === null) return [];
-  if (target.kind === "project" || target.kind === "agent") {
-    const rail = deps.railTarget(target.part);
-    if (rail === undefined) return [];
-    if (rail.kind === "project") return projectActs(rail, deps, ports);
-    return agentActs(rail, ports);
-  }
   const machine = deps.machine();
   if (machine === null) return [];
   // the ROW'S LINK composed against the list's own tracker - never

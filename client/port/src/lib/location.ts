@@ -2,38 +2,27 @@
 // (open control, picker, inspection open): "machine:/absolute/path"
 // names a machine from the local core's list - a repository's
 // declaration lives at such a path - "name/t-N[@rK]" names a task
-// board served by the registered project of that name, "plane" is the
-// control plane (it names no tracker), and nothing else is a location.
-// A bare relative path is refused, loudly, never guessed; a bare
-// "/absolute/path" is no location either - the machine is always
-// named.
+// board served by the registered project of that name, and
+// "name/tasks" is that project's task list. A bare relative path is
+// refused, loudly, never guessed; a bare "/absolute/path" is no
+// location either - the machine is always named. A window with no
+// location is the empty window.
 //
 // Machine names may carry colons themselves, so the separator is the
 // first colon whose remainder starts with "/".
 
 export type ParsedLocation = { machine: string; path: string } | null;
 
-// The tracker-named form: a registered project's name, then a task
-// spec or the glance's entry page (agents). The name carries no colon
-// or slash, so it never collides with the machine:/path form. A
-// tracker's pipeline is no location: the control plane shows it.
-const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents)$/;
+// The project-named forms: a registered project's name, then a task
+// spec, the task list, or the glance's entry page (agents). The name
+// carries no colon or slash, so it never collides with the
+// machine:/path form.
+const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents|tasks)$/;
 
-/** The control plane's address: it names no tracker. Which
- * project the plane shows is the window's own state, carried in the
- * address's path ("" - the window's default) and persisted as the
- * window place's part; the location string is always "plane". */
-export const PLANE_LOCATION = "plane";
-export const PLANE_MACHINE = "plane";
-
-/** Whether an address is the control plane: a core machine that
- * happens to be named "plane" is still reached as plane:/path. */
-export function isPlane(address: { machine: string; path: string }): boolean {
-  return address.machine === PLANE_MACHINE && !address.path.startsWith("/");
-}
+export const TASKS_PATH = "tasks" as const;
 
 /** The entry pages the instruments read from a tracker: the pipeline
- * (tasks) and the glance (agents), per t-14 "Tasks and agents". */
+ * (tasks) and the glance (agents). */
 export type InstrumentPath = "tasks" | "agents";
 
 export function instrumentPath(path: string): InstrumentPath | null {
@@ -61,7 +50,6 @@ export function parseTaskSpec(path: string): TaskSpec | null {
 export function parseLocation(input: string): ParsedLocation {
   const raw = input.trim();
   if (raw.length === 0) return null;
-  if (raw === PLANE_LOCATION) return { machine: PLANE_MACHINE, path: "" };
   const tracker = trackerLocation(raw);
   if (tracker) return tracker;
   for (let i = 0; i < raw.length; i++) {
@@ -87,7 +75,6 @@ export function viewRoute(route: string): string {
 /** The parseable string form of a location: the form the header field,
  * the picker and the inspection open all take back. */
 export function formatLocation(location: { machine: string; path: string }): string {
-  if (isPlane(location)) return PLANE_LOCATION;
   if (location.machine.startsWith("tracker:")) {
     return `${location.machine.slice("tracker:".length)}/${location.path}`;
   }

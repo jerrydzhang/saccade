@@ -30,6 +30,7 @@ import type {
   AnchorData,
   ReturnPlaces,
 } from "../contracts/places.ts";
+import type { TargetDefinition } from "../contracts/buffer.ts";
 import type {
   InstrumentDefinition,
   InstrumentProps,
@@ -58,6 +59,13 @@ export type WindowEnvironment = Readonly<{
   viewport: Viewport;
   diagnostics: BufferDiagnostics;
   buffers: BufferFactory;
+  /** The frame's own targets (the rail's), presented beside the
+   * publication's: one select session and one act menu span the
+   * content and the rail. */
+  frameTargets?: {
+    targets(): TargetDefinition[];
+    bounds(id: string): import("../contracts/buffer.ts").Bounds | null;
+  };
 }>;
 export interface RunningInstrument {
   readonly id: string;
@@ -100,6 +108,9 @@ export function registerInstrument<
         connect: definition.connect,
         ...(environment.expirySuspended !== undefined
           ? { expirySuspended: environment.expirySuspended }
+          : {}),
+        ...(environment.frameTargets !== undefined
+          ? { frameTargets: environment.frameTargets }
           : {}),
       });
       const project = (frame: Readonly<ContentFrame<T>>): RenderPair =>

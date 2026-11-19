@@ -1,5 +1,5 @@
-// The control plane's rail, its pure half: the projects this device
-// has registered and, under each, the agents that are running now,
+// The rail's pure half: the projects this device has registered
+// and, under each, the agents that are running now,
 // grouped by Herdr's word. "Running" is Herdr core's say alone: an
 // incarnation from a project's agents page shows only while the local
 // core's word table carries a live row for its terminal address, and

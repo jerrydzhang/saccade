@@ -36,26 +36,24 @@ test("the colon join of a tracker machine is not a location", () => {
   assert.equal(parseOpenSpec("tracker:seedtracker:t-0@r1"), null);
 });
 
-// The control plane's address: "plane" names no tracker; a
-// tracker's pipeline is no location of its own, with no alias; a
-// machine named plane is still reached as plane:/path.
-import { isPlane } from "../src/lib/location.ts";
+// A project's task list is a location of its own: name/tasks; the
+// plane is gone (no location is the empty window); a machine named
+// plane is still reached as plane:/path - the machine:/path arm
+// never checked names.
 
-test("plane is the control plane's location and names no tracker", () => {
-  assert.deepEqual(parseLocation("plane"), { machine: "plane", path: "" });
-  assert.equal(formatLocation({ machine: "plane", path: "" }), "plane");
-  // the project it shows rides the address, never the location string
-  assert.equal(formatLocation({ machine: "plane", path: "saccade" }), "plane");
-  assert.ok(isPlane({ machine: "plane", path: "saccade" }));
-  assert.ok(!isPlane({ machine: "plane", path: "/etc/board.yaml" }), "a machine named plane keeps its paths");
-  assert.deepEqual(parseLocation("plane:/x/board.yaml"), { machine: "plane", path: "/x/board.yaml" });
+test("a project's task list is a location; the plane is gone", () => {
+  assert.deepEqual(parseLocation("saccade/tasks"), { machine: "tracker:saccade", path: "tasks" });
+  assert.equal(formatLocation({ machine: "tracker:saccade", path: "tasks" }), "saccade/tasks");
+  assert.equal(parseLocation("plane"), null, "the plane is no location: a window with no location is the empty window");
+  assert.deepEqual(parseLocation("plane:/x/board.yaml"), { machine: "plane", path: "/x/board.yaml" }, "a machine named plane keeps its paths");
 });
 
-test("a tracker's tasks page is no location, and the host form is gone", () => {
-  assert.equal(parseLocation("saccade/tasks"), null);
+test("a tracker's other pages are no location, and the host form is gone", () => {
+  assert.equal(parseLocation("saccade/pipeline"), null);
   assert.equal(parseLocation("localhost:8811/saccade/tasks"), null);
   assert.equal(parseLocation("localhost:8813/pyrimel/t-3"), null, "the host form is no location: the machine is the declaration's");
   assert.deepEqual(parseLocation("pyrimel/t-3"), { machine: "tracker:pyrimel", path: "t-3" });
+  assert.deepEqual(parseLocation("pyrimel/agents"), { machine: "tracker:pyrimel", path: "agents" });
 });
 
 test("a bare path is no location; the machine is always named", () => {

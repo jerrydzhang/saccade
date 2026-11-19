@@ -139,6 +139,15 @@ export type BufferBuild<T extends object, UI extends object, A extends AnchorDat
   /** The which-key suspension probe (optional; the App's popup
    * state), handed to every reading matcher this buffer installs. */
   expirySuspended?: () => boolean;
+  /** The frame's own targets, presented beside the instrument's: the
+   * rail is the frame's surface, and its entries are ordinary
+   * targets - one select session, one act menu, both sets. The frame
+   * measures its own targets' bounds. Optional; absent, the
+   * publication's targets stand alone. */
+  frameTargets?: {
+    targets(): TargetDefinition[];
+    bounds(id: string): Bounds | null;
+  };
 }>;
 export type BuiltBuffer<T extends object, UI extends object> = Readonly<{
   host: HostBuffer<T>;
@@ -532,13 +541,17 @@ export class SliceBufferHost<
    * per buffer, built on first ask over the buffer's own services. */
   presentations(): TargetPresentations {
     if (this.presentationsCore === null) {
+      const frameTargets = this.build.frameTargets;
       this.presentationsCore = createTargetPresentations({
         targets: () => {
           const state = this.snapshot();
-          if (state.kind !== "alive" || state.content.kind !== "available") return [];
-          return state.content.value.targets;
+          const published =
+            state.kind !== "alive" || state.content.kind !== "available" ? [] : state.content.value.targets;
+          // the frame's targets present beside the publication's: the
+          // rail is the frame's surface, its entries ordinary targets
+          return frameTargets === undefined ? published : [...published, ...frameTargets.targets()];
         },
-        bounds: (id) => this.geometry().bounds(id),
+        bounds: (id) => this.geometry().bounds(id) ?? frameTargets?.bounds(id) ?? null,
         capture: (context) => this.interactions().capture(context),
         viewport: this.viewport,
       });

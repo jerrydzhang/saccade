@@ -3,19 +3,19 @@ model (groups, tables, task rows) inside the frame's surface - the
 frame draws the select labels and the act menu over this
 content from the TargetPresentations lease the props carry, and
 forwards the pointer's gestures on the marked elements. The view keeps
-what is about its own data: the rail, the add field, and the row
-highlight: it follows the POINTER'S OWN MOVEMENT, never a
-row that scrolls under a resting pointer; a move that changes the
-pointer's coordinates marks the row under it; any scroll clears the
-mark. Row identity and the row's link ride the port's own
-content-structure scheme: data-port-part names the row's identity,
-data-port-kind names the kind, data-port-task names the task (the
-return anchor's identity), data-port-open names the row's link. -->
+what is about its own data: the row highlight (it follows the
+POINTER'S OWN MOVEMENT, never a row that scrolls under a resting
+pointer; a move that changes the pointer's coordinates marks the row
+under it; any scroll clears the mark) and the problem line. Row
+identity and the row's link ride the port's own content-structure
+scheme: data-port-part names the row's identity, data-port-kind names
+the kind, data-port-task names the task (the return anchor's
+identity), data-port-open names the row's link. The rail beside it is
+the frame's (App.svelte), not this instrument's. -->
 
 <script lang="ts">
   import type { TargetPresentations } from "../lib/contracts/buffer.ts";
   import FrameSurface from "../components/FrameSurface.svelte";
-  import PlaneRail from "./PlaneRail.svelte";
   import TasksPipeline from "./TasksPipeline.svelte";
   import type { TasksData, TasksUI } from "./tasks.ts";
   import { wordsByIncarnationOf, type Rail } from "../lib/tasks/rail.ts";
@@ -34,9 +34,11 @@ return anchor's identity), data-port-open names the row's link. -->
     targets?: TargetPresentations | null;
   } = $props();
 
+  // The rail's words join the rows' agents: the frame's rail carries
+  // the words (the controller's face forwards them); the rows read
+  // them for their agents' live marks.
   let rail: Rail = $state({ projects: [], unregistered: [], herdr: null });
-
-  $effect(() => controller.subscribeRail((next) => {
+  $effect(() => controller.subscribeWords((next) => {
     rail = next;
   }));
 
@@ -44,7 +46,6 @@ return anchor's identity), data-port-open names the row's link. -->
   // that scrolls under a resting pointer; CSS :hover did
   // exactly that as j/k scrolled). A move that changes the pointer's
   // coordinates marks the row under it; any scroll clears the mark.
-  // A rail entry is pointed the same way.
   let hovered: string | null = $state(null);
   let lastPointer: { x: number; y: number } | null = null;
   function pointerMoved(event: MouseEvent): void {
@@ -54,9 +55,7 @@ return anchor's identity), data-port-open names the row's link. -->
     hovered = row instanceof HTMLElement ? row.getAttribute("data-port-part") : null;
   }
   function rowFromEvent(event: MouseEvent): HTMLElement | null {
-    const element = (event.target as HTMLElement | null)?.closest?.(
-      '[data-port-kind="task"], [data-port-kind="project"], [data-port-kind="agent"]',
-    );
+    const element = (event.target as HTMLElement | null)?.closest?.('[data-port-kind="task"]');
     return element instanceof HTMLElement ? element : null;
   }
   $effect(() => {
@@ -87,20 +86,13 @@ return anchor's identity), data-port-open names the row's link. -->
       hovered = null;
     }}
   >
-  <div class="port-plane" role="document">
-    <PlaneRail {rail} {controller} {hovered} />
-    <div class="port-tasks-view">
-      {#if content.status !== "loading" && content.project === null && rail.projects.length === 0}
-        <div class="port-tasks-none" data-port-control="plane-empty">no project yet: press a and type machine:/path/to/repository</div>
-      {:else if content.status !== "loading" && content.project === null}
-        <div class="port-tasks-none" data-port-control="plane-empty">choose a project on the rail, or press a to add one</div>
-      {:else if content.problem !== null}
-        <div class="port-tasks-none" data-port-control="plane-problem">{content.project}: {content.problem}</div>
-      {/if}
-      {#if page !== null && content.status === "loaded"}
-        <TasksPipeline {page} {words} {now} {hovered} />
-      {/if}
-    </div>
+  <div class="port-tasks-list" role="document">
+    {#if content.problem !== null}
+      <div class="port-tasks-none" data-port-control="tasks-problem">{content.project}: {content.problem}</div>
+    {/if}
+    {#if page !== null && content.status === "loaded"}
+      <TasksPipeline {page} {words} {now} {hovered} />
+    {/if}
   </div>
   </div>
 </FrameSurface>

@@ -20,9 +20,15 @@ import { sourceFor } from "../src/lib/sources.ts";
 import { projectPart } from "../src/lib/tasks/rail.ts";
 
 const MACHINE = "tracker:tasks-test";
-// the control plane showing the project: the plane address's
-// path names the project it shows
-const PLANE = { machine: "plane", path: "tasks-test" };
+// a project's task list: the location names the project's tracker
+// machine and the list
+const TASKS = { machine: MACHINE, path: "tasks" };
+// the words feed's observers, for the rows' agent marks (the frame
+// rail's feed, injected)
+const wordsObservers: ((rail: import("../src/lib/tasks/rail.ts").Rail) => void)[] = [];
+function frameRailWords(rail: import("../src/lib/tasks/rail.ts").Rail): void {
+  for (const observer of [...wordsObservers]) observer(rail);
+}
 
 function tasksPageFixture(rows: { task: string; title: string }[]): ViewPage {
   return {
@@ -162,9 +168,15 @@ function harness(t: import("vitest").TestContext, rows: { task: string; title: s
     diagnostics: { report: () => "", unexpected: () => "" },
     connect(buffer) {
       attachment = connectTasks(buffer, {
-        open: (spec, part) => opened.push(part == null ? spec : `${spec} ${part}`),
+        open: (spec) => opened.push(spec),
         elsewhere: (spec, act) => elsewhere.push([spec, act]),
         copy: (text) => copied.push(text),
+        railWords: (observer) => {
+          wordsObservers.push(observer);
+          return () => {
+            wordsObservers.length = 0;
+          };
+        },
       });
       return attachment;
     },
@@ -212,42 +224,41 @@ test("the tasks page publishes through the refresh pipeline with its rows", asyn
     { task: "t-0", title: "the cited seed account" },
     { task: "t-1", title: "the citing seed account" },
   ], ROW_BOUNDS);
-  const outcome = await h.attachment.places.request(PLANE);
+  const outcome = await h.attachment.places.request(TASKS);
   assert.equal(outcome, "applied");
   const state = h.built.host.snapshot();
   assert.equal(state.kind, "alive");
   if (state.kind === "alive" && state.content.kind === "available") {
     // the host's snapshot is the raw state: the frame is the content
     // frame (the registry's projection wraps it for rendering), its
-    // targets in the publication's own slot
+    // targets in the publication's own slot - the rows, and nothing
+    // else (the rail is the frame's)
     const published = state.content.value;
     const frame = published.value;
     assert.equal(frame.status, "loaded");
-    assert.equal(frame.location, "plane");
+    assert.equal(frame.location, "tasks-test/tasks");
     assert.equal(frame.project, "tasks-test");
-    assert.equal(frame.asked, "plane", "the plane's location names no tracker");
-    // the rows, then the rail's entries (the shown project publishes
-    // as a target like the rows)
-    assert.equal(published.targets.length, 3);
+    assert.equal(frame.asked, "tasks-test/tasks");
+    assert.equal(published.targets.length, 2);
     assert.equal(published.targets[0]?.anchor, "t-0");
     assert.equal(published.targets[0]?.id, "/content/0/content/0/row/0");
     assert.equal(published.targets[0]?.label, "t-0 the cited seed account");
     assert.deepEqual(
       published.targets.map((target) => target.kind),
-      ["task", "task", "project"],
+      ["task", "task"],
     );
   } else {
     assert.fail("the tasks page published");
   }
 });
 
-test("an address that is not the plane refuses with the named gap, never a guess", async (t) => {
+test("an address that is not a project's task list refuses with the named gap, never a guess", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
   assert.equal(await h.attachment.places.request({ machine: MACHINE, path: "t-0" }), "failed");
   assert.equal(
-    await h.attachment.places.request({ machine: MACHINE, path: "tasks" }),
+    await h.attachment.places.request({ machine: "plane", path: "" }),
     "failed",
-    "a tracker's pipeline is no location of its own (t-54)",
+    "the plane is gone: a window with no location is the empty window",
   );
 });
 
@@ -266,7 +277,7 @@ test("label selection lands on the row and opens its act menu", async (t) => {
     { task: "t-0", title: "the cited seed account" },
     { task: "t-1", title: "the citing seed account" },
   ], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   assert.equal(h.press("s"), "consume");
   // labels paint while the session is active (it exits on selection)
   const view = h.selectView() as { active: boolean; labels: { part: string; label: string }[] };
@@ -284,7 +295,7 @@ test("label selection lands on the row and opens its act menu", async (t) => {
 
 test("Enter (the primary) opens the task's board THROUGH THE LINK - F6's ratified primary", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "the cited seed account" }], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   h.press("s");
   h.press("a");
   assert.deepEqual(h.opened, [], "no act ran on selection alone");
@@ -299,7 +310,7 @@ test("Enter (the primary) opens the task's board THROUGH THE LINK - F6's ratifie
 
 test("y (the last act) copies the task's reference", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "the cited seed account" }], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   h.press("s");
   h.press("a");
   h.press("y");
@@ -309,7 +320,7 @@ test("y (the last act) copies the task's reference", async (t) => {
 
 test("o/i/w target the label-selected task through the elsewhere surface", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "the cited seed account" }], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   // each OPEN act runs with the menu open: the act closes the menu
   // (close-before-execute), so the next act re-selects first - the
   // scenario 18 script's shape ("on a reference run o; then i; then
@@ -334,7 +345,7 @@ test("o/i/w target the label-selected task through the elsewhere surface", async
 
 test("with no selection no task act runs (the menu is not open)", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   h.press("o");
   h.press("i");
   h.press("w");
@@ -350,13 +361,13 @@ test("departure capture records the row under the reading position; restore retu
     { task: "t-0", title: "the cited seed account" },
     { task: "t-1", title: "the citing seed account" },
   ], ROW_BOUNDS, 50);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   // the window's trail captures through the buffer's return places
   // (RunningInstrument.places), not the content-places adapter
   const capture = h.built.host.places.capture();
-  // the plane's address carries the project it shows
-  assert.equal(capture.address.machine, "plane");
-  assert.equal(capture.address.path, "tasks-test");
+  // the address names the project's list
+  assert.equal(capture.address.machine, MACHINE);
+  assert.equal(capture.address.path, "tasks");
   if (capture.position.kind !== "anchor") {
     assert.fail("the reading position sits inside row 1");
   }
@@ -368,10 +379,10 @@ test("departure capture records the row under the reading position; restore retu
 
   // the restore: open away, then restore the captured place - the row
   // returns at its recorded viewport offset (bounds.top - offset.top)
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   const job = h.built.host.places.restore({
     bufferId: "tasks-1",
-    address: PLANE,
+    address: TASKS,
     position: {
       kind: "anchor",
       anchor: { kind: "task", task: "t-1" },
@@ -386,7 +397,7 @@ test("departure capture records the row under the reading position; restore retu
 
 test("an anchor naming a row the page does not carry is refused, not guessed", async (t) => {
   const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
-  await h.attachment.places.request(PLANE);
+  await h.attachment.places.request(TASKS);
   const accepts = (anchor: unknown): boolean => h.attachment.places.acceptsAnchor(anchor as never);
   assert.equal(accepts({ kind: "task", task: "t-99" }), false);
   assert.equal(accepts({ kind: "task", task: "t-0" }), true);
@@ -434,301 +445,15 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
   const built = host.wire();
   built.host.activate();
   onTestFinished(() => built.host.destroy());
-  await attachment.places.request(PLANE);
+  await attachment.places.request(TASKS);
   built.host.handleKey({ key: "s", ctrl: false, shift: false, alt: false, meta: false });
   built.host.handleKey({ key: "a", ctrl: false, shift: false, alt: false, meta: false });
   assert.equal(attachment.presentation.getSelection(), "t-0");
   page = tasksPageFixture([{ task: "t-1", title: "the citing seed account" }]);
-  await attachment.places.request(PLANE);
+  await attachment.places.request(TASKS);
   assert.equal(
     attachment.presentation.getSelection(),
     null,
     "t-0 left the page: the selection clears, never a silent neighbour",
   );
-});
-
-test("the control plane: rail entries are targets - s labels them after the rows; a project's Enter switches here (t-48)", async (t) => {
-  const project = projectPart("tasks-test");
-  const bounds = new Map([...ROW_BOUNDS, [project, { top: 0, bottom: 20 }]]);
-  const h = harness(t, [
-    { task: "t-0", title: "x" },
-    { task: "t-1", title: "y" },
-  ], bounds);
-  await h.attachment.places.request(PLANE);
-  h.press("s");
-  const view = h.selectView() as { labels: { part: string; label: string }[] };
-  assert.deepEqual(
-    view.labels.map((entry) => [entry.part, entry.label]),
-    [
-      ["/content/0/content/0/row/0", "A"],
-      ["/content/0/content/0/row/1", "S"],
-      [project, "D"],
-    ],
-    "rows keep the labels they had; the rail labels after them",
-  );
-  h.press("d");
-  const menu = h.menuView() as { label: string; acts: { key: string }[] };
-  assert.deepEqual(menu.acts.map((act) => act.key), ["f", "a", "d"], "even the shown project can be forgotten");
-  h.press("Enter");
-  assert.deepEqual(h.opened, ["plane tasks-test"]);
-  assert.equal(h.attachment.presentation.getSelection(), null, "a rail entry is not a task selection");
-  // a plain click on the entry runs the same first act (the frame's
-  // lease path, the surface's click)
-  assert.equal(h.plainClick(project), true);
-  assert.deepEqual(h.opened, ["plane tasks-test", "plane tasks-test"]);
-  // the rail marks the shown project; outside the native shell it
-  // says Herdr's words are not here rather than showing nobody
-  let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
-  const off = h.attachment.presentation.subscribeRail((next) => {
-    rail = next;
-  });
-  off();
-  const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
-  assert.ok(shown !== null);
-  assert.ok(shown.projects.some((entry) => entry.name === "tasks-test" && entry.current));
-
-  // d on the shown project: it leaves the rail though the list stays
-  // (the frame's lease opens the act list, the right-click's path)
-  h.showActions(project);
-  h.press("d");
-  const after = (() => {
-    let next: import("../src/lib/tasks/rail.ts").Rail | null = null;
-    h.attachment.presentation.subscribeRail((value) => {
-      next = value;
-    })();
-    return next as unknown as import("../src/lib/tasks/rail.ts").Rail;
-  })();
-  assert.ok(!after.projects.some((entry) => entry.name === "tasks-test"), "the forgotten shown project leaves the rail");
-});
-
-// -- the plane's own address and the add field ----------------------
-
-import { theProjects } from "../src/lib/asks.ts";
-import { directAsks } from "../src/lib/asks.ts";
-import { parseRegisteredPath } from "../src/lib/projects.ts";
-
-function stubRegistry(seed: string[] = [], declaration = 'name = "tasks-test"\n\n[tracker]\nport = 9\n'): void {
-  const store = new Map<string, string>();
-  if (seed.length > 0) store.set("saccade.projects", JSON.stringify(seed));
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-  });
-  vi.stubGlobal("window", {
-    __saccadeAsks: directAsks({
-      readFile: async () => declaration,
-      readAsset: async () => {
-        throw new Error("no assets here");
-      },
-      requestLocal: async () => {
-        throw new Error("no requests here");
-      },
-    }),
-  });
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-}
-
-function frameOf(h: Harness): TasksData {
-  const state = h.built.host.snapshot();
-  if (state.kind !== "alive" || state.content.kind !== "available") assert.fail("the plane published a frame");
-  return state.content.value.value;
-}
-
-function publishedTargetsOf(h: Harness): readonly import("../src/lib/contracts/buffer.ts").TargetDefinition[] {
-  const state = h.built.host.snapshot();
-  if (state.kind !== "alive" || state.content.kind !== "available") assert.fail("the plane published a frame");
-  return state.content.value.targets;
-}
-
-function railOfHarness(h: Harness): import("../src/lib/tasks/rail.ts").Rail {
-  let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
-  h.attachment.presentation.subscribeRail((next) => {
-    rail = next;
-  })();
-  return rail as unknown as import("../src/lib/tasks/rail.ts").Rail;
-}
-
-test("an empty plane: no project known is no error; a opens the add field, Enter registers machine:/path and opens nothing", async (t) => {
-  stubRegistry();
-  const h = harness(t, [], ROW_BOUNDS);
-  assert.equal(await h.attachment.places.request({ machine: "plane", path: "" }), "applied");
-  const empty = frameOf(h);
-  assert.equal(empty.status, "loaded");
-  assert.equal(empty.project, null);
-  assert.equal(empty.problem, null);
-  assert.equal(empty.asked, "plane");
-
-  assert.equal(h.press("a"), "consume");
-  assert.equal(h.attachment.presentation.addView().open, true);
-  assert.equal(h.press("x"), "allow-default", "typing stays the field's own");
-  h.attachment.presentation.typeAdd("not a project");
-  h.press("Enter");
-  await vi.waitFor(() => {
-    assert.match(h.attachment.presentation.addView().problem ?? "", /machine:\/path/);
-  });
-  assert.equal(h.attachment.presentation.addView().open, true, "a refused address keeps the field open");
-  assert.deepEqual(theProjects().registeredPaths(), []);
-
-  h.attachment.presentation.typeAdd("box:/srv/tasks-test");
-  assert.equal(h.attachment.presentation.addView().problem, null, "typing clears the refusal");
-  h.press("Enter");
-  await vi.waitFor(() => {
-    assert.deepEqual(theProjects().registeredPaths(), [{ machine: "box", path: "/srv/tasks-test" }]);
-  });
-  assert.equal(h.attachment.presentation.addView().open, false);
-  assert.ok(railOfHarness(h).projects.some((project) => project.name === "tasks-test"), "the rail lists it");
-  assert.deepEqual(h.opened, [], "registering opens nothing");
-  assert.deepEqual(h.elsewhere, []);
-  assert.equal(frameOf(h).project, null, "the shown project stays");
-
-  // Escape leaves the field and returns the keys to the plane
-  h.press("a");
-  assert.equal(h.attachment.presentation.addView().open, true);
-  h.press("Escape");
-  assert.equal(h.attachment.presentation.addView().open, false);
-  assert.equal(h.press("j"), "consume", "the reading context has the keys again");
-});
-
-test("a bare plane shows the first registered project; an unreachable one keeps the rail and says why", async (t) => {
-  stubRegistry(["box:/srv/tasks-test"]);
-  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
-  await h.attachment.places.request({ machine: "plane", path: "" });
-  const shown = frameOf(h);
-  assert.equal(shown.project, "tasks-test");
-  assert.equal(shown.status, "loaded");
-  const shownTargets = publishedTargetsOf(h).map((target) => ({ id: target.id, kind: target.kind }));
-  assert.deepEqual(
-    shownTargets,
-    [
-      { id: "/content/0/content/0/row/0", kind: "task" },
-      { id: "rail/project/tasks-test", kind: "project" },
-    ],
-    "the rail's entries publish as targets with the rows",
-  );
-
-  // a project this device never reached: the plane names the problem
-  // and the rail stays, so another project is one act away
-  assert.equal(await h.attachment.places.request({ machine: "plane", path: "ghost" }), "applied");
-  const dead = frameOf(h);
-  assert.equal(dead.status, "invalid");
-  assert.equal(dead.project, "ghost");
-  assert.match(dead.problem ?? "", /ghost/);
-  // the rail's entries stay targetable on an invalid plane: the
-  // shown (dead) project and the reached one
-  assert.deepEqual(
-    publishedTargetsOf(h).map((target) => target.id),
-    ["rail/project/ghost", "rail/project/tasks-test"],
-    "the rail's projects stay targetable on an invalid plane",
-  );
-  assert.ok(railOfHarness(h).projects.some((project) => project.name === "tasks-test"));
-
-  // a bare plane again keeps the shown project while it is registered
-  await h.attachment.places.request({ machine: "plane", path: "" });
-  assert.equal(frameOf(h).project, "tasks-test", "ghost is not registered: the registered project shows");
-});
-
-test("an agent no tracker registered is a rail target: s labels it, its menu is y alone, Enter copies hc attach <address> (t-55)", async (t) => {
-  const { terminalPart } = await import("../src/lib/tasks/rail.ts");
-  const source = sourceFor(MACHINE) as TrackerSource;
-  // the tracker's root names its repo; its agents page registers no one
-  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: "/srv/tasks-test" }));
-  vi.spyOn(source, "agentsPage").mockImplementation(async () => ({
-    view: { major: 1 },
-    kind: "document",
-    location: "agents",
-    seq: null,
-    content: [],
-  }));
-  // the shell's feed: a stray agent in the repo through a federating
-  // core, one nowhere a project knows, and a plain shell
-  const snapshot = {
-    generation: 1,
-    connected: true,
-    words: {
-      "other/t63": { state: "working", app: "claude-code", cwd: "/srv/tasks-test", terminal_title: "tasks-test / general", at: 1 },
-      t7r: { state: "done", app: "claude-code", cwd: "/elsewhere", at: 2 },
-      t3k: { cwd: "/srv/tasks-test", terminal_title: "tasks-test / service", at: 3 },
-    },
-  };
-  vi.stubGlobal("window", {
-    __TAURI_INTERNALS__: {
-      invoke: (command: string, args: { since: number }) =>
-        command === "words_wait" && args.since < 1 ? Promise.resolve(snapshot) : new Promise(() => {}),
-    },
-  });
-  // the project is one this device registered: the rail's first read
-  // covers it. The window carries the shell's bridge (the words feed)
-  // beside the lane-installed asks (the declaration reads)
-  const store = new Map<string, string>();
-  store.set("saccade.projects", JSON.stringify(["box:/srv/tasks-test"]));
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-  });
-  vi.stubGlobal("window", {
-    __saccadeAsks: directAsks({
-      readFile: async () => 'name = "tasks-test"\n\n[tracker]\nport = 9\n',
-      readAsset: async () => {
-        throw new Error("no assets here");
-      },
-      requestLocal: async () => {
-        throw new Error("no requests here");
-      },
-    }),
-    __TAURI_INTERNALS__: {
-      invoke: (command: string, args: { since: number }) =>
-        command === "words_wait" && args.since < 1 ? Promise.resolve(snapshot) : new Promise(() => {}),
-    },
-  });
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-  const stray = terminalPart("other/t63");
-  const foot = terminalPart("t7r");
-  const bounds = new Map([
-    ...ROW_BOUNDS,
-    [projectPart("tasks-test"), { top: 0, bottom: 20 }],
-    [stray, { top: 20, bottom: 40 }],
-    [foot, { top: 40, bottom: 60 }],
-  ]);
-  const h = harness(t, [{ task: "t-0", title: "x" }], bounds);
-  await h.attachment.places.request(PLANE);
-  let rail: import("../src/lib/tasks/rail.ts").Rail | null = null;
-  const off = h.attachment.presentation.subscribeRail((next) => {
-    rail = next;
-  });
-  for (let tries = 0; tries < 50; tries++) {
-    const shown = rail as import("../src/lib/tasks/rail.ts").Rail | null;
-    if (shown !== null && shown.unregistered.length > 0 && shown.projects.some((p) => p.groups.length > 0)) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  off();
-  const shown = rail as unknown as import("../src/lib/tasks/rail.ts").Rail;
-  const project = shown.projects.find((entry) => entry.name === "tasks-test");
-  assert.deepEqual(
-    project?.groups.map((group) => [group.state, group.agents.map((agent) => [agent.incarnation, agent.address, agent.label])]),
-    [["working", [[null, "other/t63", "tasks-test / general"]]]],
-    "under its project, unregistered, named by the terminal's title; the shell never shows",
-  );
-  assert.deepEqual(shown.unregistered.map((agent) => agent.address), ["t7r"]);
-  h.press("s");
-  const view = h.selectView() as { labels: { part: string; label: string }[] };
-  const label = view.labels.find((entry) => entry.part === stray)?.label;
-  assert.ok(label !== undefined, "the stray is labelled with the rail");
-  assert.ok(view.labels.some((entry) => entry.part === foot), "the foot group's agent too");
-  for (const key of label) h.press(key);
-  const menu = h.menuView() as { label: string; acts: { key: string; label: string }[] };
-  assert.equal(menu.label, "tasks-test / general other/t63");
-  assert.deepEqual(menu.acts.map((act) => [act.key, act.label]), [["y", "copy hc attach other/t63"]]);
-  h.press("Enter");
-  assert.deepEqual(h.copied, ["hc attach other/t63"]);
-  assert.deepEqual(h.opened, [], "copying opens nothing");
-  // a plain click on the foot group's entry runs its one act (the
-  // frame's lease path, the surface's click)
-  assert.equal(h.plainClick(foot), true);
-  assert.deepEqual(h.copied, ["hc attach other/t63", "hc attach t7r"]);
 });

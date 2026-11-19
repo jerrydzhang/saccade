@@ -66,7 +66,7 @@ export class TrackerSource implements BoardSource {
     if (project === null) {
       throw new SourceUnavailableError(
         "lane-unavailable",
-        `no registered project names itself '${this.tracker}'; add it on the plane (a, then machine:/path/to/repository)`,
+        `no registered project names itself '${this.tracker}'; register it (Space a, then machine:/path/to/repository)`,
       );
     }
     return project;

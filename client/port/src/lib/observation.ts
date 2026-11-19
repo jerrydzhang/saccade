@@ -33,7 +33,6 @@
 
 import type { BufferState } from "./contracts/buffer.ts";
 import type { SavedPlace } from "./contracts/places.ts";
-import { isPlane } from "./location.ts";
 import type { RenderPair } from "./instruments/registry.ts";
 import type { BoardData, BoardUI, RenderOutcome } from "../instruments/board.ts";
 import type { TasksData, TasksUI } from "../instruments/tasks.ts";
@@ -49,8 +48,8 @@ export type ShownPlace = Readonly<{ location: string; part: string | null }>;
  * a bare location resolved to - the readout names what was asked, so
  * the trail's bare locations stay bare) and the board part the reading
  * height sits in (the trail's own capture; a task row or the default
- * position is no part). The control plane remembers no project (the
- * human, 2026-11-14): its place is the bare plane. Null while the
+ * position is no part). A project's task list carries no part (the
+ * location names the list). Null while the
  * frame is loading or carries no location. */
 export function shownPlaceOf(
   content: { asked?: unknown; status?: unknown } | undefined,
@@ -62,9 +61,7 @@ export function shownPlaceOf(
   try {
     const captured = capture();
     const position = captured.position;
-    if (isPlane(captured.address)) {
-      part = null;
-    } else if (position.kind === "anchor") {
+    if (position.kind === "anchor") {
       const anchor = position.anchor as { kind?: unknown; path?: unknown } | null;
       if (anchor !== null && anchor.kind === "board-part" && typeof anchor.path === "string") part = anchor.path;
     }
@@ -174,18 +171,19 @@ export type PortObservation = {
   /** The window's board reading layout (lib/board/reading-layout.ts):
    * the text zoom and the column-width scale. */
   reading: Readonly<{ zoom: number; width: number }>;
-  /** The tasks surface - the control plane (t-54) - and its shown
-   * project's page (the pipeline): the rows with their tasks and
-   * links, the label selection, the groups' titles, and the add
-   * field. Null on every other surface. invalid: the shown project's
-   * list could not be read (problem says why). */
+  /** The tasks surface - a project's task list - and its shown
+   * page (the pipeline): the rows with their tasks and links, the
+   * label selection, the groups' titles. The add field is the frame
+   * rail's (the readout carries its view here). Null on every other
+   * surface. invalid: the list could not be read (problem says why). */
   tasks: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
     asked: string | null;
     location: string | null;
-    /** The project the plane shows; null when none is known. */
+    /** The project the list belongs to. */
     project: string | null;
     problem: string | null;
+    /** The frame rail's add field: the window's registration act. */
     add: Readonly<{ open: boolean; value: string; problem: string | null }>;
     rows: readonly {
       part: string;
@@ -340,6 +338,7 @@ function findViewOf(state: BufferState<RenderPair>): PortObservation["find"] {
 export function tasksViewOf(
   frame: TasksData | null,
   state: BufferState<RenderPair>,
+  railAdd: Readonly<{ open: boolean; value: string; problem: string | null }>,
 ): NonNullable<PortObservation["tasks"]> {
   const rows: { part: string; task: string; location: string; title: string }[] = [];
   const groups: { part: string; title: string }[] = [];
@@ -355,9 +354,8 @@ export function tasksViewOf(
   const controller = (state.kind === "alive" ? state.content : null);
   const pair = controller?.kind === "available" ? controller.value
     : controller?.kind === "pending" ? controller.previous : null;
-  const face = pair?.props["controller"] as Pick<TasksUI, "getSelection" | "addView"> | undefined;
+  const face = pair?.props["controller"] as Pick<TasksUI, "getSelection"> | undefined;
   const selection = typeof face?.getSelection === "function" ? face.getSelection() : null;
-  const add = typeof face?.addView === "function" ? face.addView() : { open: false, value: "", problem: null };
   const status = statusOf(state);
   return {
     status: status === "loaded" && frame?.status === "invalid" ? "invalid" : status,
@@ -365,7 +363,7 @@ export function tasksViewOf(
     location: frame ? frame.location : null,
     project: frame ? frame.project : null,
     problem: frame ? frame.problem : null,
-    add: { open: add.open, value: add.value, problem: add.problem },
+    add: { open: railAdd.open, value: railAdd.value, problem: railAdd.problem },
     rows,
     selection,
     groups,
@@ -392,6 +390,9 @@ export function buildReadout(
     presentation?: PortObservation["presentation"];
     input: PortObservation["input"];
     reading: PortObservation["reading"];
+    /** The frame rail's add field view (the window's registration
+     * act; the readout carries it on the tasks surface). */
+    railAdd: Readonly<{ open: boolean; value: string; problem: string | null }>;
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -436,7 +437,7 @@ export function buildReadout(
     input: input.input,
     reading: input.reading,
     tasks: input.surface === "tasks"
-      ? tasksViewOf(tasksFrame, input.state)
+      ? tasksViewOf(tasksFrame, input.state, input.railAdd)
       : null,
   };
 }
