@@ -118,6 +118,16 @@
   line-height: 24px;
   font-size: 0.875rem;
 }
+/* the row component's root: it spans the entry's columns and lays its
+ * cells on the entry's own tracks, so the cells sit exactly where they
+ * would as the entry's direct children */
+.port-rail-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-width: 0;
+}
 .port-rail-who {
   display: flex;
   min-width: 0;

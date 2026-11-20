@@ -20,10 +20,18 @@
   container-type: inline-size;
   padding: 16px 0;
 }
+/* with the rail hidden (every window starts so) the list keeps the
+ * reach it has beside the rail: a 32px left gutter and the window's
+ * 24px right edge; beside the rail the frame's layout gives both */
+.port-frame-layout:not(.port-frame-layout-with-rail) .port-tasks-list {
+  padding-left: 32px;
+  padding-right: 24px;
+}
 /* the narrow window: the list takes the window's 24px edges (the rows
  * bleed outward 8px, never past the window) */
 @media (max-width: 40rem) {
-  .port-tasks-list {
+  .port-frame-layout .port-tasks-list,
+  .port-frame-layout:not(.port-frame-layout-with-rail) .port-tasks-list {
     padding-left: 24px;
     padding-right: 24px;
   }

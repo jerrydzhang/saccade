@@ -16,9 +16,17 @@ claimed task at the right, the status line beneath. -->
   let { target }: { target: TargetDefinition } = $props();
 
   const agent = $derived(railAgentOf(target.id));
+  // Herdr's message and progress, the row's tooltip; none when both
+  // are absent
+  const hint = $derived(
+    agent === null ? undefined : [agent.msg, agent.progress].filter((part) => part !== null).join(" - ") || undefined,
+  );
 </script>
 
 {#if agent !== null}
+  <!-- the row's root spans the entry's columns on the entry's own
+  tracks (a subgrid), so the tooltip covers the row's content -->
+  <span class="port-rail-row" title={hint}>
   <span class="port-state-mark" data-port-word={agent.state} aria-hidden="true"></span>
   {#if agent.incarnation === null}
     <!-- unregistered: the terminal's address stands in the id column,
@@ -37,4 +45,5 @@ claimed task at the right, the status line beneath. -->
     <span class="port-rail-tasks" title={agent.tasks.join(", ")}>{agent.tasks.join(", ")}</span>
   {/if}
   {#if agent.msg !== null}<span class="port-rail-msg">{agent.msg}</span>{/if}
+  </span>
 {/if}
