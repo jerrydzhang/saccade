@@ -1,0 +1,90 @@
+# The app project's recipes: the Saccade app's frontend, shell and
+# lanes. Every recipe runs from this directory and enters the app shell
+# itself (nix develop ..#app), so the repository root needs no shell of
+# its own; the root justfile loads this one as the module app. The
+# suites that serve a tracker build sac through saccade's justfile and
+# point SACCADE_SERVE_BIN at saccade/target/debug/sac.
+
+# the app's rust formatting covers its core client; the shell's
+# sources are not under fmt
+fmt:
+    nix develop ..#app -c cargo fmt -p saccade-app-core
+
+# the app carries no lint gate of its own; its typecheck runs in
+# viewer-check
+lint:
+
+# the app suite: the app shell's own tests, then the app frontend's
+# vitest unit and browser projects (the vitest native project is gated:
+# just app-test-native)
+test:
+    just shell-test
+    just app-test
+    just app-test-browser
+
+# the app shell library's tests (src-tauri/src, compiled through
+# port-shell): the GTK/WebKit build needs the app shell
+shell-test:
+    nix develop ..#app -c bash -c 'cargo test -q --manifest-path port-shell/Cargo.toml'
+
+# keep node_modules at the lockfile: npm writes its own copy of the
+# lock into node_modules/.package-lock.json on every install, so a
+# lockfile newer than that copy (a merge, pull or switch that changed
+# it, or a fresh worktree) means the install is stale; every recipe
+# that runs the frontend's node_modules depends on this
+client-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -e node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        nix develop ..#app -c npm ci
+    fi
+
+# The port's suite: one runner (vitest), three projects
+# (port/vitest.config.ts, port/tests/scenarios/README.md).
+# unit: the pure and component tests, in node.
+app-test: client-deps
+    nix develop ..#app -c node_modules/.bin/vitest run -c port/vitest.config.ts --project unit
+
+# browser: the scenarios in headless WebKit against the port served by
+# vite, with a throwaway seeded tracker from the built sac; the app
+# shell carries the pinned Playwright browsers and the software-EGL
+# mesa pin
+app-test-browser *args: client-deps
+    cd ../saccade && just sac-bin
+    nix develop ..#app -c bash -c 'SACCADE_SERVE_BIN="$(cd ../saccade && pwd)/target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' app-test-browser {{args}}
+
+# pending: the tests tagged pending, written red before the feature
+# they gate (skipped in every other run); unit, then browser
+app-test-pending: client-deps
+    SAC_PORT_SUITE_PENDING=1 nix develop ..#app -c node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --tags-filter pending || true
+    cd ../saccade && just sac-bin
+    nix develop ..#app -c bash -c 'SAC_PORT_SUITE_PENDING=1 SACCADE_SERVE_BIN="$(cd ../saccade && pwd)/target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser --tags-filter pending'
+
+# native: the scenarios tagged native or multi-window, in the built
+# port app, through the session lane's suite mode (entry.py session
+# suite: the enforced sandbox, the canary, a private Weston, then
+# vitest's native project). Like every lane that spawns: the caller
+# passes SACCADE_DB (the caller-side tracker db the canary proves
+# invisible); SAC_APP_BIN defaults to the nix-built port app.
+app-test-native *args:
+    cd ../saccade && just sac-bin
+    nix develop ..#app -c bash -c 'app="${SAC_APP_BIN:-$(nix build --no-link --print-out-paths ..#saccade-app)/bin/saccade-app}"; SAC_APP_BIN="$app" SACCADE_SERVE_BIN="$(cd ../saccade && pwd)/target/debug/sac" python3 harness/entry.py --board "$PWD/fixtures/display-scroll.yaml" session suite "$@"' app-test-native {{args}}
+
+# the plain, uncontained checks: the harness's own checks, pyflakes, the
+# app frontend's typecheck, the core client's contract tests, the build
+viewer-check: client-deps
+    nix develop ..#app -c python3 harness/entry.py check-fast
+
+# The port's debug binary for native-lane iteration: vite builds the
+# port dist, cargo builds the port crate with the embedded-dist
+# feature, patchelf sets a store rpath so the binary runs inside the
+# scrubbed lane sandbox, and the result is pinned at the lane's debug
+# root. Nix still builds the authoritative binary once, last, per
+# chunk - Nix reproduces this environment; it is not a per-iteration
+# toll.
+port-debug-bin: client-deps
+    nix develop ..#app -c node_modules/.bin/vite build -c port/vite.config.ts
+    nix develop ..#app -c bash -c 'cargo build --manifest-path port-shell/Cargo.toml --features custom-protocol && bash harness/port_debug_pin.sh'
+
+viewer-shell:
+    nix develop ..#app

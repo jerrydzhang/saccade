@@ -3300,7 +3300,7 @@
         "cachix": "cachix_10",
         "crate2nix": "crate2nix_10",
         "flake-compat": "flake-compat_10",
-        "flake-parts": "flake-parts_12",
+        "flake-parts": "flake-parts_13",
         "ghostty": "ghostty_10",
         "git-hooks": "git-hooks_10",
         "nix": "nix_10",
@@ -3327,7 +3327,7 @@
         "cachix": "cachix_11",
         "crate2nix": "crate2nix_11",
         "flake-compat": "flake-compat_11",
-        "flake-parts": "flake-parts_13",
+        "flake-parts": "flake-parts_14",
         "ghostty": "ghostty_11",
         "git-hooks": "git-hooks_11",
         "nix": "nix_11",
@@ -3354,7 +3354,7 @@
         "cachix": "cachix_12",
         "crate2nix": "crate2nix_12",
         "flake-compat": "flake-compat_12",
-        "flake-parts": "flake-parts_14",
+        "flake-parts": "flake-parts_15",
         "ghostty": "ghostty_12",
         "git-hooks": "git-hooks_12",
         "nix": "nix_12",
@@ -3381,7 +3381,7 @@
         "cachix": "cachix_13",
         "crate2nix": "crate2nix_13",
         "flake-compat": "flake-compat_13",
-        "flake-parts": "flake-parts_15",
+        "flake-parts": "flake-parts_16",
         "ghostty": "ghostty_13",
         "git-hooks": "git-hooks_13",
         "nix": "nix_13",
@@ -3408,7 +3408,7 @@
         "cachix": "cachix_14",
         "crate2nix": "crate2nix_14",
         "flake-compat": "flake-compat_14",
-        "flake-parts": "flake-parts_16",
+        "flake-parts": "flake-parts_17",
         "ghostty": "ghostty_14",
         "git-hooks": "git-hooks_14",
         "nix": "nix_14",
@@ -3435,7 +3435,7 @@
         "cachix": "cachix_15",
         "crate2nix": "crate2nix_15",
         "flake-compat": "flake-compat_15",
-        "flake-parts": "flake-parts_19",
+        "flake-parts": "flake-parts_20",
         "ghostty": "ghostty_15",
         "git-hooks": "git-hooks_15",
         "nix": "nix_15",
@@ -3462,7 +3462,7 @@
         "cachix": "cachix_16",
         "crate2nix": "crate2nix_16",
         "flake-compat": "flake-compat_16",
-        "flake-parts": "flake-parts_20",
+        "flake-parts": "flake-parts_21",
         "ghostty": "ghostty_16",
         "git-hooks": "git-hooks_16",
         "nix": "nix_16",
@@ -3489,7 +3489,7 @@
         "cachix": "cachix_17",
         "crate2nix": "crate2nix_17",
         "flake-compat": "flake-compat_17",
-        "flake-parts": "flake-parts_21",
+        "flake-parts": "flake-parts_22",
         "ghostty": "ghostty_17",
         "git-hooks": "git-hooks_17",
         "nix": "nix_17",
@@ -3516,7 +3516,7 @@
         "cachix": "cachix_18",
         "crate2nix": "crate2nix_18",
         "flake-compat": "flake-compat_18",
-        "flake-parts": "flake-parts_24",
+        "flake-parts": "flake-parts_25",
         "ghostty": "ghostty_18",
         "git-hooks": "git-hooks_18",
         "nix": "nix_18",
@@ -3543,7 +3543,7 @@
         "cachix": "cachix_19",
         "crate2nix": "crate2nix_19",
         "flake-compat": "flake-compat_19",
-        "flake-parts": "flake-parts_25",
+        "flake-parts": "flake-parts_26",
         "ghostty": "ghostty_19",
         "git-hooks": "git-hooks_19",
         "nix": "nix_19",
@@ -3570,7 +3570,7 @@
         "cachix": "cachix_2",
         "crate2nix": "crate2nix_2",
         "flake-compat": "flake-compat_2",
-        "flake-parts": "flake-parts_2",
+        "flake-parts": "flake-parts_3",
         "ghostty": "ghostty_2",
         "git-hooks": "git-hooks_2",
         "nix": "nix_2",
@@ -3597,7 +3597,7 @@
         "cachix": "cachix_20",
         "crate2nix": "crate2nix_20",
         "flake-compat": "flake-compat_20",
-        "flake-parts": "flake-parts_26",
+        "flake-parts": "flake-parts_27",
         "ghostty": "ghostty_20",
         "git-hooks": "git-hooks_20",
         "nix": "nix_20",
@@ -3624,7 +3624,7 @@
         "cachix": "cachix_21",
         "crate2nix": "crate2nix_21",
         "flake-compat": "flake-compat_21",
-        "flake-parts": "flake-parts_27",
+        "flake-parts": "flake-parts_28",
         "ghostty": "ghostty_21",
         "git-hooks": "git-hooks_21",
         "nix": "nix_21",
@@ -3651,7 +3651,7 @@
         "cachix": "cachix_22",
         "crate2nix": "crate2nix_22",
         "flake-compat": "flake-compat_22",
-        "flake-parts": "flake-parts_28",
+        "flake-parts": "flake-parts_29",
         "ghostty": "ghostty_22",
         "git-hooks": "git-hooks_22",
         "nix": "nix_22",
@@ -3678,7 +3678,7 @@
         "cachix": "cachix_23",
         "crate2nix": "crate2nix_23",
         "flake-compat": "flake-compat_23",
-        "flake-parts": "flake-parts_29",
+        "flake-parts": "flake-parts_30",
         "ghostty": "ghostty_23",
         "git-hooks": "git-hooks_23",
         "nix": "nix_23",
@@ -3705,7 +3705,7 @@
         "cachix": "cachix_24",
         "crate2nix": "crate2nix_24",
         "flake-compat": "flake-compat_24",
-        "flake-parts": "flake-parts_32",
+        "flake-parts": "flake-parts_33",
         "ghostty": "ghostty_24",
         "git-hooks": "git-hooks_24",
         "nix": "nix_24",
@@ -3732,7 +3732,7 @@
         "cachix": "cachix_25",
         "crate2nix": "crate2nix_25",
         "flake-compat": "flake-compat_25",
-        "flake-parts": "flake-parts_33",
+        "flake-parts": "flake-parts_34",
         "ghostty": "ghostty_25",
         "git-hooks": "git-hooks_25",
         "nix": "nix_25",
@@ -3759,7 +3759,7 @@
         "cachix": "cachix_26",
         "crate2nix": "crate2nix_26",
         "flake-compat": "flake-compat_26",
-        "flake-parts": "flake-parts_34",
+        "flake-parts": "flake-parts_35",
         "ghostty": "ghostty_26",
         "git-hooks": "git-hooks_26",
         "nix": "nix_26",
@@ -3786,7 +3786,7 @@
         "cachix": "cachix_27",
         "crate2nix": "crate2nix_27",
         "flake-compat": "flake-compat_27",
-        "flake-parts": "flake-parts_35",
+        "flake-parts": "flake-parts_36",
         "ghostty": "ghostty_27",
         "git-hooks": "git-hooks_27",
         "nix": "nix_27",
@@ -3813,7 +3813,7 @@
         "cachix": "cachix_28",
         "crate2nix": "crate2nix_28",
         "flake-compat": "flake-compat_28",
-        "flake-parts": "flake-parts_36",
+        "flake-parts": "flake-parts_37",
         "ghostty": "ghostty_28",
         "git-hooks": "git-hooks_28",
         "nix": "nix_28",
@@ -3840,7 +3840,7 @@
         "cachix": "cachix_29",
         "crate2nix": "crate2nix_29",
         "flake-compat": "flake-compat_29",
-        "flake-parts": "flake-parts_37",
+        "flake-parts": "flake-parts_38",
         "ghostty": "ghostty_29",
         "git-hooks": "git-hooks_29",
         "nix": "nix_29",
@@ -3867,7 +3867,7 @@
         "cachix": "cachix_3",
         "crate2nix": "crate2nix_3",
         "flake-compat": "flake-compat_3",
-        "flake-parts": "flake-parts_3",
+        "flake-parts": "flake-parts_4",
         "ghostty": "ghostty_3",
         "git-hooks": "git-hooks_3",
         "nix": "nix_3",
@@ -3894,7 +3894,7 @@
         "cachix": "cachix_30",
         "crate2nix": "crate2nix_30",
         "flake-compat": "flake-compat_30",
-        "flake-parts": "flake-parts_40",
+        "flake-parts": "flake-parts_41",
         "ghostty": "ghostty_30",
         "git-hooks": "git-hooks_30",
         "nix": "nix_30",
@@ -3921,7 +3921,7 @@
         "cachix": "cachix_31",
         "crate2nix": "crate2nix_31",
         "flake-compat": "flake-compat_31",
-        "flake-parts": "flake-parts_41",
+        "flake-parts": "flake-parts_42",
         "ghostty": "ghostty_31",
         "git-hooks": "git-hooks_31",
         "nix": "nix_31",
@@ -3948,7 +3948,7 @@
         "cachix": "cachix_32",
         "crate2nix": "crate2nix_32",
         "flake-compat": "flake-compat_32",
-        "flake-parts": "flake-parts_42",
+        "flake-parts": "flake-parts_43",
         "ghostty": "ghostty_32",
         "git-hooks": "git-hooks_32",
         "nix": "nix_32",
@@ -3975,7 +3975,7 @@
         "cachix": "cachix_4",
         "crate2nix": "crate2nix_4",
         "flake-compat": "flake-compat_4",
-        "flake-parts": "flake-parts_4",
+        "flake-parts": "flake-parts_5",
         "ghostty": "ghostty_4",
         "git-hooks": "git-hooks_4",
         "nix": "nix_4",
@@ -4002,7 +4002,7 @@
         "cachix": "cachix_5",
         "crate2nix": "crate2nix_5",
         "flake-compat": "flake-compat_5",
-        "flake-parts": "flake-parts_5",
+        "flake-parts": "flake-parts_6",
         "ghostty": "ghostty_5",
         "git-hooks": "git-hooks_5",
         "nix": "nix_5",
@@ -4029,7 +4029,7 @@
         "cachix": "cachix_6",
         "crate2nix": "crate2nix_6",
         "flake-compat": "flake-compat_6",
-        "flake-parts": "flake-parts_6",
+        "flake-parts": "flake-parts_7",
         "ghostty": "ghostty_6",
         "git-hooks": "git-hooks_6",
         "nix": "nix_6",
@@ -4056,7 +4056,7 @@
         "cachix": "cachix_7",
         "crate2nix": "crate2nix_7",
         "flake-compat": "flake-compat_7",
-        "flake-parts": "flake-parts_7",
+        "flake-parts": "flake-parts_8",
         "ghostty": "ghostty_7",
         "git-hooks": "git-hooks_7",
         "nix": "nix_7",
@@ -4083,7 +4083,7 @@
         "cachix": "cachix_8",
         "crate2nix": "crate2nix_8",
         "flake-compat": "flake-compat_8",
-        "flake-parts": "flake-parts_8",
+        "flake-parts": "flake-parts_9",
         "ghostty": "ghostty_8",
         "git-hooks": "git-hooks_8",
         "nix": "nix_8",
@@ -4110,7 +4110,7 @@
         "cachix": "cachix_9",
         "crate2nix": "crate2nix_9",
         "flake-compat": "flake-compat_9",
-        "flake-parts": "flake-parts_11",
+        "flake-parts": "flake-parts_12",
         "ghostty": "ghostty_9",
         "git-hooks": "git-hooks_9",
         "nix": "nix_9",
@@ -4674,7 +4674,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -4699,17 +4699,20 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "devenv",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -4725,7 +4728,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -4751,7 +4753,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -4780,7 +4781,6 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -4809,7 +4809,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -4838,7 +4837,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -4870,16 +4868,16 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -4899,7 +4897,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -4926,17 +4924,20 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "devenv",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -4948,17 +4949,15 @@
     "flake-parts_2": {
       "inputs": {
         "nixpkgs-lib": [
-          "saccade",
-          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1793576659,
+        "narHash": "sha256-V1h85lUaJBQoHFrB2vpXZOE0Ju1MYSnIpsehoVZYlDo=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "ea2630b7470978622c7689a1ff75d2b389175399",
         "type": "github"
       },
       "original": {
@@ -4976,7 +4975,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5004,7 +5002,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5035,16 +5032,16 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -5063,7 +5060,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -5085,17 +5082,24 @@
     "flake-parts_24": {
       "inputs": {
         "nixpkgs-lib": [
+          "saccade",
           "wrapped-pi",
-          "devenv",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -5108,7 +5112,6 @@
       "inputs": {
         "nixpkgs-lib": [
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5131,7 +5134,6 @@
       "inputs": {
         "nixpkgs-lib": [
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5157,7 +5159,6 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -5183,7 +5184,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5210,7 +5210,6 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5233,7 +5232,6 @@
       "inputs": {
         "nixpkgs-lib": [
           "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -5261,16 +5259,16 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -5287,7 +5285,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -5311,17 +5309,20 @@
         "nixpkgs-lib": [
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "devenv",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -5336,7 +5337,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5361,7 +5361,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5389,7 +5388,6 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -5417,7 +5415,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5445,7 +5442,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5476,16 +5472,16 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -5504,7 +5500,7 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "wrapped-pi",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -5528,7 +5524,6 @@
         "nixpkgs-lib": [
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5554,17 +5549,20 @@
           "saccade",
           "wrapped-pi",
           "saccade",
+          "saccade",
           "wrapped-pi",
-          "devenv",
+          "saccade",
+          "wrapped-pi",
+          "llm-agents",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -5581,7 +5579,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5608,7 +5605,6 @@
           "wrapped-pi",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5638,6 +5634,34 @@
           "wrapped-pi",
           "saccade",
           "saccade",
+          "devenv",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_44": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "wrapped-pi",
+          "saccade",
+          "saccade",
           "llm-agents",
           "nixpkgs"
         ]
@@ -5656,7 +5680,7 @@
         "type": "github"
       }
     },
-    "flake-parts_44": {
+    "flake-parts_45": {
       "inputs": {
         "nixpkgs-lib": [
           "wrapped-pi",
@@ -5690,7 +5714,6 @@
           "saccade",
           "wrapped-pi",
           "saccade",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5716,7 +5739,6 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "wrapped-pi",
           "devenv",
           "nixpkgs"
         ]
@@ -5743,7 +5765,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "devenv",
           "nixpkgs"
         ]
@@ -5770,7 +5791,6 @@
           "saccade",
           "saccade",
           "wrapped-pi",
-          "saccade",
           "saccade",
           "devenv",
           "nixpkgs"
@@ -5800,16 +5820,16 @@
           "wrapped-pi",
           "saccade",
           "saccade",
-          "llm-agents",
+          "devenv",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1788450739,
-        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
+        "lastModified": 1788306937,
+        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
+        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
         "type": "github"
       },
       "original": {
@@ -7901,7 +7921,7 @@
     "llm-agents": {
       "inputs": {
         "bun2nix": "bun2nix",
-        "flake-parts": "flake-parts_9",
+        "flake-parts": "flake-parts_10",
         "nixpkgs": "nixpkgs_23",
         "systems": "systems",
         "treefmt-nix": "treefmt-nix_9"
@@ -7923,7 +7943,7 @@
     "llm-agents_10": {
       "inputs": {
         "bun2nix": "bun2nix_10",
-        "flake-parts": "flake-parts_39",
+        "flake-parts": "flake-parts_40",
         "nixpkgs": "nixpkgs_101",
         "systems": "systems_10",
         "treefmt-nix": "treefmt-nix_39"
@@ -7945,7 +7965,7 @@
     "llm-agents_11": {
       "inputs": {
         "bun2nix": "bun2nix_11",
-        "flake-parts": "flake-parts_43",
+        "flake-parts": "flake-parts_44",
         "nixpkgs": "nixpkgs_110",
         "systems": "systems_11",
         "treefmt-nix": "treefmt-nix_43"
@@ -7967,7 +7987,7 @@
     "llm-agents_12": {
       "inputs": {
         "bun2nix": "bun2nix_12",
-        "flake-parts": "flake-parts_44",
+        "flake-parts": "flake-parts_45",
         "nixpkgs": "nixpkgs_113",
         "systems": "systems_12",
         "treefmt-nix": "treefmt-nix_44"
@@ -7989,7 +8009,7 @@
     "llm-agents_2": {
       "inputs": {
         "bun2nix": "bun2nix_2",
-        "flake-parts": "flake-parts_10",
+        "flake-parts": "flake-parts_11",
         "nixpkgs": "nixpkgs_26",
         "systems": "systems_2",
         "treefmt-nix": "treefmt-nix_10"
@@ -8011,7 +8031,7 @@
     "llm-agents_3": {
       "inputs": {
         "bun2nix": "bun2nix_3",
-        "flake-parts": "flake-parts_17",
+        "flake-parts": "flake-parts_18",
         "nixpkgs": "nixpkgs_44",
         "systems": "systems_3",
         "treefmt-nix": "treefmt-nix_17"
@@ -8033,7 +8053,7 @@
     "llm-agents_4": {
       "inputs": {
         "bun2nix": "bun2nix_4",
-        "flake-parts": "flake-parts_18",
+        "flake-parts": "flake-parts_19",
         "nixpkgs": "nixpkgs_47",
         "systems": "systems_4",
         "treefmt-nix": "treefmt-nix_18"
@@ -8055,7 +8075,7 @@
     "llm-agents_5": {
       "inputs": {
         "bun2nix": "bun2nix_5",
-        "flake-parts": "flake-parts_22",
+        "flake-parts": "flake-parts_23",
         "nixpkgs": "nixpkgs_56",
         "systems": "systems_5",
         "treefmt-nix": "treefmt-nix_22"
@@ -8077,7 +8097,7 @@
     "llm-agents_6": {
       "inputs": {
         "bun2nix": "bun2nix_6",
-        "flake-parts": "flake-parts_23",
+        "flake-parts": "flake-parts_24",
         "nixpkgs": "nixpkgs_59",
         "systems": "systems_6",
         "treefmt-nix": "treefmt-nix_23"
@@ -8099,7 +8119,7 @@
     "llm-agents_7": {
       "inputs": {
         "bun2nix": "bun2nix_7",
-        "flake-parts": "flake-parts_30",
+        "flake-parts": "flake-parts_31",
         "nixpkgs": "nixpkgs_77",
         "systems": "systems_7",
         "treefmt-nix": "treefmt-nix_30"
@@ -8121,7 +8141,7 @@
     "llm-agents_8": {
       "inputs": {
         "bun2nix": "bun2nix_8",
-        "flake-parts": "flake-parts_31",
+        "flake-parts": "flake-parts_32",
         "nixpkgs": "nixpkgs_80",
         "systems": "systems_8",
         "treefmt-nix": "treefmt-nix_31"
@@ -8143,7 +8163,7 @@
     "llm-agents_9": {
       "inputs": {
         "bun2nix": "bun2nix_9",
-        "flake-parts": "flake-parts_38",
+        "flake-parts": "flake-parts_39",
         "nixpkgs": "nixpkgs_98",
         "systems": "systems_9",
         "treefmt-nix": "treefmt-nix_38"
@@ -14537,6 +14557,7 @@
         "claude-code-aarch64-linux": "claude-code-aarch64-linux",
         "claude-code-x86_64-linux": "claude-code-x86_64-linux",
         "devenv": "devenv",
+        "flake-parts": "flake-parts_2",
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux",
         "nixpkgs": "nixpkgs_2",

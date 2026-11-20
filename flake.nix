@@ -3,6 +3,13 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # the outputs are flake-parts modules: the host tooling at the root
+    # (nix/flake-module.nix), one module per project
+    # (saccade/flake-module.nix, app/flake-module.nix)
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
     # the client nixpkgs: the revision the human's system flake is
     # built from. The saccade-app package and app build against it so
     # the build agents test is the build the client runs; the tracker's
@@ -48,5 +55,13 @@
     extra-trusted-public-keys = [ "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=" ];
   };
 
-  outputs = inputs: import ./nix/outputs.nix inputs;
+  outputs =
+    inputs:
+    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [
+        ./nix/flake-module.nix
+        ./saccade/flake-module.nix
+        ./app/flake-module.nix
+      ];
+    };
 }
