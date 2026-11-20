@@ -1,6 +1,10 @@
 # Configuration file for `prek`, a git hook framework written in Rust.
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
+#
+# The root carries no shell: a hook that needs the projects' tools
+# enters a project's shell itself (direnv exec saccade, nix develop
+# .#app), as the justfiles' recipes do.
 
 [[repos]]
 repo = "local"
@@ -14,16 +18,16 @@ hooks = [
     args = ["check-no-tracker-refs.py"],
     pass_filenames = false, always_run = true },
   { id = "saccade-native-typecheck", name = "native extension typechecks against the pinned SDK",
-    entry = "bash", language = "system",
-    args = ["saccade/tracker/native/typecheck.sh"],
+    entry = "direnv", language = "system",
+    args = ["exec", "saccade", "bash", "saccade/tracker/native/typecheck.sh"],
     pass_filenames = false, always_run = true },
   { id = "port-unit", name = "the port's unit project passes (vitest)",
     entry = "sh", language = "system",
-    args = ["-c", "just client-deps && cd app && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
+    args = ["-c", "direnv exec saccade just client-deps && cd app && nix develop ..#app -c node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
     pass_filenames = false, always_run = true },
   { id = "nix-fmt", name = "nix files are formatted (nixfmt; just fmt fixes)",
-    entry = "nixfmt", language = "system",
-    args = ["--check"],
+    entry = "direnv", language = "system",
+    args = ["exec", "saccade", "nixfmt", "--check"],
     files = '\.nix$' },
 ]
 
@@ -42,14 +46,14 @@ hooks = [
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "fmt", name = "fmt", entry = "cargo", language = "system",
-    args = ["fmt", "--all", "--manifest-path", "saccade/Cargo.toml"],
+  { id = "fmt", name = "fmt", entry = "direnv", language = "system",
+    args = ["exec", "saccade", "cargo", "fmt", "--all", "--manifest-path", "saccade/Cargo.toml"],
     pass_filenames = false, always_run = true, stages = ["pre-commit", "pre-merge-commit", "manual"] },
-  { id = "fmt-app-core", name = "fmt (app core client)", entry = "cargo", language = "system",
-    args = ["fmt", "--manifest-path", "app/Cargo.toml", "-p", "saccade-app-core"],
+  { id = "fmt-app-core", name = "fmt (app core client)", entry = "direnv", language = "system",
+    args = ["exec", "saccade", "cargo", "fmt", "--manifest-path", "app/Cargo.toml", "-p", "saccade-app-core"],
     pass_filenames = false, always_run = true, stages = ["pre-commit", "pre-merge-commit", "manual"] },
-  { id = "cargo-check", name = "cargo check", entry = "cargo", language = "system",
-    args = ["check", "--manifest-path", "saccade/Cargo.toml"],
+  { id = "cargo-check", name = "cargo check", entry = "direnv", language = "system",
+    args = ["exec", "saccade", "cargo", "check", "--manifest-path", "saccade/Cargo.toml"],
     files = '^.*(Cargo\.toml|Cargo\.lock|.*\.rs)$', pass_filenames = false,
     stages = ["pre-commit", "pre-merge-commit", "pre-push", "manual"] },
 ]
@@ -64,9 +68,9 @@ set -eu
 # the push hands the hook git's own env: every scratch repo the tests
 # build would resolve against this checkout's git dir without the scrub
 unset $(git rev-parse --local-env-vars) 2>/dev/null || true
-# the full suite: cargo, the app shell's tests, the vitest unit and
-# browser projects (justfile test)
-just test
+# the full suite: saccade's and the app's (justfile test), just from
+# the saccade shell
+direnv exec saccade just test
 sha="${PRE_COMMIT_TO_REF:-}"
 case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
 repo="$(git rev-parse --path-format=absolute --git-common-dir)"

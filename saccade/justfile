@@ -1,0 +1,27 @@
+# The saccade project's recipes: the tracker and the grammar crate.
+# Every recipe runs from this directory and enters the saccade shell
+# itself (direnv exec . loads saccade/.envrc), so the repository root
+# needs no shell of its own; the root justfile loads this one as the
+# module saccade.
+
+fmt:
+    direnv exec . cargo fmt
+
+lint:
+    direnv exec . cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings
+
+# the saccade suite: the cargo workspace, then the native node suites
+test:
+    direnv exec . cargo test -q
+    just native-test
+
+# the sac binary the app's suites serve (target/debug/sac here)
+sac-bin:
+    direnv exec . cargo build -q -p saccade --bin sac
+
+typecheck:
+    direnv exec . tracker/native/typecheck.sh
+
+native-test: typecheck
+    direnv exec . node --experimental-strip-types --test tracker/native/saccade.test.ts
+    direnv exec . node --test tracker/native/claude-code/claude-code.test.mjs
