@@ -245,6 +245,9 @@ fn edit_door(
             "dir": dir.display().to_string(),
             "base": reply.base,
             "commit": reply.commit,
+            "tags": tag_lines_of(destination, task_n).into_iter().map(|(name, line)| {
+                serde_json::json!({"name": name, "description": line})
+            }).collect::<Vec<_>>(),
         })
         .to_string());
     }
@@ -262,7 +265,39 @@ fn edit_door(
         dir.join("board.yaml").display(),
         dir.display()
     ));
+    let tags = tag_lines_of(destination, task_n);
+    if !tags.is_empty() {
+        lines.push("tags".to_string());
+        lines.extend(tags.iter().map(|(name, line)| format!("  {name} - {line}")));
+    }
     Ok(lines.join("\n"))
+}
+
+/// The task's tags with their lines from the fold; nothing when the
+/// fold cannot be read, since the edit has staged either way.
+fn tag_lines_of(destination: &Destination, task: usize) -> Vec<(String, String)> {
+    let Ok(loadout) = loadout_of(destination) else {
+        return Vec::new();
+    };
+    let LoadState::Full(world) = loadout.state else {
+        return Vec::new();
+    };
+    world
+        .tasks
+        .get(task)
+        .map(|ctx| {
+            world
+                .tags_of(ctx)
+                .iter()
+                .map(|tag| {
+                    (
+                        tag.name.as_str().to_string(),
+                        tag.description.as_str().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn open_in_editor(path: &Path) -> Result<(), Fail> {
@@ -540,6 +575,27 @@ fn log_door(cli: &Cli, destination: &Destination, task: &str) -> Result<String, 
             .or_else(|| entry["grounds"].as_str())
             .or_else(|| entry["explanation"].as_str())
             .unwrap_or("");
+        let tagged: Vec<String> = entry["tags"]
+            .as_array()
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let by = entry["actor"].as_str().unwrap_or("?");
+        if let Some(tag) = entry["tag"].as_str() {
+            lines.push(format!("{anchor} {name} {tag} by {by}"));
+            continue;
+        }
+        if !tagged.is_empty() {
+            lines.push(format!(
+                "{anchor} {name} with tags {} by {by}",
+                tagged.join(", ")
+            ));
+            continue;
+        }
         let commit = entry["commit"]
             .as_str()
             .map(|c| format!(" {}", &c[..8.min(c.len())]))

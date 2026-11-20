@@ -211,6 +211,21 @@ standing workspace: its branch, merged or not, dirty or not. After a
 merge, run `sac workspace clean --merged`; it previews, and `--yes`
 acts.
 
+## Tags
+
+A tag says what a task is about, never how it stands: state, ownership
+and the board say that. Each tag carries one line saying what belongs
+under it. Only the human creates a tag or rewrites its line; the
+tags are the human's vocabulary. Run `sac tag list` and choose from
+it: `sac create task --tag <name> "..."` tags a task at birth, `sac tag
+add t-N <name>...` and `sac tag remove t-N <name>...` change it later,
+several names at once, all or none. When no tag fits, leave the task
+untagged and say so; do not ask for a tag that names a status. `sac
+list --tag <name>` (repeatable, every tag named) and `sac list
+--untagged` narrow a listing; `sac show t-N` and `sac board edit t-N`
+print the task's tags with their lines, so read what they mean. A
+tag changes nothing but what a listing shows.
+
 ## Names
 
 An incarnation may carry a name, so the human tells sessions apart by

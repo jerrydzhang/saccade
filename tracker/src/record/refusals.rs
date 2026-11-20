@@ -7,6 +7,26 @@ use crate::objects::task::TaskContext;
 use crate::store::World;
 use crate::{Reject, record::events::Command, record::objects::task::TaskId};
 
+/// The refusal for a tag name no tag bears: the tags that do exist,
+/// or the way to make one. Every face that resolves a name speaks it.
+pub fn unknown_tag(world: &World, name: &str) -> String {
+    if world.tags.is_empty() {
+        return "no tags exist; only the human creates one: sac tag create <name> \"<line>\""
+            .into();
+    }
+    format!("no tag '{name}'; the tags are:\n{}", tag_lines(world))
+}
+
+/// Each tag with its line, one per row, in birth order.
+pub fn tag_lines(world: &World) -> String {
+    world
+        .tags
+        .values()
+        .map(|tag| format!("{} - {}", tag.name.as_str(), tag.description.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// What the refusal should have said: the id space's grammar and
 /// the target the asker probably meant. None when the world has
 /// nothing to add to the brief code.
@@ -24,6 +44,41 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 ),
             })
         }
+        Reject::InvalidTagId => {
+            if world.tags.is_empty() {
+                return Some(
+                    "no tags exist; only the human creates one: sac tag create <name> \"<line>\""
+                        .into(),
+                );
+            }
+            Some(format!(
+                "no tag was born at that reference; the tags are:\n{}",
+                tag_lines(world)
+            ))
+        }
+        Reject::DuplicateTag => match command {
+            Command::CreateTag { name, .. } => {
+                let held = world
+                    .tag_named(name.as_str())
+                    .and_then(|birth| world.tags.get(&birth))?;
+                Some(format!(
+                    "the tag '{}' exists already; tag names compare ignoring case",
+                    held.name.as_str()
+                ))
+            }
+            _ => None,
+        },
+        Reject::HumanOnly => match command {
+            Command::CreateTag { .. } => Some(
+                "only the human creates a tag; ask the human to run sac tag create <name> \"<line>\""
+                    .into(),
+            ),
+            Command::DescribeTag { .. } => Some(
+                "only the human rewrites a tag's line; ask the human to run sac tag describe <name> \"<line>\""
+                    .into(),
+            ),
+            _ => None,
+        },
         Reject::InvalidIncarnationId => {
             Some("no incarnation the record birthed carries that reference; a claim names one by its public number i-N, never by task scope alone".into())
         }
@@ -92,6 +147,8 @@ fn command_task(command: &Command) -> Option<TaskId> {
         | Command::CommitBoard { task: id, .. }
         | Command::OfferBoard { task: id, .. }
         | Command::RejectBoard { task: id, .. }
+        | Command::TagTask { task: id, .. }
+        | Command::UntagTask { task: id, .. }
         | Command::AcceptBoard { task: id } => Some(*id),
         _ => None,
     }

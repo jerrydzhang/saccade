@@ -29,8 +29,12 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 16] = [
+const KINDS: [&str; 20] = [
     "task_created",
+    "tag_created",
+    "tag_described",
+    "task_tagged",
+    "task_untagged",
     "task_claimed",
     "task_cancelled",
     "task_reopened",
@@ -138,7 +142,31 @@ mod test {
     fn every_event_kind_round_trips() {
         let prose = || Prose::new("implement foo".into()).unwrap();
         let samples = [
-            Event::TaskCreated { name: prose() },
+            Event::TaskCreated {
+                name: prose(),
+                tags: Vec::new(),
+            },
+            Event::TaskCreated {
+                name: prose(),
+                tags: vec![RecordId(2), RecordId(5)],
+            },
+            Event::TagCreated {
+                name: crate::types::tag::TagName::new("auth".into()).unwrap(),
+                description: crate::types::tag::TagLine::new("how people sign in".into()).unwrap(),
+            },
+            Event::TagDescribed {
+                tag: RecordId(2),
+                description: crate::types::tag::TagLine::new("sign-in and sessions".into())
+                    .unwrap(),
+            },
+            Event::TaskTagged {
+                task: TaskId(0),
+                tag: RecordId(2),
+            },
+            Event::TaskUntagged {
+                task: TaskId(0),
+                tag: RecordId(2),
+            },
             Event::TaskClaimed {
                 id: TaskId(0),
                 incarnation: None,

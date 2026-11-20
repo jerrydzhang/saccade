@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
+            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within --tag
                 set prev_value 1
                 continue
             case '-*'
@@ -39,7 +39,7 @@ function __saccade_npos
     # positional count with the container verb word dropped: 1 is the
     # first argument position of the (sub)verb
     set -l have (__saccade_positions)
-    if test "$have[1]" = workspace
+    if test "$have[1]" = workspace -o "$have[1]" = tag
         set -e have[1]
     end
     count $have
@@ -81,7 +81,7 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
+        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within --tag
             return 0
     end
     return 1
@@ -96,6 +96,7 @@ function __saccade_verbs
     printf 'messages\tShow the messages an incarnation participates in\n'
     printf 'name\tName an incarnation, change its name, or clear it\n'
     printf 'list\tList objects (world projection)\n'
+    printf 'tag\tTags: flat names saying what a task is about\n'
     printf 'log\tPrint raw event records\n'
     printf 'show\tEverything about tasks and records, many at once\n'
     printf 'search\tSearch the boards: current, history, references\n'
@@ -128,7 +129,21 @@ function __saccade_workspace_verbs
     printf 'list\tList the standing workspaces: branch, merged status, change\n'
 end
 
+function __saccade_tag_verbs
+    printf 'create\tHuman-only: create a tag with the line saying what belongs under it\n'
+    printf 'describe\tHuman-only: rewrite the line a tag carries\n'
+    printf 'list\tThe tags with their lines, in birth order\n'
+    printf 'add\tTag a task with existing tags\n'
+    printf 'remove\tRemove tags a task carries\n'
+end
+
 complete -c sac -n '__saccade_no_verb; and not __saccade_prev_value_flag' -a '(__saccade_verbs)'
+complete -c sac -n '__saccade_verb tag; and test (__saccade_npos) = 0; and not __saccade_prev_value_flag' -a '(__saccade_tag_verbs)'
+complete -c sac -n '__saccade_verb tag add; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
+complete -c sac -n '__saccade_verb tag remove; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
+complete -c sac -n '__saccade_verb tag add; and test (__saccade_npos) -ge 2; and not __saccade_prev_value_flag' -a '(__saccade_candidates tags)'
+complete -c sac -n '__saccade_verb tag remove; and test (__saccade_npos) -ge 2; and not __saccade_prev_value_flag' -a '(__saccade_candidates tags)'
+complete -c sac -n '__saccade_verb tag describe; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tags)'
 complete -c sac -n '__saccade_verb workspace; and test (__saccade_npos) = 0; and not __saccade_prev_value_flag' -a '(__saccade_workspace_verbs)'
 
 # static flags
@@ -148,6 +163,10 @@ complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and no
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag; and not __saccade_seen_flag --merged' -a '(__saccade_candidates workspaces-clean)'
+
+complete -c sac -n '__saccade_verb create' -l tag -r -f -d 'a tag the task is born carrying; repeatable' -a '(__saccade_candidates tags)'
+complete -c sac -n '__saccade_verb list' -l tag -r -f -d 'only tasks carrying this tag; repeatable' -a '(__saccade_candidates tags)'
+complete -c sac -n '__saccade_verb list' -l untagged -d 'only tasks carrying no tag'
 
 # per-verb flag names, exactly as the CLI defines them: fish offers
 # option names only on dash-prefixed tokens, so these never leak into

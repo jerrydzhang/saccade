@@ -12,6 +12,8 @@ pub(crate) enum Authority {
 fn required_tier(event: &Event) -> Authority {
     match event {
         Event::TaskCreated { .. }
+        | Event::TaskTagged { .. }
+        | Event::TaskUntagged { .. }
         | Event::TaskClaimed { .. }
         | Event::TaskCommitted { .. }
         | Event::TaskOffered { .. }
@@ -23,6 +25,8 @@ fn required_tier(event: &Event) -> Authority {
         | Event::IncarnationNamed { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
+        // only the human creates a tag
+        Event::TagCreated { .. } | Event::TagDescribed { .. } => Authority::Require(Tier::Human),
         // provisioning by role: the machinery's
         // creation, the native registration, and the recipient's
         // delivery record.
@@ -52,7 +56,17 @@ pub(crate) fn enforce_tier(context: &Context, events: &[Event]) -> Result<(), Re
 /// Stateless command syntax: a command is its events, nothing else
 pub fn decide(command: Command) -> Vec<Event> {
     match command {
-        Command::CreateTask { name } => vec![Event::TaskCreated { name }],
+        Command::CreateTask { name, tags } => vec![Event::TaskCreated { name, tags }],
+        Command::CreateTag { name, description } => vec![Event::TagCreated { name, description }],
+        Command::DescribeTag { tag, description } => vec![Event::TagDescribed { tag, description }],
+        Command::TagTask { task, tags } => tags
+            .into_iter()
+            .map(|tag| Event::TaskTagged { task, tag })
+            .collect(),
+        Command::UntagTask { task, tags } => tags
+            .into_iter()
+            .map(|tag| Event::TaskUntagged { task, tag })
+            .collect(),
         Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
         Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
         Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
@@ -144,6 +158,7 @@ mod test {
     use crate::types::pointers::{
         GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath,
     };
+    use crate::types::tag::{TagLine, TagName};
 
     fn agent() -> Context {
         Context {
@@ -161,6 +176,10 @@ mod test {
         }
     }
 
+    fn line() -> TagLine {
+        TagLine::new("how people sign in".into()).unwrap()
+    }
+
     fn prose() -> Prose {
         Prose::new("filler".into()).unwrap()
     }
@@ -171,8 +190,42 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 16] = [
-            (Event::TaskCreated { name: prose() }, AnyTier),
+        let events: [(Event, Authority); 20] = [
+            (
+                Event::TaskCreated {
+                    name: prose(),
+                    tags: Vec::new(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::TagCreated {
+                    name: TagName::new("auth".into()).unwrap(),
+                    description: line(),
+                },
+                Require(Tier::Human),
+            ),
+            (
+                Event::TagDescribed {
+                    tag: RecordId(0),
+                    description: line(),
+                },
+                Require(Tier::Human),
+            ),
+            (
+                Event::TaskTagged {
+                    task: TaskId(0),
+                    tag: RecordId(0),
+                },
+                AnyTier,
+            ),
+            (
+                Event::TaskUntagged {
+                    task: TaskId(0),
+                    tag: RecordId(0),
+                },
+                AnyTier,
+            ),
             (
                 Event::TaskClaimed {
                     id: TaskId(0),
@@ -311,11 +364,51 @@ mod test {
         }
     }
 
+    /// A tagging command is one event per named tag, in order.
+    #[test]
+    fn tag_commands_expand_to_one_event_per_tag() {
+        let tags = vec![RecordId(3), RecordId(5)];
+        let tagged = decide(Command::TagTask {
+            task: TaskId(1),
+            tags: tags.clone(),
+        });
+        assert_eq!(
+            tagged,
+            vec![
+                Event::TaskTagged {
+                    task: TaskId(1),
+                    tag: RecordId(3)
+                },
+                Event::TaskTagged {
+                    task: TaskId(1),
+                    tag: RecordId(5)
+                },
+            ]
+        );
+        let untagged = decide(Command::UntagTask {
+            task: TaskId(1),
+            tags,
+        });
+        assert_eq!(untagged.len(), 2);
+        assert!(matches!(untagged[0], Event::TaskUntagged { .. }));
+    }
+
     /// Every command is its single event.
     #[test]
     fn every_command_expands_to_its_single_event() {
         let commands = [
-            Command::CreateTask { name: prose() },
+            Command::CreateTask {
+                name: prose(),
+                tags: Vec::new(),
+            },
+            Command::CreateTag {
+                name: TagName::new("auth".into()).unwrap(),
+                description: line(),
+            },
+            Command::DescribeTag {
+                tag: RecordId(0),
+                description: line(),
+            },
             Command::ClaimTask {
                 id: TaskId(0),
                 incarnation: Some(IncarnationId(RecordId(9))),

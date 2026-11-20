@@ -539,6 +539,7 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     // native session
     let commands = [
         saccade::record::events::Command::CreateTask {
+            tags: Vec::new(),
             name: saccade::record::types::prose::Prose::new("implement floop".into()).unwrap(),
         },
         saccade::record::events::Command::CreateWorkspace {
@@ -1034,6 +1035,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
             scope: None,
         },
         saccade::record::events::Command::CreateTask {
+            tags: Vec::new(),
             name: saccade::record::types::prose::Prose::new("implement foo".into()).unwrap(),
         },
         1,
