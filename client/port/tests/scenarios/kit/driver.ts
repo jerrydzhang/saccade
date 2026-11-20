@@ -26,6 +26,12 @@ export interface TrackerDoor {
   /** Claim a task as the suite's own actor: the list's row then
    * names that actor in its agents cell. */
   claimTask(task: string): Promise<void>;
+  /** Create a tag as the human (only the human does) with the line
+   * saying what belongs under it. */
+  createTag(name: string, line: string): Promise<void>;
+  /** Tag a task with a tag createTag made; untagTask removes it. */
+  tagTask(task: string, tag: string): Promise<void>;
+  untagTask(task: string, tag: string): Promise<void>;
   /** Commit a board, with any figure files beside board.yaml. */
   commit(
     task: string,

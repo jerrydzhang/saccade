@@ -21,7 +21,11 @@ function base64Of(content: string | Uint8Array): string {
   return btoa(binary);
 }
 
+const HUMAN = { actor: "port-suite-human", tier: "human", scope: null };
+
 export function trackerDoor(base: string): TrackerDoor {
+  // the births the door's own tags were made at, by name
+  const tagBirths = new Map<string, number>();
   const call = async (method: string, route: string, payload?: unknown): Promise<Record<string, unknown>> => {
     const reply = await fetch(`${base}${route}`, {
       method,
@@ -41,6 +45,32 @@ export function trackerDoor(base: string): TrackerDoor {
         client: CLIENT,
       });
       return String(reply.id);
+    },
+    async createTag(name, line) {
+      const reply = await call("POST", "/api/v1/command", {
+        context: HUMAN,
+        command: { create_tag: { name, description: line } },
+        at: null,
+        client: CLIENT,
+      });
+      const records = reply.records as { seq: number }[];
+      tagBirths.set(name, records[0]!.seq);
+    },
+    async tagTask(task, tag) {
+      await call("POST", "/api/v1/command", {
+        context: CONTEXT,
+        command: { tag_task: { task: Number(task.replace(/^t-/, "")), tags: [tagBirths.get(tag)] } },
+        at: null,
+        client: CLIENT,
+      });
+    },
+    async untagTask(task, tag) {
+      await call("POST", "/api/v1/command", {
+        context: CONTEXT,
+        command: { untag_task: { task: Number(task.replace(/^t-/, "")), tags: [tagBirths.get(tag)] } },
+        at: null,
+        client: CLIENT,
+      });
     },
     async claimTask(task) {
       await call("POST", "/api/v1/command", {

@@ -24,6 +24,7 @@ import {
   type WindowEnvironment,
   type WindowServices,
 } from "./lib/instruments/index.ts";
+import { canonicalAddress } from "./lib/instruments/registry.ts";
 import { instrumentClaims, instrumentForAddress, railFootnote } from "./lib/instruments/claims.ts";
 import {
   createBufferFactory,
@@ -1130,13 +1131,23 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // surface)
   const refusalContext = { bufferId: `${windowId}-board-1`, windowId };
   function openSpec(spec: string, part?: string | null): void {
-    const address = parseOpenSpecLocal(spec);
-    if (address === null) {
+    const parsed = parseOpenSpecLocal(spec);
+    if (parsed === null) {
       note = `not a location: ${JSON.stringify(spec)}`;
       diagnostics.report(refusalContext, knownIssue({ code: "asset-denied", message: note }));
       notifyStrip();
       return;
     }
+    // a location's narrowing is the claiming instrument's to validate
+    // and spell; the frame carries the canonical form on
+    const canonical = canonicalAddress(parsed);
+    if (!canonical.ok) {
+      note = `${JSON.stringify(spec)}: ${canonical.refusal}`;
+      diagnostics.report(refusalContext, knownIssue({ code: "asset-denied", message: note }));
+      notifyStrip();
+      return;
+    }
+    const address = canonical.address;
     note = null;
     // One operation schedules the content request; the refresh
     // pipeline publishes. A citation naming a part anchors the open
@@ -1144,7 +1155,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     // is an EXPLICIT opening: the trail records it.
     // the departure capture rides the CURRENT surface (the entry
     // being left), then the opened address names its own
-    trail.opened(spec);
+    trail.opened(address.path === parsed.path ? spec : formatLocation(address));
     const surface = surfaceOfAddress(address);
     if (surface === null) {
       note = `no instrument shows ${JSON.stringify(address)}`;

@@ -21,6 +21,8 @@ import TasksRailRow from "./TasksRailRow.svelte";
 import { serveRailAgents } from "./tasksRail.ts";
 import { sourceFor } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
+import { isTasksPath } from "../lib/location.ts";
+import { narrowedPath, parseNarrowing } from "../lib/tasks/narrowing.ts";
 import { tasksPageOf } from "../lib/tasks/page.ts";
 
 export * from "./tasksController.ts";
@@ -49,8 +51,12 @@ export function register(): RegisteredInstrument {
   return registerInstrument({
     kind: "tasks",
     title: "the project's tasks",
-    claims: (address) => address.machine.startsWith("tracker:") && address.path === "tasks",
+    claims: (address) => address.machine.startsWith("tracker:") && isTasksPath(address.path),
     projectView: (project) => `${project}/tasks`,
+    canonicalNarrowing: (opaque) => {
+      const verdict = parseNarrowing(opaque);
+      return verdict.ok ? { ok: true, canonical: verdict.canonical } : verdict;
+    },
     railTargets: (project) => railData.railTargets(project),
     railNote: (project) => railData.railNote(project),
     railFootnote: () => railData.railFootnote(),
@@ -60,6 +66,13 @@ export function register(): RegisteredInstrument {
       if (!(source instanceof TrackerSource)) return [];
       const model = tasksPageOf(await source.instrumentPage("tasks"));
       const out: { id: string; title: string }[] = [];
+      // the repository's tags: each opens the list narrowed to it
+      for (const tag of await source.tags()) {
+        out.push({
+          id: narrowedPath({ tags: [tag.name.toLowerCase()], untagged: false }),
+          title: tag.description === "" ? tag.name : `${tag.name} - ${tag.description}`,
+        });
+      }
       for (const group of model.groups) {
         for (const entry of group.rows) {
           out.push({ id: entry.task, title: entry.title });

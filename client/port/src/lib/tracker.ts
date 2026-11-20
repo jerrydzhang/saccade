@@ -244,9 +244,10 @@ export class TrackerSource implements BoardSource {
    * the glance (agents), fetched fresh every time - they are views of
    * the record's now, never cached (a bare location re-resolves on
    * every open, and these are the barest of them all). */
-  async instrumentPage(path: "tasks" | "agents"): Promise<ViewPage> {
+  async instrumentPage(path: "tasks" | "agents", query?: string): Promise<ViewPage> {
     await this.checkContract();
-    const page = await fetchPage(await this.wire(), viewRoute(path));
+    const route = query === undefined || query === "" ? path : `${path}?${query}`;
+    const page = await fetchPage(await this.wire(), viewRoute(route));
     if (page.kind !== "document" || page.location !== path) {
       throw new SourceUnavailableError(
         "core-protocol",
@@ -254,6 +255,14 @@ export class TrackerSource implements BoardSource {
       );
     }
     return page;
+  }
+
+  /** The repository's tags with their lines, read fresh off the root
+   * page; none from a tracker before tags. */
+  async tags(): Promise<readonly { name: string; description: string }[]> {
+    await this.checkContract();
+    const root = await fetchPage(await this.wire(), viewRoute(""));
+    return root.tags ?? [];
   }
 
   /** The agents page, for the tasks instrument's live join: the

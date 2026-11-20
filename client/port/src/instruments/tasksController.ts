@@ -50,7 +50,16 @@ import type { AnchorData, AnchorLocation, ViewportMetrics } from "../lib/contrac
 export type { TaskAnchor };
 import type { Rail } from "../lib/tasks/rail.ts";
 import type { StructuredIssue } from "../lib/board/errors.ts";
-import { TASKS_PATH, formatLocation } from "../lib/location.ts";
+import { TASKS_PATH, formatLocation, isTasksPath } from "../lib/location.ts";
+import {
+  NOT_NARROWED_BY_THIS_TRACKER,
+  echoMatches,
+  narrowingOfPath,
+  narrowingQuery,
+  unknownTagText,
+  type Narrowing,
+} from "../lib/tasks/narrowing.ts";
+import { PageRefusal, type ViewPage } from "../lib/pages.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { taskRowActs, type TaskPorts } from "../lib/tasks/menu.ts";
@@ -119,6 +128,34 @@ const EMPTY_FRAME: TasksData = {
   errors: [],
 };
 
+/** The tasks page at a narrowing, held to what was asked: an older
+ * tracker silently ignores a query it does not know and answers the
+ * whole list, so a narrowing the page does not echo exactly is
+ * refused - the un-narrowed rows never stand in for a narrowed list. */
+async function narrowedPage(source: TrackerSource, narrowing: Narrowing | null): Promise<ViewPage> {
+  if (narrowing === null) return source.instrumentPage(TASKS_PATH);
+  let page: ViewPage;
+  try {
+    page = await source.instrumentPage(TASKS_PATH, narrowingQuery(narrowing));
+  } catch (error) {
+    // a refusal that arrives with its words stands; one the transport
+    // reduced to a failed status is explained from the tags themselves
+    if (error instanceof PageRefusal) throw error;
+    const text = await explainUnknownTag(source, narrowing);
+    throw text === null ? error : new Error(text);
+  }
+  if (!echoMatches(narrowing, page.narrowing)) throw new Error(NOT_NARROWED_BY_THIS_TRACKER);
+  return page;
+}
+
+async function explainUnknownTag(source: TrackerSource, narrowing: Narrowing): Promise<string | null> {
+  try {
+    return unknownTagText(narrowing, await source.tags());
+  } catch {
+    return null;
+  }
+}
+
 export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts): InstrumentAttachment<TasksUI, TaskAnchor> {
   const scope = createLoadScope<TasksData>(EMPTY_FRAME);
 
@@ -136,7 +173,9 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       try {
         const source = sourceFor(address.machine);
         if (!(source instanceof TrackerSource)) return null;
-        return JSON.stringify(tasksPageOf(await source.instrumentPage(TASKS_PATH)));
+        const asked = narrowingOfPath(address.path);
+        if (!asked.ok) return null;
+        return JSON.stringify(tasksPageOf(await narrowedPage(source, asked.narrowing)));
       } catch {
         return null;
       }
@@ -194,9 +233,11 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
         issue: failureIssue("lane-unavailable", "the buffer was destroyed"),
       };
     const token = scope.begin();
-    const asked = formatLocation({ machine: address.machine, path: address.path });
+    const asking = narrowingOfPath(address.path);
+    const resolvedPath = asking.ok ? asking.path : TASKS_PATH;
+    const asked = formatLocation({ machine: address.machine, path: asking.ok ? asking.path : address.path });
     scope.setAsked(asked);
-    if (address.path !== TASKS_PATH) {
+    if (!isTasksPath(address.path)) {
       // this surface serves a project's task list; the claims list
       // routes it here - a gap is named, never guessed
       return {
@@ -210,13 +251,17 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       asked: scope.asked(),
       location: asked,
       project,
-      resolved: { machine: address.machine, path: TASKS_PATH },
+      resolved: { machine: address.machine, path: resolvedPath },
       status: problem === null ? "loaded" : "invalid",
       problem,
       page: null,
       errors: [],
     });
     const problemOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+    if (!asking.ok) {
+      shownSignature = null;
+      return publish(base(asking.refusal));
+    }
     let source: unknown;
     try {
       source = sourceFor(address.machine);
@@ -231,7 +276,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
     }
     let viewPage;
     try {
-      viewPage = await source.instrumentPage(TASKS_PATH);
+      viewPage = await narrowedPage(source, asking.narrowing);
     } catch (error) {
       if (scope.isStale(token)) return { kind: "failed", issue: failureIssue("lane-unavailable", "superseded") };
       // the project's tracker is unreachable: the list says why
@@ -246,7 +291,7 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
       asked: scope.asked(),
       location: asked,
       project,
-      resolved: { machine: address.machine, path: TASKS_PATH },
+      resolved: { machine: address.machine, path: resolvedPath },
       status: "loaded",
       problem: null,
       page: model,

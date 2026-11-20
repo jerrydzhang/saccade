@@ -3,7 +3,10 @@
 // names a machine from the local core's list - a repository's
 // declaration lives at such a path - "name/t-N[@rK]" names a task
 // board served by the registered project of that name, and
-// "name/tasks" is that project's task list. A bare relative path is
+// "name/tasks" is that project's task list, which may carry a
+// narrowing after a question mark ("name/tasks?...") - to the frame an
+// opaque string only: the tasks instrument parses it and spells its
+// canonical form. A bare relative path is
 // refused, loudly, never guessed; a bare "/absolute/path" is no
 // location either - the machine is always named. A window with no
 // location is the empty window.
@@ -17,7 +20,7 @@ export type ParsedLocation = { machine: string; path: string } | null;
 // spec, the task list, or the glance's entry page (agents). The name
 // carries no colon or slash, so it never collides with the
 // machine:/path form.
-const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents|tasks)$/;
+const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|agents|tasks(?:\?\S*)?)$/;
 
 export const TASKS_PATH = "tasks" as const;
 
@@ -27,7 +30,23 @@ export type InstrumentPath = "tasks" | "agents";
 
 export function instrumentPath(path: string): InstrumentPath | null {
   const trimmed = path.trim();
-  return trimmed === "tasks" || trimmed === "agents" ? trimmed : null;
+  if (isTasksPath(trimmed)) return "tasks";
+  return trimmed === "agents" ? trimmed : null;
+}
+
+/** Whether a tracker location's path is the task list, narrowed or
+ * not. */
+export function isTasksPath(path: string): boolean {
+  return path === TASKS_PATH || path.startsWith(`${TASKS_PATH}?`);
+}
+
+/** A path split at its narrowing: the base page and the opaque string
+ * after the question mark (null when the path carries none). Nothing
+ * here reads the narrowing; the instrument that owns the page does. */
+export function splitNarrowing(path: string): { base: string; narrowing: string | null } {
+  const at = path.indexOf("?");
+  if (at < 0) return { base: path, narrowing: null };
+  return { base: path.slice(0, at), narrowing: path.slice(at + 1) };
 }
 
 export function trackerLocation(input: string): ParsedLocation {

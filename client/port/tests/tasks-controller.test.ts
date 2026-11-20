@@ -13,7 +13,7 @@ import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import { connectTasks } from "../src/instruments/tasksController.ts";
 import type { TasksData, TasksUI } from "../src/instruments/tasksController.ts";
 import type { TaskAnchor } from "../src/lib/contracts/places.ts";
-import type { ViewPage } from "../src/lib/pages.ts";
+import { PageRefusal, type ViewPage } from "../src/lib/pages.ts";
 import type { ElsewhereAct } from "../src/lib/elsewhere.ts";
 import { TrackerSource } from "../src/lib/tracker.ts";
 import { sourceFor } from "../src/lib/sources.ts";
@@ -480,4 +480,65 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
     null,
     "t-0 left the page: the selection clears, never a silent neighbour",
   );
+});
+
+test("a narrowed list asks the tracker for its narrowing, shows the location canonical, and holds the page to the echo", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  const source = sourceFor(MACHINE) as TrackerSource;
+  const asked: (string | undefined)[] = [];
+  vi.spyOn(source, "instrumentPage").mockImplementation(async (_path, query) => {
+    asked.push(query);
+    return { ...tasksPageFixture([{ task: "t-0", title: "x" }]), narrowing: { tags: ["UI", "auth"], untagged: false } };
+  });
+  assert.equal(await h.attachment.places.request({ machine: MACHINE, path: "tasks?tag=UI,auth,ui" }), "applied");
+  assert.deepEqual(asked, ["tag=auth&tag=ui"]);
+  const state = h.built.host.snapshot();
+  assert.ok(state.kind === "alive" && state.content.kind === "available");
+  const frame = state.content.value.value;
+  assert.equal(frame.status, "loaded");
+  assert.equal(frame.location, "tasks-test/tasks?tag=auth,ui");
+  assert.equal(frame.resolved.path, "tasks?tag=auth,ui");
+  assert.equal(frame.page?.groups[0]?.rows.length, 1);
+});
+
+test("a tracker that does not echo the narrowing is refused: the whole list never stands in for it", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  const source = sourceFor(MACHINE) as TrackerSource;
+  // an older tracker ignores the query it does not know and answers everything
+  vi.spyOn(source, "instrumentPage").mockImplementation(async () => tasksPageFixture([{ task: "t-0", title: "x" }]));
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks?tag=auth" });
+  const state = h.built.host.snapshot();
+  assert.ok(state.kind === "alive" && state.content.kind === "available");
+  const frame = state.content.value.value;
+  assert.equal(frame.status, "invalid");
+  assert.equal(frame.page, null);
+  assert.match(frame.problem ?? "", /does not narrow by tag/);
+  assert.equal(state.content.value.targets.length, 0);
+});
+
+test("an unknown tag shows the tracker's refusal with the tags that exist, on the problem line", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  const source = sourceFor(MACHINE) as TrackerSource;
+  vi.spyOn(source, "instrumentPage").mockRejectedValue(
+    new PageRefusal("unknown_tag", "no tag 'nope'; the tags are:\nauth - sign-in\nui - screens", 400),
+  );
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks?tag=nope" });
+  const state = h.built.host.snapshot();
+  assert.ok(state.kind === "alive" && state.content.kind === "available");
+  const frame = state.content.value.value;
+  assert.equal(frame.status, "invalid");
+  assert.match(frame.problem ?? "", /no tag 'nope'/);
+  assert.match(frame.problem ?? "", /auth - sign-in/);
+  assert.match(frame.problem ?? "", /ui - screens/);
+});
+
+test("a refusal the transport reduced to a failed status is explained from the repository's tags", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  const source = sourceFor(MACHINE) as TrackerSource;
+  vi.spyOn(source, "instrumentPage").mockRejectedValue(new Error("the tracker answered 400 for /view/v1/tasks?tag=nope"));
+  vi.spyOn(source, "tags").mockResolvedValue([{ name: "auth", description: "sign-in" }]);
+  await h.attachment.places.request({ machine: MACHINE, path: "tasks?tag=nope" });
+  const state = h.built.host.snapshot();
+  assert.ok(state.kind === "alive" && state.content.kind === "available");
+  assert.equal(state.content.value.value.problem, "no tag 'nope'; the tags are:\nauth - sign-in");
 });

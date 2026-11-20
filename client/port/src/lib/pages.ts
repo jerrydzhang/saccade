@@ -140,6 +140,12 @@ export type ViewPage = {
   /** The diff page's component changes; absent on every other page
    * (and from a tracker older than t-57). */
   changes?: PageChange[];
+  /** The root page's tags: every tag with its line, in birth order;
+   * absent from a tracker before tags. */
+  tags?: { name: string; description: string }[];
+  /** What the tasks page says it narrowed by: absent when it did not
+   * narrow (or is a tracker that cannot). */
+  narrowing?: { tags: string[]; untagged: boolean };
 };
 
 /** A refusal document, raised: the code names the refusal, the detail
@@ -351,6 +357,35 @@ export function decodePage(value: unknown): ViewPage {
               : decodeHistoryEntry(record);
           }),
     changes: changes === undefined ? undefined : changes.flatMap((entry) => decodeChange(entry)),
+    tags: decodeTagLines(raw.tags),
+    narrowing: decodeNarrowing(raw.narrowing),
+  };
+}
+
+/** The root page's tags as {name, description}; a task page's plain
+ * names are not tag lines and decode to nothing. */
+function decodeTagLines(value: unknown): { name: string; description: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const lines: { name: string; description: string }[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record === null || typeof record.name !== "string") continue;
+    lines.push({
+      name: record.name,
+      description: typeof record.description === "string" ? record.description : "",
+    });
+  }
+  return lines.length === 0 && value.length > 0 ? undefined : lines;
+}
+
+function decodeNarrowing(value: unknown): { tags: string[]; untagged: boolean } | undefined {
+  const record = asRecord(value);
+  if (record === null || !Array.isArray(record.tags) || typeof record.untagged !== "boolean") {
+    return undefined;
+  }
+  return {
+    tags: record.tags.filter((tag): tag is string => typeof tag === "string"),
+    untagged: record.untagged,
   };
 }
 
