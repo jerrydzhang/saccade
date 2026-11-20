@@ -69,6 +69,7 @@ async fn commands_round_trip_over_the_wire() {
             &mut conn,
             &Context::system(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: Prose::new("carry a merge through the worktree".into()).unwrap(),
             },
             now,
@@ -819,6 +820,7 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
         scope: None,
     };
     let command = || Command::CreateTask {
+        tags: Vec::new(),
         name: saccade::record::types::prose::Prose::new("across the line".into()).unwrap(),
     };
 
@@ -931,6 +933,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &base,
         &agent,
         Command::CreateTask {
+            tags: Vec::new(),
             name: saccade::record::types::prose::Prose::new("client smoke".into()).unwrap(),
         },
         Some(7),
@@ -974,6 +977,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         "http://127.0.0.1:1",
         &agent,
         Command::CreateTask {
+            tags: Vec::new(),
             name: saccade::record::types::prose::Prose::new("never lands".into()).unwrap(),
         },
         None,

@@ -1761,6 +1761,7 @@ content:
                     scope: None,
                 },
                 crate::events::Event::TaskCreated {
+                    tags: Vec::new(),
                     name: crate::types::prose::Prose::new("implement foo".into()).unwrap(),
                 },
             ))

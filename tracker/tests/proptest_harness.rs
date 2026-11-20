@@ -85,6 +85,28 @@ enum Action {
         draw: u8,
         by: u8,
     },
+    /// A tag birth under one of a few names, so repeats refuse as
+    /// duplicates; an agent draw refuses as human-only
+    CreateTag {
+        draw: u8,
+        human: bool,
+    },
+    /// A tagging of the drawn task with one or two drawn tags (the
+    /// sentinel draw names no tag)
+    TagTask {
+        task: u8,
+        tag: u8,
+        second: Option<u8>,
+    },
+    UntagTask {
+        task: u8,
+        tag: u8,
+        second: Option<u8>,
+    },
+    DescribeTag {
+        tag: u8,
+        human: bool,
+    },
 }
 
 impl Action {
@@ -95,6 +117,8 @@ impl Action {
             | Action::Cancel { human, .. }
             | Action::Reopen { human, .. }
             | Action::Reject { human, .. }
+            | Action::CreateTag { human, .. }
+            | Action::DescribeTag { human, .. }
             | Action::Accept { human, .. } => *human,
             Action::Commit { .. } | Action::Offer { .. } => false,
             Action::CreateWorkspace { .. }
@@ -104,6 +128,8 @@ impl Action {
             | Action::CleanWorkspace { .. }
             | Action::Send { .. }
             | Action::Submit { .. }
+            | Action::TagTask { .. }
+            | Action::UntagTask { .. }
             | Action::Name { .. } => false,
         }
     }
@@ -116,6 +142,8 @@ impl Action {
             | Action::Commit { task, .. }
             | Action::Offer { task, .. }
             | Action::Reject { task, .. }
+            | Action::TagTask { task, .. }
+            | Action::UntagTask { task, .. }
             | Action::Accept { task, .. }
                 if role == "task" =>
             {
@@ -216,6 +244,15 @@ fn native_at(world: &World, n: u8) -> Option<saccade::record::objects::incarnati
     born.get(slot).copied()
 }
 
+/// A tag birth the fold holds, with a one-past-the-end sentinel that
+/// names no tag.
+fn tag_at(world: &World, n: u8) -> RecordId {
+    let born: Vec<RecordId> = world.tags.keys().copied().collect();
+    born.get(n as usize % (born.len() + 1))
+        .copied()
+        .unwrap_or(RecordId(usize::MAX))
+}
+
 /// The messages the fold holds, with a one-past-the-end sentinel.
 fn message_at(world: &World, n: u8) -> Option<saccade::record::objects::message::MessageId> {
     let ids: Vec<saccade::record::objects::message::MessageId> =
@@ -228,7 +265,29 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
     let task = task_at(world, action.number("task"));
     match action {
         Action::Create { .. } => Command::CreateTask {
+            tags: Vec::new(),
             name: Prose::new("generated name".into()).unwrap(),
+        },
+        Action::CreateTag { draw, .. } => Command::CreateTag {
+            name: saccade::record::types::tag::TagName::new(format!("tag-{}", draw % 5)).unwrap(),
+            description: saccade::record::types::tag::TagLine::new("generated line".into())
+                .unwrap(),
+        },
+        Action::DescribeTag { tag, .. } => Command::DescribeTag {
+            tag: tag_at(world, *tag),
+            description: saccade::record::types::tag::TagLine::new(format!("line {tag}")).unwrap(),
+        },
+        Action::TagTask { tag, second, .. } => Command::TagTask {
+            task,
+            tags: std::iter::once(tag_at(world, *tag))
+                .chain(second.map(|n| tag_at(world, n)))
+                .collect(),
+        },
+        Action::UntagTask { tag, second, .. } => Command::UntagTask {
+            task,
+            tags: std::iter::once(tag_at(world, *tag))
+                .chain(second.map(|n| tag_at(world, n)))
+                .collect(),
         },
         Action::Claim { incarnation, .. } => Command::ClaimTask {
             id: task,
@@ -490,6 +549,12 @@ fn action_strategy() -> BoxedStrategy<Action> {
         }),
         2 => any::<u8>().prop_map(|message| Action::Submit { message }),
         4 => (any::<u8>(), any::<u8>()).prop_map(|(draw, by)| Action::Name { draw, by }),
+        3 => (any::<u8>(), human_coin()).prop_map(|(draw, human)| Action::CreateTag { draw, human }),
+        1 => (any::<u8>(), human_coin()).prop_map(|(tag, human)| Action::DescribeTag { tag, human }),
+        3 => (any::<u8>(), any::<u8>(), proptest::option::of(any::<u8>()))
+            .prop_map(|(task, tag, second)| Action::TagTask { task, tag, second }),
+        2 => (any::<u8>(), any::<u8>(), proptest::option::of(any::<u8>()))
+            .prop_map(|(task, tag, second)| Action::UntagTask { task, tag, second }),
     ]
     .boxed()
 }
@@ -652,6 +717,15 @@ fn generator_reaches_deep_states() {
                         Action::Name { .. } if last.kind == "incarnation_named" => {
                             *milestones.entry("incarnation named").or_default() += 1;
                         }
+                        Action::CreateTag { .. } if last.kind == "tag_created" => {
+                            *milestones.entry("tag created").or_default() += 1;
+                        }
+                        Action::TagTask { .. } if last.kind == "task_tagged" => {
+                            *milestones.entry("task tagged").or_default() += 1;
+                        }
+                        Action::UntagTask { .. } if last.kind == "task_untagged" => {
+                            *milestones.entry("task untagged").or_default() += 1;
+                        }
                         _ => {}
                     }
                 }
@@ -673,6 +747,12 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidIncarnationName => "InvalidIncarnationName",
                         saccade::Reject::NotOwnIncarnation => "NotOwnIncarnation",
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
+                        saccade::Reject::InvalidTagLine => "InvalidTagLine",
+                        saccade::Reject::InvalidTagName => "InvalidTagName",
+                        saccade::Reject::DuplicateTag => "DuplicateTag",
+                        saccade::Reject::InvalidTagId => "InvalidTagId",
+                        saccade::Reject::AlreadyTagged => "AlreadyTagged",
+                        saccade::Reject::NotTagged => "NotTagged",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
                         saccade::Reject::InvalidWorkspaceId => "InvalidWorkspaceId",
@@ -707,6 +787,8 @@ fn generator_reaches_deep_states() {
         ("message submitted", 0.005),
         ("incarnation named", 0.01),
         ("workspace created", 0.10),
+        ("tag created", 0.10),
+        ("task tagged", 0.05),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(
@@ -724,6 +806,8 @@ fn generator_reaches_deep_states() {
         "InvalidStateTransition",
         "InvalidIncarnationId",
         "NotOwnIncarnation",
+        "DuplicateTag",
+        "InvalidTagId",
     ] {
         assert!(
             reject_kinds.get(kind).copied().unwrap_or(0) > 0,

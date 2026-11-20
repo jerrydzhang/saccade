@@ -54,6 +54,23 @@ pub enum Reject {
         "the declared task scope covers this task: a task-bound producer cannot accept its own board"
     )]
     SelfAcceptance,
+    // Tags
+    #[error(
+        "a tag name starts with a letter or digit, holds letters, digits, '.', '_' and '-', and is at most 64 characters"
+    )]
+    InvalidTagName,
+    #[error(
+        "a tag's line is one non-empty line with no surrounding whitespace and no control characters"
+    )]
+    InvalidTagLine,
+    #[error("a tag with that name exists already; tag names compare ignoring case")]
+    DuplicateTag,
+    #[error("no such tag")]
+    InvalidTagId,
+    #[error("the task carries that tag already")]
+    AlreadyTagged,
+    #[error("the task does not carry that tag")]
+    NotTagged,
     // Permissions
     #[error("human-only act")]
     HumanOnly,
@@ -89,6 +106,12 @@ impl Reject {
             Reject::InvalidIncarnationName => "invalid_incarnation_name",
             Reject::NotOwnIncarnation => "not_own_incarnation",
             Reject::InvalidMessageId => "invalid_message_id",
+            Reject::InvalidTagName => "invalid_tag_name",
+            Reject::InvalidTagLine => "invalid_tag_line",
+            Reject::DuplicateTag => "duplicate_tag",
+            Reject::InvalidTagId => "invalid_tag_id",
+            Reject::AlreadyTagged => "already_tagged",
+            Reject::NotTagged => "not_tagged",
             Reject::HumanOnly => "human_only",
             Reject::InvalidWorkspaceId => "invalid_workspace_id",
             Reject::WorkspaceStageMismatch => "workspace_stage_mismatch",
@@ -127,6 +150,12 @@ mod test {
             Reject::InvalidIncarnationName,
             Reject::NotOwnIncarnation,
             Reject::InvalidMessageId,
+            Reject::InvalidTagName,
+            Reject::InvalidTagLine,
+            Reject::DuplicateTag,
+            Reject::InvalidTagId,
+            Reject::AlreadyTagged,
+            Reject::NotTagged,
             Reject::HumanOnly,
             Reject::InvalidWorkspaceId,
             Reject::WorkspaceStageMismatch,

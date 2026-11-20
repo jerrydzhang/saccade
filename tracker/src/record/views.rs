@@ -73,6 +73,8 @@ pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target)
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. }
+        | Event::TaskTagged { task: id, .. }
+        | Event::TaskUntagged { task: id, .. }
         | Event::TaskCommitted { task: id, .. }
         | Event::TaskOffered { task: id, .. }
         | Event::TaskRejected { task: id, .. }
@@ -95,6 +97,8 @@ pub struct TaskView {
     pub state: &'static str,
     pub name: String,
     pub owner: Option<String>,
+    /// The tags the task carries, in the tags' birth order
+    pub tags: Vec<String>,
 }
 
 pub fn state_str(state: &TaskState) -> &'static str {
@@ -113,6 +117,7 @@ impl TaskView {
             state: state_str(&ctx.task.state),
             name: ctx.task.name.as_str().to_string(),
             owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
+            tags: world.tag_names_of(ctx),
         }
     }
 }
@@ -142,6 +147,7 @@ pub struct ShowView {
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
     pub owner: Option<String>,
+    pub tags: Vec<String>,
 }
 
 impl ShowView {
@@ -155,6 +161,7 @@ impl ShowView {
                 _ => None,
             },
             owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
+            tags: world.tag_names_of(ctx),
         }
     }
 }
@@ -594,6 +601,7 @@ mod test {
 
     fn ctx_of(state: TaskState) -> TaskContext {
         TaskContext {
+            tags: Default::default(),
             task: Task {
                 state,
                 name: filler(),
@@ -748,6 +756,7 @@ mod test {
             0,
             &ctx("human person"),
             Event::TaskCreated {
+                tags: Vec::new(),
                 name: Prose::new("implement foo".into()).unwrap(),
             },
         );
@@ -757,6 +766,7 @@ mod test {
             1,
             &ctx("human person"),
             Event::TaskCreated {
+                tags: Vec::new(),
                 name: Prose::new("fix bar".into()).unwrap(),
             },
         );
@@ -938,6 +948,7 @@ mod test {
                 (
                     0,
                     Event::TaskCreated {
+                        tags: Vec::new(),
                         name: Prose::new("implement foo".into()).unwrap(),
                     },
                 ),

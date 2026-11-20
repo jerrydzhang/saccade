@@ -4,6 +4,7 @@ use crate::objects::message::MessageId;
 use crate::objects::task::TaskId;
 use crate::types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
 use crate::types::prose::Prose;
+use crate::types::tag::{TagLine, TagName};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -12,7 +13,28 @@ pub enum Event {
     // Task events
     TaskCreated {
         name: Prose,
+        /// The tags the task is born carrying, by their birth records
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<RecordRef>,
     },
+    /// A tag's birth: a flat name, the human's to create. The
+    /// record's position is the tag's identity; no id rides the
+    /// payload.
+    TagCreated {
+        name: TagName,
+        /// What belongs under the tag
+        description: TagLine,
+    },
+    /// The human's rewording of what belongs under a tag; the log
+    /// keeps every earlier line, the fold the present one.
+    TagDescribed {
+        tag: RecordRef,
+        description: TagLine,
+    },
+    /// The task carries the tag from this record on.
+    TaskTagged { task: TaskId, tag: RecordRef },
+    /// The task no longer carries the tag from this record on.
+    TaskUntagged { task: TaskId, tag: RecordRef },
     /// A transfer of whole-task responsibility: never a state
     /// transition, never a permission grant. The claim history
     /// accumulates on the context.
@@ -24,16 +46,10 @@ pub enum Event {
     },
     /// The human's stop of an unfinished undertaking, with the
     /// explanation that survives in the record.
-    TaskCancelled {
-        id: TaskId,
-        explanation: Prose,
-    },
+    TaskCancelled { id: TaskId, explanation: Prose },
     /// The human's explicit resumption of a cancelled undertaking,
     /// with the explanation of why it is pursued again.
-    TaskReopened {
-        id: TaskId,
-        explanation: Prose,
-    },
+    TaskReopened { id: TaskId, explanation: Prose },
     /// A published board revision: the commit the boards effects
     /// wrote, the parent it was cut from (absent for the first), and
     /// the declared incorporations as (source task, source commit)
@@ -46,22 +62,14 @@ pub enum Event {
         incorporations: Vec<(TaskId, GitCommit)>,
     },
     /// The task's board stands offered at its current commit.
-    TaskOffered {
-        task: TaskId,
-        commit: GitCommit,
-    },
+    TaskOffered { task: TaskId, commit: GitCommit },
     /// The human-side ask to reconsider an offered board, with the
     /// grounds that reopen the task.
-    TaskRejected {
-        task: TaskId,
-        grounds: Prose,
-    },
+    TaskRejected { task: TaskId, grounds: Prose },
     /// The offered board is accepted: a truthful final state,
     /// whatever the outcome. Every incorporation in the offered
     /// commit cites exactly its source's accepted commit.
-    TaskAccepted {
-        task: TaskId,
-    },
+    TaskAccepted { task: TaskId },
     // Workspace events: machinery verbs, System-authored by role
     /// The created workspace's birth: the canonical base commit,
     /// branch, and absolute path provisioning established. The
@@ -76,9 +84,7 @@ pub enum Event {
     /// checkout confirmed absent before this lands. It references the
     /// existing workspace birth identity only - the birth carries the
     /// immutable branch/path/base, this carries nothing else.
-    WorkspaceCleaned {
-        workspace: RecordRef,
-    },
+    WorkspaceCleaned { workspace: RecordRef },
     // Incarnation and message events: registration and submission are
     // machinery verbs, System-authored by role; a message is authored
     // by its sending session's registered identity
@@ -137,10 +143,7 @@ pub enum Event {
     /// The recipient's integration handed the message to its native
     /// session: ordinary pending/submission bookkeeping, never a
     /// claim of reading, agreement, completion, or task acceptance.
-    MessageSubmitted {
-        id: MessageId,
-        by: IncarnationId,
-    },
+    MessageSubmitted { id: MessageId, by: IncarnationId },
 }
 
 /// A stable internal reference: the birth record of the thing cited.
@@ -152,6 +155,26 @@ pub enum Command {
     // Task commands
     CreateTask {
         name: Prose,
+        #[serde(default)]
+        tags: Vec<RecordRef>,
+    },
+    CreateTag {
+        name: TagName,
+        description: TagLine,
+    },
+    DescribeTag {
+        tag: RecordRef,
+        description: TagLine,
+    },
+    /// One tagging per named tag; one refused tag refuses the command.
+    TagTask {
+        task: TaskId,
+        tags: Vec<RecordRef>,
+    },
+    /// One untagging per named tag; one refused tag refuses the command.
+    UntagTask {
+        task: TaskId,
+        tags: Vec<RecordRef>,
     },
     ClaimTask {
         id: TaskId,

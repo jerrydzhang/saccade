@@ -8,6 +8,7 @@ use crate::decide::{decide, enforce_tier};
 use crate::events::{Command, Event};
 use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, Supersession};
 use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
+use crate::objects::tag::TagContext;
 use crate::objects::task::{BoardCommit, Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{
     CreatedWorkspace, CreatedWorkspaceContext, WorkspaceId, WorkspaceStage, WorkspaceStageFact,
@@ -24,6 +25,14 @@ pub struct FoldError {
 #[derive(Debug)]
 pub enum Reason {
     InvalidTaskId,
+    /// A tag birth names a name another tag holds, ignoring ASCII case.
+    DuplicateTag,
+    /// A tagging or untagging cites a record that is no tag's birth.
+    InvalidTagId,
+    /// A tagging cites a tag the task carries already.
+    AlreadyTagged,
+    /// An untagging cites a tag the task does not carry.
+    NotTagged,
     /// A board commit names a parent that is not the task's current
     /// commit: revisions chain onto what actually stands.
     NotCurrentParent {
@@ -82,6 +91,10 @@ impl From<Reason> for Reject {
     fn from(reason: Reason) -> Reject {
         match reason {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
+            Reason::DuplicateTag => Reject::DuplicateTag,
+            Reason::InvalidTagId => Reject::InvalidTagId,
+            Reason::AlreadyTagged => Reject::AlreadyTagged,
+            Reason::NotTagged => Reject::NotTagged,
             Reason::NotCurrentParent { expected } => Reject::NotCurrentParent {
                 expected: expected.as_ref().map(|c| c.as_str().to_string()),
             },
@@ -187,6 +200,8 @@ pub struct World {
     /// any task or incarnation, identity at the birth record. No
     /// human-facing number derives from these births.
     pub workspaces: BTreeMap<WorkspaceId, CreatedWorkspaceContext>,
+    /// Tags by their birth records, which sort in birth order.
+    pub tags: BTreeMap<RecordId, TagContext>,
     /// Every applied record: existence for the citation guard, its
     /// home thread where the fold gives one. A record without a home
     /// still exists. No residency - the named record stays the event
@@ -206,6 +221,7 @@ impl World {
             incarnations: BTreeMap::new(),
             messages: BTreeMap::new(),
             workspaces: BTreeMap::new(),
+            tags: BTreeMap::new(),
             provenance: BTreeMap::new(),
             superseded: BTreeMap::new(),
         }
@@ -227,6 +243,28 @@ impl World {
     /// reference, resolved against the post-write fold.
     pub fn task_born_at(&self, birth: RecordId) -> Option<TaskId> {
         self.tasks.iter().position(|t| t.birth == birth).map(TaskId)
+    }
+
+    /// The tag born at this record, resolved by name ignoring ASCII case.
+    pub fn tag_named(&self, name: &str) -> Option<RecordId> {
+        crate::objects::tag::tag_named(&self.tags, name)
+    }
+
+    /// The tags a task carries with their present lines, in birth order.
+    pub fn tags_of(&self, ctx: &TaskContext) -> Vec<&TagContext> {
+        ctx.tags
+            .iter()
+            .filter_map(|tag| self.tags.get(tag))
+            .collect()
+    }
+
+    /// The names of the tags a task carries, in the tags' birth order.
+    pub fn tag_names_of(&self, ctx: &TaskContext) -> Vec<String> {
+        ctx.tags
+            .iter()
+            .filter_map(|tag| self.tags.get(tag))
+            .map(|tag| tag.name.as_str().to_string())
+            .collect()
     }
 
     /// The boards caches' current state, from the fold: the ref key
@@ -384,7 +422,19 @@ impl World {
     fn apply_record(&mut self, record: Record) -> Result<(), Reason> {
         match record.event {
             // Task events
-            Event::TaskCreated { name: task_name } => {
+            Event::TaskCreated {
+                name: task_name,
+                ref tags,
+            } => {
+                let mut carried = std::collections::BTreeSet::new();
+                for tag in tags {
+                    if !self.tags.contains_key(tag) {
+                        return Err(Reason::InvalidTagId);
+                    }
+                    if !carried.insert(*tag) {
+                        return Err(Reason::AlreadyTagged);
+                    }
+                }
                 let birth = record.id;
                 self.provenance
                     .insert(birth, Some(TaskId(self.tasks.len())));
@@ -399,7 +449,56 @@ impl World {
                     ownership: Vec::new(),
                     commits: Vec::new(),
                     birth_actor: record.context.actor.clone(),
+                    tags: carried,
                 });
+            }
+            Event::TagCreated {
+                ref name,
+                ref description,
+            } => {
+                if self.tag_named(name.as_str()).is_some() {
+                    return Err(Reason::DuplicateTag);
+                }
+                self.provenance.insert(record.id, None);
+                self.tags.insert(
+                    record.id,
+                    TagContext {
+                        name: name.clone(),
+                        description: description.clone(),
+                        born_at: record.timestamp,
+                        actor: record.context.actor.clone(),
+                    },
+                );
+            }
+            Event::TagDescribed {
+                tag,
+                ref description,
+            } => {
+                self.provenance.insert(record.id, None);
+                let held = self.tags.get_mut(&tag).ok_or(Reason::InvalidTagId)?;
+                held.description = description.clone();
+            }
+            Event::TaskTagged { task, tag } => {
+                self.provenance.insert(record.id, Some(task));
+                let known = self.tags.contains_key(&tag);
+                let task_ctx = self.tasks.get_mut(task.0).ok_or(Reason::InvalidTaskId)?;
+                if !known {
+                    return Err(Reason::InvalidTagId);
+                }
+                if !task_ctx.tags.insert(tag) {
+                    return Err(Reason::AlreadyTagged);
+                }
+            }
+            Event::TaskUntagged { task, tag } => {
+                self.provenance.insert(record.id, Some(task));
+                let known = self.tags.contains_key(&tag);
+                let task_ctx = self.tasks.get_mut(task.0).ok_or(Reason::InvalidTaskId)?;
+                if !known {
+                    return Err(Reason::InvalidTagId);
+                }
+                if !task_ctx.tags.remove(&tag) {
+                    return Err(Reason::NotTagged);
+                }
             }
             Event::TaskClaimed { id, incarnation } => {
                 self.provenance.insert(record.id, Some(id));
@@ -934,6 +1033,7 @@ mod test {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("implement foo"),
             },
             1,
@@ -1007,6 +1107,7 @@ mod test {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("adopt foo's accounts"),
             },
             9,
@@ -1145,6 +1246,19 @@ mod test {
             Reject::from(Reason::NotOwnIncarnation),
             Reject::NotOwnIncarnation
         ));
+        assert!(matches!(
+            Reject::from(Reason::DuplicateTag),
+            Reject::DuplicateTag
+        ));
+        assert!(matches!(
+            Reject::from(Reason::InvalidTagId),
+            Reject::InvalidTagId
+        ));
+        assert!(matches!(
+            Reject::from(Reason::AlreadyTagged),
+            Reject::AlreadyTagged
+        ));
+        assert!(matches!(Reject::from(Reason::NotTagged), Reject::NotTagged));
     }
 
     #[test]
@@ -1515,6 +1629,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("carry a merge through the worktree"),
             },
             2,
@@ -1586,6 +1701,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("carry a merge through the worktree"),
             },
             1,
@@ -1613,6 +1729,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("adopt the account"),
             },
             4,
@@ -2037,6 +2154,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("implement foo"),
             },
             3,
@@ -2165,6 +2283,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("implement foo"),
             },
             2,
@@ -2202,6 +2321,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("fix bar"),
             },
             6,
@@ -2240,6 +2360,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
+                tags: Vec::new(),
                 name: prose("carry a merge through the worktree"),
             },
             1,
@@ -2290,6 +2411,7 @@ mod test {
             .execute(
                 human(),
                 Command::CreateTask {
+                    tags: Vec::new(),
                     name: prose("implement foo"),
                 },
                 1,
@@ -2346,6 +2468,7 @@ mod test {
             .execute(
                 human(),
                 Command::CreateTask {
+                    tags: Vec::new(),
                     name: prose("implement foo"),
                 },
                 1,
@@ -2395,6 +2518,7 @@ mod test {
             .execute(
                 human(),
                 Command::CreateTask {
+                    tags: Vec::new(),
                     name: prose("implement foo"),
                 },
                 1,
@@ -2429,6 +2553,7 @@ mod test {
             .execute(
                 human(),
                 Command::CreateTask {
+                    tags: Vec::new(),
                     name: prose("consume foo"),
                 },
                 5,
@@ -2465,6 +2590,7 @@ mod test {
             .execute(
                 human(),
                 Command::CreateTask {
+                    tags: Vec::new(),
                     name: prose("consume again"),
                 },
                 9,
@@ -2484,5 +2610,203 @@ mod test {
             refused,
             Err(Reject::UnrecordedSourceCommit { .. })
         ));
+    }
+
+    fn tag_command(name: &str) -> Command {
+        Command::CreateTag {
+            name: crate::types::tag::TagName::new(name.into()).unwrap(),
+            description: crate::types::tag::TagLine::new(format!("what {name} covers")).unwrap(),
+        }
+    }
+
+    /// Two tasks and the tags auth and ui, born by the human.
+    fn tagged_story() -> (Log, RecordId, RecordId) {
+        let mut log = Log::new();
+        for (n, name) in ["one", "two"].into_iter().enumerate() {
+            log.execute(
+                human(),
+                Command::CreateTask {
+                    tags: Vec::new(),
+                    name: prose(name),
+                },
+                n as u64,
+            )
+            .unwrap();
+        }
+        let auth = log.execute(human(), tag_command("auth"), 3).unwrap()[0].id;
+        let ui = log.execute(human(), tag_command("ui"), 4).unwrap()[0].id;
+        (log, auth, ui)
+    }
+
+    #[test]
+    fn only_the_human_creates_or_describes_a_tag() {
+        let (mut log, auth, _) = tagged_story();
+        assert!(matches!(
+            log.execute(agent(), tag_command("docs"), 5),
+            Err(Reject::HumanOnly)
+        ));
+        let describe = || Command::DescribeTag {
+            tag: auth,
+            description: crate::types::tag::TagLine::new("sign-in".into()).unwrap(),
+        };
+        assert!(matches!(
+            log.execute(agent(), describe(), 5),
+            Err(Reject::HumanOnly)
+        ));
+        log.execute(human(), describe(), 5).unwrap();
+        assert_eq!(log.world().tags[&auth].description.as_str(), "sign-in");
+        assert!(!log.world().tags.contains_key(&RecordId(99)));
+        assert!(matches!(
+            log.execute(
+                human(),
+                Command::DescribeTag {
+                    tag: RecordId(0),
+                    description: crate::types::tag::TagLine::new("x".into()).unwrap(),
+                },
+                6
+            ),
+            Err(Reject::InvalidTagId)
+        ));
+    }
+
+    #[test]
+    fn a_tag_name_held_ignoring_case_is_refused() {
+        let (mut log, _, _) = tagged_story();
+        assert!(matches!(
+            log.execute(human(), tag_command("AUTH"), 5),
+            Err(Reject::DuplicateTag)
+        ));
+        assert_eq!(log.world().tags.len(), 2);
+    }
+
+    #[test]
+    fn tagging_several_at_once_lands_all_or_none() {
+        let (mut log, auth, ui) = tagged_story();
+        log.execute(
+            agent(),
+            Command::TagTask {
+                task: TaskId(0),
+                tags: vec![auth, ui],
+            },
+            5,
+        )
+        .unwrap();
+        let names = |log: &Log, task: usize| log.world().tag_names_of(&log.world().tasks[task]);
+        assert_eq!(names(&log, 0), ["auth", "ui"]);
+
+        // one bad tag in the list refuses the whole command
+        let before = log.records().len();
+        let refused = log.execute(
+            agent(),
+            Command::TagTask {
+                task: TaskId(1),
+                tags: vec![auth, RecordId(0)],
+            },
+            6,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidTagId)));
+        assert_eq!(log.records().len(), before);
+        assert!(names(&log, 1).is_empty(), "the good tag did not land alone");
+
+        // a tag already carried refuses; a tag absent refuses
+        let again = log.execute(
+            agent(),
+            Command::TagTask {
+                task: TaskId(0),
+                tags: vec![auth],
+            },
+            7,
+        );
+        assert!(matches!(again, Err(Reject::AlreadyTagged)));
+        let absent = log.execute(
+            agent(),
+            Command::UntagTask {
+                task: TaskId(1),
+                tags: vec![auth],
+            },
+            8,
+        );
+        assert!(matches!(absent, Err(Reject::NotTagged)));
+        let mixed = log.execute(
+            agent(),
+            Command::UntagTask {
+                task: TaskId(0),
+                tags: vec![auth, RecordId(0)],
+            },
+            9,
+        );
+        assert!(matches!(mixed, Err(Reject::InvalidTagId)));
+        assert_eq!(names(&log, 0), ["auth", "ui"], "all or nothing on remove");
+
+        log.execute(
+            agent(),
+            Command::UntagTask {
+                task: TaskId(0),
+                tags: vec![auth, ui],
+            },
+            10,
+        )
+        .unwrap();
+        assert!(names(&log, 0).is_empty());
+        assert!(matches!(
+            log.execute(
+                agent(),
+                Command::TagTask {
+                    task: TaskId(9),
+                    tags: vec![auth]
+                },
+                11
+            ),
+            Err(Reject::InvalidTaskId)
+        ));
+    }
+
+    #[test]
+    fn a_task_is_born_with_tags_and_any_state_takes_tag_changes() {
+        let (mut log, auth, ui) = tagged_story();
+        let born = |tags: Vec<RecordId>| Command::CreateTask {
+            tags,
+            name: prose("born tagged"),
+        };
+        assert!(matches!(
+            log.execute(agent(), born(vec![RecordId(0)]), 5),
+            Err(Reject::InvalidTagId)
+        ));
+        assert!(matches!(
+            log.execute(agent(), born(vec![auth, auth]), 5),
+            Err(Reject::AlreadyTagged)
+        ));
+        log.execute(agent(), born(vec![ui, auth]), 5).unwrap();
+        assert_eq!(
+            log.world().tag_names_of(&log.world().tasks[2]),
+            ["auth", "ui"],
+            "the present set lists in the tags' birth order"
+        );
+        // a cancelled task is tagged and untagged like any other
+        log.execute(
+            human(),
+            Command::CancelTask {
+                id: TaskId(0),
+                explanation: prose("stopped"),
+            },
+            6,
+        )
+        .unwrap();
+        let before = log.world().tasks[0].task.state.clone();
+        log.execute(
+            agent(),
+            Command::TagTask {
+                task: TaskId(0),
+                tags: vec![auth],
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[0].task.state, before);
+        assert_eq!(
+            log.world().tasks[0].last_record_at,
+            6,
+            "a tag moves no clock"
+        );
     }
 }

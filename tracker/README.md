@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.22.0"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.22.1"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -137,6 +137,8 @@ them.
 - decide is structurally stateless: no world, no existence checks;
   authority always precedes it, and every command is its events with
   no expansion.
+- A tagging or untagging command expands to one event per tag it
+  names, in the order named; every other command is its single event.
 - The command translation and authority tables are pinned as
   inventories in `decide.rs` and `store.rs`; new commands register in
   them.
@@ -146,6 +148,18 @@ them.
   argument: `SACCADE_ACTOR` presence is agent tier, its absence human.
   Judgment acts (cancel, reopen) are human-only and executed with an
   explanation, never proposed.
+- Tags are flat names on tasks, born by their own record
+  (`TagCreated`: a name and one line saying what belongs under it;
+  identity is the birth record, like a workspace). A tag says what a
+  task is about, never how it stands; state, ownership and the board
+  say that. Only the human creates a tag or rewrites its line
+  (`TagDescribed`; the log keeps the earlier lines, the fold the
+  present one), and a name compares ignoring ASCII case. Any tier
+  tags and untags any task in any state (`TaskTagged`, `TaskUntagged`,
+  or `tags` on `TaskCreated`); a tagging command is one event per tag
+  named and lands all or none. A tag affects nothing but what a
+  listing shows: no transition, gate, acceptance rule or clock reads
+  it.
 - No birth event carries its id; references do. Stored references
   identify birth records; displayed numbers count births of each kind.
 
@@ -188,6 +202,11 @@ The HTTP API allows read access to the whole tracker. A read route
 needs no named reader - it is what an experiment at the edge reads
 through. A write door with no caller is a retirement candidate.
 
+- **Tags ride the pages additively** (view major 1 stays): the root
+  carries `tags`, every tag as `{name, description}` in birth order;
+  each task row of the `tasks` page and each board page carries
+  `tags`, the names the task carries now, in the tags' birth order.
+  No page filters by tag.
 - **A page belongs to a location, not an endpoint.** The location
   grammar v1 serves: `` (the root, naming the tracker, the host facts
   a consumer needs to prove hub identity per t-24@r14 and t-24@r16 -

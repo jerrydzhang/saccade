@@ -96,6 +96,11 @@ cd "$SMOKE/repo" || fail "cd repo"
 # the story through real doors: a task, a claimed task, a workspace
 "$BIN" create task "smoke the completions door" >/dev/null || fail "create task"
 "$BIN" claim t-0 >/dev/null || fail "claim"
+# only the human creates a tag: the human's write rides the door directly
+curl -sf -X POST "$URL/api/v1/command" \
+  -H 'content-type: application/json' \
+  -d '{"context":{"actor":"smoker-human","tier":"human"},"command":{"create_tag":{"name":"smoketag","description":"what the smoke is about"}}}' \
+  >/dev/null || fail "tag create"
 "$BIN" workspace new smokecell >/dev/null || fail "workspace new"
 WS=$("$BIN" complete workspaces | head -1 | cut -f1)
 test -n "$WS" || fail "no recorded workspace candidate"
@@ -138,6 +143,11 @@ fish -i -c '
   report board_static "sac board "
   report offer_tasks "sac offer "
   report create_static "sac create "
+  report tag_verbs "sac tag "
+  report tag_add_tasks "sac tag add "
+  report tag_add_names "sac tag add t-0 "
+  report create_tag_flag "sac create task --tag "
+  report list_tag_flag "sac list --tag "
   report skill_static "sac skill "
   report shell_static "sac completions "
   report global_flag "sac --ac"
@@ -193,6 +203,11 @@ section offer_tasks | grep -Fq "t-0${TAB}smoke the completions door" || { sectio
 # static skeleton: create completes; multi-candidate registrations keep
 # every candidate; a static description survives in one piece
 section create_static | grep -qx "task" || { section create_static; fail "create offers no task kind"; }
+section tag_verbs | grep -Fq "describe${TAB}" || { section tag_verbs; fail "tag lost describe"; }
+section tag_add_tasks | grep -Fq "t-0${TAB}smoke the completions door" || { section tag_add_tasks; fail "tag add misses tasks"; }
+section tag_add_names | grep -Fq "smoketag${TAB}what the smoke is about" || { section tag_add_names; fail "tag add misses tags"; }
+section create_tag_flag | grep -Fq "smoketag${TAB}" || { section create_tag_flag; fail "create --tag misses tags"; }
+section list_tag_flag | grep -Fq "smoketag${TAB}" || { section list_tag_flag; fail "list --tag misses tags"; }
 section skill_static | grep -qx "install" || { section skill_static; fail "skill lost install"; }
 section skill_static | grep -qx "check" || { section skill_static; fail "skill lost check"; }
 section shell_static | grep -Fqe "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }

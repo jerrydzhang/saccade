@@ -322,6 +322,12 @@ pub struct HistoryEntry {
     pub grounds: Option<String>,
     pub explanation: Option<String>,
     pub session: Option<String>,
+    /// The tag a tagging or untagging names
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// The tags a task was born carrying
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// The incarnation a record's recorded scope names, as the public
@@ -347,10 +353,23 @@ pub fn board_history(
             continue;
         };
         let named: Option<(TaskId, Option<serde_json::Value>)> = match &event {
-            crate::record::events::Event::TaskCreated { .. } => world
+            crate::record::events::Event::TaskCreated { tags, .. } => world
                 .task_born_at(RecordId(row.seq))
                 .filter(|id| id.0 == task)
-                .map(|id| (id, None)),
+                .map(|id| {
+                    let names: Vec<&str> = tags
+                        .iter()
+                        .filter_map(|tag| world.tags.get(tag))
+                        .map(|tag| tag.name.as_str())
+                        .collect();
+                    (id, (!names.is_empty()).then(|| json!({ "tags": names })))
+                }),
+            crate::record::events::Event::TaskTagged { task: id, tag }
+            | crate::record::events::Event::TaskUntagged { task: id, tag } => (*id == TaskId(task))
+                .then(|| {
+                    let name = world.tags.get(tag).map(|t| t.name.as_str()).unwrap_or("?");
+                    (*id, Some(json!({ "tag": name })))
+                }),
             crate::record::events::Event::TaskClaimed { id, incarnation } => (*id == TaskId(task))
                 .then_some((
                     *id,
@@ -405,6 +424,16 @@ pub fn board_history(
             grounds: extra["grounds"].as_str().map(str::to_string),
             explanation: extra["explanation"].as_str().map(str::to_string),
             session: session_of(world, row),
+            tag: extra["tag"].as_str().map(str::to_string),
+            tags: extra["tags"]
+                .as_array()
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| n.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
     }
     Ok(entries)

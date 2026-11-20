@@ -61,6 +61,9 @@ pub struct TaskContext {
     pub commits: Vec<BoardCommit>,
     /// The attribution that birthed the task, from the birth record
     pub birth_actor: ActorName,
+    /// The tags the task carries now, by birth record; the set's order
+    /// is the tags' birth order
+    pub tags: std::collections::BTreeSet<RecordId>,
 }
 
 /// The owner an ownership entry names - exactly the ratified kinds.
@@ -125,7 +128,10 @@ mod test {
         ];
         let commit = || GitCommit::new("a".repeat(40)).unwrap();
         let events = [
-            Event::TaskCreated { name: filler() },
+            Event::TaskCreated {
+                name: filler(),
+                tags: Vec::new(),
+            },
             Event::TaskClaimed {
                 id: TaskId(0),
                 incarnation: None,
@@ -185,6 +191,7 @@ mod test {
     #[test]
     fn revision_numbers_are_dense_positions_in_the_commit_list() {
         let mut ctx = TaskContext {
+            tags: Default::default(),
             task: Task {
                 state: TaskState::Open,
                 name: filler(),

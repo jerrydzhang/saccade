@@ -7,6 +7,7 @@ pub mod message;
 pub mod name;
 pub mod serve;
 pub mod skill;
+pub mod tag;
 pub mod task;
 pub mod workspace;
 
@@ -25,6 +26,7 @@ use self::message::{messages_door, send_door};
 use self::name::name_door;
 use self::serve::serve_door;
 use self::skill::skill_door;
+use self::tag::{resolve_tags, tag_list, tag_name_of};
 use self::task::{born_of, parse_task_id, read_only, render_records};
 use self::workspace::workspace_door;
 
@@ -78,6 +80,9 @@ enum Cmd {
         #[arg(value_enum)]
         kind: ObjKind,
         name: Option<String>,
+        /// A tag the task is born carrying; repeatable
+        #[arg(long = "tag")]
+        tags: Vec<String>,
     },
     /// Take whole-task responsibility; a transfer, never a state change
     Claim { id: String },
@@ -151,6 +156,19 @@ enum Cmd {
     List {
         #[arg(value_enum, default_value_t = ObjKind::Task)]
         kind: ObjKind,
+        /// Only tasks carrying this tag; repeatable, a task must carry
+        /// every one named
+        #[arg(long = "tag", conflicts_with = "untagged")]
+        tags: Vec<String>,
+        /// Only tasks carrying no tag
+        #[arg(long)]
+        untagged: bool,
+    },
+    /// Tags: flat names on tasks. A tag says what a task is about,
+    /// never how it stands; only the human creates one
+    Tag {
+        #[command(subcommand)]
+        verb: TagVerb,
     },
     /// Print raw event records
     Log,
@@ -305,6 +323,31 @@ enum Cmd {
     },
 }
 
+/// The tag verbs.
+#[derive(Clone, Subcommand)]
+enum TagVerb {
+    /// Human-only: create a tag with the line saying what belongs
+    /// under it; names compare ignoring case
+    Create { name: String, description: String },
+    /// Human-only: rewrite the line a tag carries; the log keeps the
+    /// earlier lines
+    Describe { name: String, description: String },
+    /// The tags, in birth order
+    List,
+    /// Tag a task with existing tags, all or none
+    Add {
+        task: String,
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+    /// Remove tags a task carries, all or none
+    Remove {
+        task: String,
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+}
+
 /// The task-free controller's verbs.
 #[derive(Clone, Subcommand)]
 enum WorkspaceVerb {
@@ -382,6 +425,7 @@ enum CompleteKind {
     Incarnations,
     Workspaces,
     WorkspacesClean,
+    Tags,
 }
 
 impl From<CompleteKind> for Kind {
@@ -391,6 +435,7 @@ impl From<CompleteKind> for Kind {
             CompleteKind::Incarnations => Kind::Incarnations,
             CompleteKind::Workspaces => Kind::Workspaces,
             CompleteKind::WorkspacesClean => Kind::WorkspacesClean,
+            CompleteKind::Tags => Kind::Tags,
         }
     }
 }
@@ -499,6 +544,16 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Messages { .. } => "messages".into(),
         Cmd::Name { .. } => "name".into(),
         Cmd::List { .. } => "list".into(),
+        Cmd::Tag { verb } => format!(
+            "tag.{}",
+            match verb {
+                TagVerb::Create { .. } => "create",
+                TagVerb::Describe { .. } => "describe",
+                TagVerb::List => "list",
+                TagVerb::Add { .. } => "add",
+                TagVerb::Remove { .. } => "remove",
+            }
+        ),
         Cmd::Log => "log".into(),
         Cmd::Show { .. } => "show".into(),
         Cmd::Search { .. } => "search".into(),
@@ -540,11 +595,23 @@ fn flag_names(command: &Cmd) -> Vec<String> {
     let mut flags = Vec::new();
     let push = |flags: &mut Vec<String>, name: &str| flags.push(name.to_string());
     match command {
-        Cmd::Create { name, .. } => {
+        Cmd::Create { name, tags, .. } => {
             if name.is_none() {
                 push(&mut flags, "$EDITOR");
             }
+            if !tags.is_empty() {
+                push(&mut flags, "--tag");
+            }
         }
+        Cmd::List { tags, untagged, .. } => {
+            if !tags.is_empty() {
+                push(&mut flags, "--tag");
+            }
+            if *untagged {
+                push(&mut flags, "--untagged");
+            }
+        }
+        Cmd::Tag { .. } => {}
         Cmd::Cancel { explanation, .. }
         | Cmd::Reopen { explanation, .. }
         | Cmd::Reject {
@@ -596,7 +663,6 @@ fn flag_names(command: &Cmd) -> Vec<String> {
         Cmd::Serve { .. }
         | Cmd::Identity
         | Cmd::Log
-        | Cmd::List { .. }
         | Cmd::Claim { .. }
         | Cmd::Offer { .. }
         | Cmd::Accept { .. }
@@ -825,8 +891,34 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Create {
             kind: ObjKind::Task,
             name,
-        } => Command::CreateTask {
-            name: Prose::new(editor_prose(name.clone(), "task name")?)?,
+            tags,
+        } => {
+            let name = Prose::new(editor_prose(name.clone(), "task name")?)?;
+            let tags = if tags.is_empty() {
+                Vec::new()
+            } else {
+                resolve_tags(&destination, tags)?
+            };
+            Command::CreateTask { name, tags }
+        }
+        Cmd::Tag { verb } => match verb {
+            TagVerb::List => return tag_list(cli, &destination),
+            TagVerb::Create { name, description } => Command::CreateTag {
+                name: tag_name_of(name)?,
+                description: saccade::record::types::tag::TagLine::new(description.clone())?,
+            },
+            TagVerb::Describe { name, description } => Command::DescribeTag {
+                tag: resolve_tags(&destination, std::slice::from_ref(name))?[0],
+                description: saccade::record::types::tag::TagLine::new(description.clone())?,
+            },
+            TagVerb::Add { task, names } => Command::TagTask {
+                task: parse_task_id(task)?,
+                tags: resolve_tags(&destination, names)?,
+            },
+            TagVerb::Remove { task, names } => Command::UntagTask {
+                task: parse_task_id(task)?,
+                tags: resolve_tags(&destination, names)?,
+            },
         },
         Cmd::Claim { id } => {
             let id = parse_task_id(id)?;

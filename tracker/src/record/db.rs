@@ -557,6 +557,7 @@ mod test {
 
     fn create(name: &str) -> Command {
         Command::CreateTask {
+            tags: Vec::new(),
             name: Prose::new(name.into()).unwrap(),
         }
     }
@@ -617,6 +618,7 @@ mod test {
                 RecordDraft {
                     context: agent(),
                     event: Event::TaskCreated {
+                        tags: Vec::new(),
                         name: Prose::new("batchwork".into()).unwrap(),
                     },
                 },
@@ -1158,6 +1160,139 @@ mod test {
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
+    /// A task born before tags existed has no `tags` in its payload: it
+    /// folds untagged, and opening and reading the file writes nothing.
+    #[test]
+    fn a_pre_tag_task_row_folds_untagged_and_opening_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("sac-db-pretag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saccade.db");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+                 VALUES (0, 1, 1, 'jerry', 'human', 'task_created', '{\"name\":\"born before tags\"}', NULL)",
+                [],
+            )
+            .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+
+        let conn = open(&path).unwrap();
+        let loadout = load(&conn).unwrap();
+        let LoadState::Full(world) = loadout.state else {
+            panic!("the old row folds");
+        };
+        assert_eq!(loadout.rows.len(), 1);
+        assert!(world.tasks[0].tags.is_empty());
+        assert!(world.tags.is_empty());
+        let ro = open_read(&path).unwrap();
+        assert_eq!(load(&ro).unwrap().rows.len(), 1);
+        drop((conn, ro));
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "opening rewrote the file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tag_family_round_trips_the_world() {
+        use crate::record::types::tag::{TagLine, TagName};
+        let mut conn = memory_db();
+        record(&mut conn, &human(), create("tag me"), 1).unwrap();
+        let name = |n: &str| TagName::new(n.into()).unwrap();
+        let line = |l: &str| TagLine::new(l.into()).unwrap();
+        let (born, _) = record(
+            &mut conn,
+            &human(),
+            Command::CreateTag {
+                name: name("auth"),
+                description: line("sign-in"),
+            },
+            2,
+        )
+        .unwrap();
+        let auth = RecordId(born[0].seq);
+        record(
+            &mut conn,
+            &human(),
+            Command::DescribeTag {
+                tag: auth,
+                description: line("sign-in and sessions"),
+            },
+            3,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::TagTask {
+                task: TaskId(0),
+                tags: vec![auth],
+            },
+            4,
+        )
+        .unwrap();
+        let (_, live) = record(
+            &mut conn,
+            &agent(),
+            Command::CreateTask {
+                name: prose("born tagged"),
+                tags: vec![auth],
+            },
+            5,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::UntagTask {
+                task: TaskId(0),
+                tags: vec![auth],
+            },
+            6,
+        )
+        .unwrap();
+        let loadout = load(&conn).unwrap();
+        assert_eq!(
+            loadout
+                .rows
+                .iter()
+                .map(|r| r.kind.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "task_created",
+                "tag_created",
+                "tag_described",
+                "task_tagged",
+                "task_created",
+                "task_untagged"
+            ]
+        );
+        let LoadState::Full(world) = loadout.state else {
+            panic!("the tag family folds");
+        };
+        assert_eq!(
+            world.tags[&auth].description.as_str(),
+            "sign-in and sessions"
+        );
+        assert!(world.tasks[0].tags.is_empty());
+        assert_eq!(world.tag_names_of(&world.tasks[1]), ["auth"]);
+        assert_eq!(world.tasks[1].tags, live.tasks[1].tags);
+    }
+
+    /// A tagless task writes the payload it always wrote.
+    #[test]
+    fn a_tagless_task_keeps_its_old_payload_shape() {
+        let mut conn = memory_db();
+        let (stored, _) = record(&mut conn, &agent(), create("plain"), 1).unwrap();
+        assert_eq!(stored[0].payload, r#"{"name":"plain"}"#);
+    }
+
     #[test]
     fn batch_failure_appends_none() {
         let mut conn = memory_db();
@@ -1169,6 +1304,7 @@ mod test {
                 RecordDraft {
                     context: agent(),
                     event: Event::TaskCreated {
+                        tags: Vec::new(),
                         name: Prose::new("doomed sibling".into()).unwrap(),
                     },
                 },

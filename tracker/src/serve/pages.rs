@@ -106,6 +106,11 @@ struct PageDoc {
     /// each side names. Additive inside view major 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<crate::boards::changes::Change>>,
+    /// Additive inside view major 1: the root names every tag as
+    /// {name, description} in birth order; a task page names the
+    /// tags the task carries, as names in that order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<serde_json::Value>>,
 }
 
 /// One view-grammar component. v1 serves six kinds (t-24@r2): text,
@@ -177,6 +182,9 @@ struct TableRow {
     location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     at: Option<u64>,
+    /// A task row names the tags the task carries, in birth order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<String>>,
 }
 
 fn table_row(cells: Vec<String>, location: Option<String>, at: Option<u64>) -> TableRow {
@@ -184,6 +192,7 @@ fn table_row(cells: Vec<String>, location: Option<String>, at: Option<u64>) -> T
         cells,
         location,
         at,
+        tags: None,
     }
 }
 
@@ -227,6 +236,7 @@ fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> 
         ]),
         entries: None,
         changes: None,
+        tags: None,
     }
 }
 
@@ -527,7 +537,7 @@ impl From<BoardsFail> for BuildFail {
 /// bytes. The watch rides both, so a waiting client parks on the page's
 /// subject whatever the answer says today.
 enum Built {
-    Doc(PageDoc, StatusCode, Watch),
+    Doc(Box<PageDoc>, StatusCode, Watch),
     File(Response, Watch),
 }
 
@@ -596,28 +606,28 @@ fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, B
     match parsed {
         PageLocation::Root => {
             let doc = root_page(app, snapshot);
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::Agents => {
             let doc = agents_page(snapshot);
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::Tasks => {
             let now = now_secs();
             let doc = pipeline_page(snapshot, now);
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::Board { task, revision } => {
             let doc = board_page(app, snapshot, task, revision)?;
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::History { task, revision } => {
             let doc = history_page(app, snapshot, task, revision)?;
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::Diff { task, from, to } => {
             let doc = diff_page(app, snapshot, task, from, to)?;
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::File {
             task,
@@ -636,7 +646,7 @@ fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, B
             path,
         } => {
             let doc = component_page(app, snapshot, task, revision, &path)?;
-            Ok(Built::Doc(doc, StatusCode::OK, watch))
+            Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
     }
 }
@@ -665,6 +675,19 @@ fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
         content: Some(families_parts()),
         entries: None,
         changes: None,
+        tags: Some(
+            snapshot
+                .world
+                .tags
+                .values()
+                .map(|tag| {
+                    serde_json::json!({
+                        "name": tag.name.as_str(),
+                        "description": tag.description.as_str(),
+                    })
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -810,6 +833,7 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
         content: Some(content),
         entries: None,
         changes: None,
+        tags: None,
     }
 }
 
@@ -898,7 +922,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
             format!("r{}", ctx.commits.len())
         };
         let birth_at = record_time(snapshot, ctx.birth);
-        let row = table_row(
+        let mut row = table_row(
             vec![
                 task.clone(),
                 ctx.task.name.as_str().to_string(),
@@ -909,6 +933,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
             Some(task),
             birth_at,
         );
+        row.tags = Some(world.tag_names_of(ctx));
         match &ctx.task.state {
             TaskState::Open => {
                 if views::current_owner(ctx).is_some() {
@@ -964,6 +989,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
         content: Some(content),
         entries: None,
         changes: None,
+        tags: None,
     }
 }
 
@@ -1134,6 +1160,14 @@ fn board_page(
         content: Some(content),
         entries: None,
         changes: None,
+        tags: Some(
+            snapshot
+                .world
+                .tag_names_of(ctx)
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
     })
 }
 
@@ -1277,6 +1311,7 @@ fn history_page(
         content: None,
         entries: Some(entries),
         changes: None,
+        tags: None,
     })
 }
 
@@ -1354,6 +1389,7 @@ fn diff_page(
         }]),
         entries: None,
         changes: Some(changes),
+        tags: None,
     })
 }
 
@@ -1402,6 +1438,7 @@ fn component_page(
         content: Some(vec![part_of(component, &location, task, revision)]),
         entries: None,
         changes: None,
+        tags: None,
     })
 }
 
@@ -1801,6 +1838,7 @@ mod test {
         let actor = crate::record::types::actor::ActorName::new("human person".into()).unwrap();
         let commit = |hash: String| crate::record::types::pointers::GitCommit::new(hash).unwrap();
         let task = |state: TaskState, last_at: u64| crate::objects::task::TaskContext {
+            tags: Default::default(),
             task: crate::objects::task::Task {
                 state,
                 name: crate::record::types::prose::Prose::new("a task".into()).unwrap(),

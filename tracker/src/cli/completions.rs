@@ -24,6 +24,7 @@ pub enum Kind {
     Incarnations,
     Workspaces,
     WorkspacesClean,
+    Tags,
 }
 
 impl Kind {
@@ -37,6 +38,7 @@ impl Kind {
             Kind::Incarnations => "incarnations",
             Kind::Workspaces => "workspaces",
             Kind::WorkspacesClean => "workspaces-clean",
+            Kind::Tags => "tags",
         }
     }
 
@@ -49,9 +51,23 @@ impl Kind {
             Kind::Incarnations => incarnation_lines(world, records),
             Kind::Workspaces => workspace_lines(world, None),
             Kind::WorkspacesClean => workspace_lines(world, Some(WorkspaceStage::Available)),
+            Kind::Tags => tag_lines(world),
         };
         lines.join("\n")
     }
+}
+
+pub(super) fn tag_lines(world: &World) -> Vec<String> {
+    world
+        .tags
+        .values()
+        .map(|tag| {
+            one(
+                tag.name.as_str().to_string(),
+                tag.description.as_str().to_string(),
+            )
+        })
+        .collect()
 }
 
 pub(super) fn task_lines(world: &World) -> Vec<String> {
@@ -213,9 +229,11 @@ mod test {
     fn world_with_records() -> (World, Vec<StoredRecord>) {
         let events = [
             Event::TaskCreated {
+                tags: Vec::new(),
                 name: Prose::new("implement floop".into()).unwrap(),
             },
             Event::TaskCreated {
+                tags: Vec::new(),
                 name: Prose::new("migrate gloom".into()).unwrap(),
             },
             Event::WorkspaceCreated {
@@ -261,6 +279,7 @@ mod test {
     #[test]
     fn a_whitespace_run_in_the_name_collapses_and_the_line_stays_two_fields() {
         let torn = Event::TaskCreated {
+            tags: Vec::new(),
             name: Prose::new("name with\ttabs and\nnewlines".into()).unwrap(),
         };
         let mut world = World::new();
@@ -321,6 +340,7 @@ mod test {
         assert_eq!(Kind::Incarnations.name(), "incarnations");
         assert_eq!(Kind::Workspaces.name(), "workspaces");
         assert_eq!(Kind::WorkspacesClean.name(), "workspaces-clean");
+        assert_eq!(Kind::Tags.name(), "tags");
     }
 
     /// The emitted script is authored text: ASCII only, it invokes the
@@ -342,6 +362,7 @@ mod test {
             Kind::Incarnations,
             Kind::Workspaces,
             Kind::WorkspacesClean,
+            Kind::Tags,
         ] {
             assert!(
                 FISH.contains(&format!("__saccade_candidates {}", kind.name())),

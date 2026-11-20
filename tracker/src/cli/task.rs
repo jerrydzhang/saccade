@@ -10,8 +10,8 @@ pub(super) fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail
             }
             Ok(render_log(cli, &loadout.rows, cursor))
         }
-        Cmd::List { .. } => match &loadout.state {
-            LoadState::Full(world) => Ok(render_tasks(cli, world, cursor)),
+        Cmd::List { tags, untagged, .. } => match &loadout.state {
+            LoadState::Full(world) => render_tasks(cli, world, cursor, tags, *untagged),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
         Cmd::Show { ids, stdin } => match &loadout.state {
@@ -120,8 +120,23 @@ pub(super) fn record_line(r: &StoredRecord) -> String {
     )
 }
 
-pub(super) fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
+pub(super) fn render_tasks(
+    cli: &Cli,
+    world: &World,
+    cursor: Option<usize>,
+    tags: &[String],
+    untagged: bool,
+) -> Result<String, Fail> {
+    let wanted = super::tag::names_to_tags(world, tags)?;
     let views: Vec<TaskView> = (0..world.tasks.len())
+        .filter(|i| {
+            let carried = &world.tasks[*i].tags;
+            if untagged {
+                carried.is_empty()
+            } else {
+                wanted.iter().all(|tag| carried.contains(tag))
+            }
+        })
         .map(|i| task_view(world, TaskId(i)))
         .collect::<Option<_>>()
         .expect("indices come from the vec itself");
@@ -140,30 +155,41 @@ pub(super) fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> S
                     "state": v.state,
                     "name": v.name,
                     "owner": v.owner,
+                    "tags": v.tags,
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "tasks": rows,
             "cursor": cursor,
         }))
-        .expect("views are plain data");
+        .expect("views are plain data"));
     }
 
-    views
+    Ok(views
         .iter()
         .map(|v| {
             format!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 v.id,
                 v.state,
                 v.name,
                 v.owner.clone().unwrap_or_else(|| "-".into()),
+                tags_cell(&v.tags),
             )
         })
         .chain(std::iter::once(cursor_line(cursor)))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n"))
+}
+
+/// The tags column: names comma-separated in birth order, a dash for none.
+pub(super) fn tags_cell(tags: &[String]) -> String {
+    if tags.is_empty() {
+        "-".into()
+    } else {
+        tags.join(",")
+    }
 }
 
 /// The show door as text: everything about the one task.
@@ -179,6 +205,9 @@ pub(super) fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail
     )];
     if let Some(owner) = &view.owner {
         out.push(format!("owner  {owner}"));
+    }
+    if let Some(ctx) = world.tasks.get(task_id.0) {
+        out.extend(super::tag::task_tag_block(world, ctx));
     }
     if let Some(explanation) = &view.explanation {
         out.push("explanation".to_string());
@@ -299,6 +328,14 @@ pub(super) fn show_value(
                 "state": view.state,
                 "name": view.name,
                 "owner": view.owner,
+                "tags": view.tags,
+                "tag_lines": world
+                    .tasks
+                    .get(id.0)
+                    .map(|ctx| world.tags_of(ctx).iter().map(|tag| serde_json::json!({
+                        "name": tag.name.as_str(),
+                        "description": tag.description.as_str(),
+                    })).collect::<Vec<_>>()),
                 "explanation": view.explanation,
             }))
         }
