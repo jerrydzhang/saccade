@@ -68,7 +68,8 @@ carries the tracker's law.
 ## Building and testing
 
 - Run cargo and nix through `direnv exec saccade bash -c '...'` or
-  `direnv exec app bash -c '...'` (the root has no .envrc).
+  `direnv exec app bash -c '...'`; the root's .envrc enters saccade's
+  shell.
 - `just fmt`, `just lint`, `just test`; the clippy gate, from
   `saccade/`, is
   `cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings`.
