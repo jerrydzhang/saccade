@@ -45,7 +45,14 @@ export interface TargetPresentationPorts {
  * that declares no `o` act acts nothing - never a hidden default. */
 const MODIFIED_CLICK_KEY = "o";
 
-export function createTargetPresentations(ports: TargetPresentationPorts): TargetPresentations {
+/** The presentations the frame builds: the contract's face, plus the
+ * holder's own dismissal - an open act menu closes without acting and
+ * select mode leaves, each releasing its capture. */
+export interface FrameTargetPresentations extends TargetPresentations {
+  dismiss(): void;
+}
+
+export function createTargetPresentations(ports: TargetPresentationPorts): FrameTargetPresentations {
   const observers = new Set<() => void>();
   function notify(): void {
     for (const observer of [...observers]) observer();
@@ -157,6 +164,11 @@ export function createTargetPresentations(ports: TargetPresentationPorts): Targe
 
     selectView(): SelectSessionView | null {
       return select.view();
+    },
+
+    dismiss(): void {
+      if (menu.session.isOpen()) menu.session.key("Escape");
+      select.exit();
     },
 
     menuView,

@@ -292,7 +292,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     railOwnHost = createHostMatcher(context, { expirySuspended: () => whichKey !== null });
     railOwnHost.subscribePending(() => notifyLivePending());
   }
-  const railOwnPresentations: TargetPresentations = createTargetPresentations({
+  const railOwnPresentations = createTargetPresentations({
     targets: () => (railVisible && !railCramped ? frameRail.targets() : []),
     bounds: (id) => railBounds(id),
     capture: (context) => {
@@ -336,7 +336,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // a shown buffer's lease lives on the frame's published props.
   let railLease: TargetPresentations | null = null;
   let railLeaseOff: (() => void) | null = null;
+  let railShowedBuffer = false;
   function watchRailLease(): void {
+    // a window that begins showing a buffer leaves the frame's own
+    // select and menu behind: they close and release their capture,
+    // so the next bufferless window starts at the reading context
+    const shows = showsBuffer();
+    if (shows && !railShowedBuffer) railOwnPresentations.dismiss();
+    railShowedBuffer = shows;
     const lease = railLeaseOf();
     if (lease === railLease) return;
     railLeaseOff?.();
