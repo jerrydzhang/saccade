@@ -53,7 +53,16 @@ shown buffer, and its project views come from what the instruments
 claim (`port/src/lib/instruments/` - the task list claims
 `name/tasks`); the frame never names an instrument (the suite holds
 the boundary: no frame file imports an instrument, the assembly names
-none). A window with no location is the empty window: the frame's own
+none). A task list may be narrowed by tag: `name/tasks?tag=auth,ui`
+(every tag named) or `name/tasks?untagged`, an ordinary location in
+the trail, the chip and the picker. The frame holds the text after the
+question mark as an opaque string; the task list's one spelling
+function (`port/src/lib/tasks/narrowing.ts`) validates it and gives
+the canonical form (lowercase, sorted, no repeats), so differing
+spellings are one location. The list is held to what it asked: a
+tracker that does not echo the narrowing (before sac 0.22.2) is
+refused on the list's problem line, never shown whole. The picker
+offers each of the repository's tags. A window with no location is the empty window: the frame's own
 surface, blank - and the window at launch is one.
 
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the

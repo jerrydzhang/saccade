@@ -144,6 +144,9 @@ function tieBreak(a: PickEntry, b: PickEntry, context: PickContext): number {
 }
 
 function idOfSpec(spec: string): string {
+  // a narrowed task list is its own entry: its tail names it
+  const narrowed = /(^|\/)(tasks\?[^/]*)$/.exec(spec);
+  if (narrowed !== null) return narrowed[2]!;
   // the trailing t-N of a tracker spec (the entry's id for boards)
   const match = /(^|\/)(t-\d+)(@r\d+)?(:[^/]*)?$/.exec(spec);
   return match?.[2] ?? spec;

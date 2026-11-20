@@ -90,7 +90,7 @@ the frame's (App.svelte), not this instrument's. -->
   >
   <div class="port-tasks-list" role="document">
     {#if content.problem !== null}
-      <div class="port-tasks-none" data-port-control="tasks-problem">{content.project}: {content.problem}</div>
+      <div class="port-tasks-none" data-port-control="tasks-problem" style="white-space: pre-line">{content.project}: {content.problem}</div>
     {/if}
     {#if page !== null && content.status === "loaded"}
       <TasksPipeline {page} words={agentsWords} {now} {hovered} />

@@ -11,6 +11,14 @@ import type {
 } from "../../components/Buffer.ts";
 import type { AnchorData } from "../contracts/places.ts";
 
+/** What an instrument says of the narrowing a location of its page
+ * carries (the opaque string after the question mark): its canonical
+ * spelling, or why it is refused. The frame holds the string and asks;
+ * it never reads it. */
+export type NarrowingVerdict =
+  | Readonly<{ ok: true; canonical: string }>
+  | Readonly<{ ok: false; refusal: string }>;
+
 export type InstrumentProps<T extends object, UI extends object> = Readonly<{
   content: Readonly<T>;
   controller: UI;
@@ -32,6 +40,9 @@ export type InstrumentDefinition<
    * project's name (the task list claims `name/tasks`), or null when
    * it offers none. */
   projectView(project: string): string | null;
+  /** Validate and canonicalize the narrowing a location this
+   * instrument claims carries; absent, the instrument takes none. */
+  canonicalNarrowing?(opaque: string): NarrowingVerdict;
   /** The targets this instrument publishes beneath a project's rail
    * entry (its `inside` names the project's rail id), or at the rail's
    * foot when the project is null. The instrument's own data, read and

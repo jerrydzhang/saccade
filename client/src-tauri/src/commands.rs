@@ -153,12 +153,18 @@ pub struct EditedText {
 pub struct BridgeError {
     pub code: String,
     pub message: String,
+    /// The tracker's own refusal document, verbatim, when a request
+    /// failed with an HTTP error status and the body is one; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 fn deny(reason: &str) -> BridgeError {
     BridgeError {
         code: "asset-denied".into(),
         message: reason.into(),
+        body: None,
     }
 }
 
@@ -166,6 +172,7 @@ fn missing(path: &str) -> BridgeError {
     BridgeError {
         code: "asset-missing".into(),
         message: format!("not found or unreadable: {path}"),
+        body: None,
     }
 }
 
@@ -173,6 +180,7 @@ fn core_failure(fail: CoreFail) -> BridgeError {
     BridgeError {
         code: fail.code().into(),
         message: fail.to_string(),
+        body: None,
     }
 }
 
@@ -312,6 +320,7 @@ fn read_text_resolved(base: &str, relative: Option<&str>) -> Result<DeclaredText
         .map_err(|_| BridgeError {
             code: "asset-denied".into(),
             message: "declaration bytes are not UTF-8 text".into(),
+            body: None,
         })
 }
 
@@ -489,7 +498,8 @@ fn local_request_argv(port: u16, route: &str) -> Result<Vec<String>, BridgeError
     }
     Ok(vec![
         "curl".to_string(),
-        "-fsS".to_string(),
+        "-sS".to_string(),
+                "--fail-with-body".to_string(),
         "--max-time".to_string(),
         LOCAL_REQUEST_BOUND_SECONDS.to_string(),
         format!("http://127.0.0.1:{port}{route}"),
@@ -525,6 +535,7 @@ fn local_request_now(on: String, port: u16, route: String) -> Result<Vec<u8>, Br
                     "machine '{}' cannot carry the request to 127.0.0.1:{port}{route}: {detail}",
                     core_machine_label(&on)
                 ),
+                body: None,
             });
         }
         Err(fail) => {
@@ -553,6 +564,7 @@ fn local_request_now(on: String, port: u16, route: String) -> Result<Vec<u8>, Br
                 "the request to 127.0.0.1:{port}{route} on {} outlived its bound",
                 core_machine_label(&on)
             ),
+            body: None,
         });
     }
     if !ok {
@@ -568,9 +580,22 @@ fn local_request_now(on: String, port: u16, route: String) -> Result<Vec<u8>, Br
                     format!(": {detail}")
                 }
             ),
+            body: refusal_body(outcome.code, &outcome.stdout),
         });
     }
     Ok(outcome.stdout)
+}
+
+/// The body of a failed request when it is the tracker's refusal: curl
+/// exit 22 (an HTTP status of 400 or more) with a JSON document that
+/// carries a `code`. Anything else carries no body.
+fn refusal_body(exit: Option<i32>, stdout: &[u8]) -> Option<String> {
+    if exit != Some(22) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    value.get("code")?.as_str()?;
+    String::from_utf8(stdout.to_vec()).ok()
 }
 
 /// A static identity statement for the machine-readable surface: what this
@@ -586,7 +611,7 @@ pub fn viewer_identity() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{core_read_of, guard_relative, local_request_argv, CoreRead, DeckFeedMessage};
+    use super::{core_read_of, guard_relative, local_request_argv, refusal_body, CoreRead, DeckFeedMessage};
 
     #[test]
     fn the_local_request_argv_binds_loopback_itself_and_is_bounded() {
@@ -595,13 +620,28 @@ mod tests {
             argv,
             vec![
                 "curl".to_string(),
-                "-fsS".to_string(),
+                "-sS".to_string(),
+                "--fail-with-body".to_string(),
                 "--max-time".to_string(),
                 "20".to_string(),
                 "http://127.0.0.1:8811/view/v1/t-1".to_string(),
             ],
             "the host is not a parameter: the command binds 127.0.0.1 itself, bounded"
         );
+    }
+
+    #[test]
+    fn a_failed_status_carries_the_trackers_refusal_document_and_nothing_else() {
+        let refusal = br#"{"view":{"major":1},"kind":"refusal","code":"unknown_tag","content":[]}"#;
+        assert_eq!(
+            refusal_body(Some(22), refusal).as_deref(),
+            Some(std::str::from_utf8(refusal).unwrap()),
+            "a 22 with a refusal document carries it verbatim"
+        );
+        assert_eq!(refusal_body(Some(22), b"<html>bad gateway</html>"), None, "a non-JSON body maps as before");
+        assert_eq!(refusal_body(Some(22), br#"{"no":"code"}"#), None, "JSON with no code is no refusal");
+        assert_eq!(refusal_body(Some(7), refusal), None, "only an HTTP status failure carries a body");
+        assert_eq!(refusal_body(None, refusal), None);
     }
 
     #[test]

@@ -12,10 +12,10 @@
 
 import { SUPPORTED_GRAMMAR_VERSIONS } from "./board/decode.ts";
 import type { BoardSource, LoadedAsset, LoadedText, Location } from "./sources.ts";
-import { SourceUnavailableError } from "./board/errors.ts";
+import { RequestRefused, SourceUnavailableError } from "./board/errors.ts";
 import { instrumentPath, parseTaskSpec, viewRoute } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
-import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
+import { fetchFileBytes, fetchPage, pageFact, refusalOfBody, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
 import { theAsks, theProjects } from "./asks.ts";
 import type { Project } from "./projects.ts";
 
@@ -87,7 +87,20 @@ export class TrackerSource implements BoardSource {
       );
     }
     const machine = project.machine;
-    return async (route) => new Response(await theAsks().requestLocal(machine, port, route));
+    return async (route) => {
+      try {
+        return new Response(await theAsks().requestLocal(machine, port, route));
+      } catch (error) {
+        // only the tasks page's narrowing asks for the tracker's own
+        // words on a refusal; every other failed status reads as it
+        // always has
+        if (error instanceof RequestRefused && route.startsWith("/view/v1/tasks?")) {
+          const refusal = refusalOfBody(error.body, error.message);
+          if (refusal !== null) throw refusal;
+        }
+        throw error;
+      }
+    };
   }
 
   /** The version contract, checked before any board read: the server
@@ -244,9 +257,10 @@ export class TrackerSource implements BoardSource {
    * the glance (agents), fetched fresh every time - they are views of
    * the record's now, never cached (a bare location re-resolves on
    * every open, and these are the barest of them all). */
-  async instrumentPage(path: "tasks" | "agents"): Promise<ViewPage> {
+  async instrumentPage(path: "tasks" | "agents", query?: string): Promise<ViewPage> {
     await this.checkContract();
-    const page = await fetchPage(await this.wire(), viewRoute(path));
+    const route = query === undefined || query === "" ? path : `${path}?${query}`;
+    const page = await fetchPage(await this.wire(), viewRoute(route));
     if (page.kind !== "document" || page.location !== path) {
       throw new SourceUnavailableError(
         "core-protocol",
@@ -254,6 +268,14 @@ export class TrackerSource implements BoardSource {
       );
     }
     return page;
+  }
+
+  /** The repository's tags with their lines, read fresh off the root
+   * page; none from a tracker before tags. */
+  async tags(): Promise<readonly { name: string; description: string }[]> {
+    await this.checkContract();
+    const root = await fetchPage(await this.wire(), viewRoute(""));
+    return root.tags ?? [];
   }
 
   /** The agents page, for the tasks instrument's live join: the

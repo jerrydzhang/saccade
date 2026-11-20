@@ -250,6 +250,31 @@ impl World {
         crate::objects::tag::tag_named(&self.tags, name)
     }
 
+    /// The tasks a tag narrowing keeps, as indices in birth order: with
+    /// `untagged`, those carrying no tag; otherwise those carrying every
+    /// named tag (all of them when none is named). A name no tag bears
+    /// is the refusal text naming the tags that exist, never an empty
+    /// answer. The CLI listing and the tasks page both narrow here.
+    pub fn narrowed_tasks(&self, names: &[String], untagged: bool) -> Result<Vec<usize>, String> {
+        let wanted: Vec<RecordId> = names
+            .iter()
+            .map(|name| {
+                self.tag_named(name)
+                    .ok_or_else(|| crate::refusals::unknown_tag(self, name))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok((0..self.tasks.len())
+            .filter(|i| {
+                let carried = &self.tasks[*i].tags;
+                if untagged {
+                    carried.is_empty()
+                } else {
+                    wanted.iter().all(|tag| carried.contains(tag))
+                }
+            })
+            .collect())
+    }
+
     /// The tags a task carries with their present lines, in birth order.
     pub fn tags_of(&self, ctx: &TaskContext) -> Vec<&TagContext> {
         ctx.tags

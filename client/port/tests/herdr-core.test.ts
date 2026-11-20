@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { test } from "vitest";
 
 import { coreAsks, directAsks } from "../src/lib/herdr-core.ts";
-import { SourceUnavailableError } from "../src/lib/board/errors.ts";
+import { RequestRefused, SourceUnavailableError } from "../src/lib/board/errors.ts";
 
 test("a read lands on the bridge's read with the machine riding", async () => {
   const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
@@ -144,4 +144,17 @@ test("the direct implementation performs the asks itself", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a failed status that carried the tracker's refusal keeps the document beside the failure", async () => {
+  const asks = coreAsks(async () => {
+    throw { code: "machine-unavailable", message: "failed: curl: (22)", body: '{"kind":"refusal","code":"unknown_tag"}' };
+  });
+  await assert.rejects(asks.requestLocal("rohan", 8811, "/view/v1/tasks?tag=x"), (error: unknown) => {
+    assert.ok(error instanceof RequestRefused);
+    assert.equal(error.code, "machine-unavailable");
+    assert.equal(error.message, "failed: curl: (22)");
+    assert.equal(error.body, '{"kind":"refusal","code":"unknown_tag"}');
+    return true;
+  });
 });

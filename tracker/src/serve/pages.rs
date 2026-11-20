@@ -111,6 +111,13 @@ struct PageDoc {
     /// tags the task carries, as names in that order.
     #[serde(skip_serializing_if = "Option::is_none")]
     tags: Option<Vec<serde_json::Value>>,
+    /// Additive inside view major 1: the tasks page echoes the
+    /// narrowing it applied - the recorded names of the tags asked for
+    /// and whether the untagged were asked for. Absent when the page
+    /// is not narrowed, so an older tracker that ignores the query
+    /// shows no echo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    narrowing: Option<serde_json::Value>,
 }
 
 /// One view-grammar component. v1 serves six kinds (t-24@r2): text,
@@ -214,6 +221,16 @@ fn page_ref(location: impl Into<String>, label: impl Into<String>) -> Part {
 /// A refusal's body: a fact naming the refusal, a text naming what
 /// would make it answerable.
 fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> PageDoc {
+    refusal_doc_with(location, code, detail, seq, None)
+}
+
+fn refusal_doc_with(
+    location: &str,
+    code: &str,
+    detail: &str,
+    seq: Option<usize>,
+    tags: Option<Vec<serde_json::Value>>,
+) -> PageDoc {
     PageDoc {
         view: ViewMajor { major: VIEW_MAJOR },
         kind: "refusal",
@@ -236,7 +253,8 @@ fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> 
         ]),
         entries: None,
         changes: None,
-        tags: None,
+        tags,
+        narrowing: None,
     }
 }
 
@@ -246,7 +264,7 @@ fn serve_doc(doc: &PageDoc, status: StatusCode) -> Response {
 }
 
 fn serve_refusal(location: &str, fail: &PageFail, seq: Option<usize>) -> Response {
-    let doc = refusal_doc(location, fail.code, &fail.detail, seq);
+    let doc = refusal_doc_with(location, fail.code, &fail.detail, seq, fail.tags.clone());
     serve_doc(&doc, fail.status)
 }
 
@@ -256,6 +274,8 @@ struct PageFail {
     status: StatusCode,
     code: &'static str,
     detail: String,
+    /// The tags that exist, when the refusal is an unknown tag.
+    tags: Option<Vec<serde_json::Value>>,
 }
 
 impl PageFail {
@@ -264,6 +284,7 @@ impl PageFail {
             status,
             code,
             detail: detail.into(),
+            tags: None,
         }
     }
 }
@@ -560,7 +581,7 @@ fn watch_of(location: &PageLocation) -> Watch {
 /// One evaluation: build the page as the fold stands, then either
 /// serve it or park on its watch. A `?after=` cursor a relevant record
 /// already passed serves at once; anything else parks.
-fn evaluate(app: &AppState, location: &str, after: Option<u64>) -> Step {
+fn evaluate(app: &AppState, location: &str, after: Option<u64>, narrowing: &Narrowing) -> Step {
     let snapshot = match app.snapshot() {
         Ok(snapshot) => snapshot,
         Err(ReadFail::Degraded(degraded)) => {
@@ -578,7 +599,7 @@ fn evaluate(app: &AppState, location: &str, after: Option<u64>) -> Step {
         }
     };
     let seq = snapshot.rows.last().map(|row| row.seq);
-    let (watch, step) = match build(app, &snapshot, location) {
+    let (watch, step) = match build(app, &snapshot, location, narrowing) {
         Ok(Built::Doc(doc, status, watch)) => (Some(watch), Step::Serve(serve_doc(&doc, status))),
         Ok(Built::File(response, watch)) => (Some(watch), Step::Serve(response)),
         Err(BuildFail { fail, watch }) => (watch, Step::Serve(serve_refusal(location, &fail, seq))),
@@ -600,7 +621,12 @@ fn evaluate(app: &AppState, location: &str, after: Option<u64>) -> Step {
 }
 
 /// Build the page the fold now carries.
-fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, BuildFail> {
+fn build(
+    app: &AppState,
+    snapshot: &Snapshot,
+    location: &str,
+    narrowing: &Narrowing,
+) -> Result<Built, BuildFail> {
     let parsed = parse_location(location).map_err(BuildFail::from)?;
     let watch = watch_of(&parsed);
     match parsed {
@@ -614,7 +640,10 @@ fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, B
         }
         PageLocation::Tasks => {
             let now = now_secs();
-            let doc = pipeline_page(snapshot, now);
+            let doc = pipeline_page(snapshot, now, narrowing).map_err(|fail| BuildFail {
+                fail,
+                watch: Some(Watch::Any),
+            })?;
             Ok(Built::Doc(Box::new(doc), StatusCode::OK, watch))
         }
         PageLocation::Board { task, revision } => {
@@ -653,6 +682,34 @@ fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, B
 
 // -- the page builders --------------------------------------------------
 
+/// Every tag as `{name, description}`, in birth order.
+fn tag_values(world: &World) -> Vec<serde_json::Value> {
+    world
+        .tags
+        .values()
+        .map(|tag| {
+            serde_json::json!({
+                "name": tag.name.as_str(),
+                "description": tag.description.as_str(),
+            })
+        })
+        .collect()
+}
+
+/// What a tasks request asked to narrow by: tag names as typed, or
+/// the untagged. Both empty is the whole list.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Narrowing {
+    tags: Vec<String>,
+    untagged: bool,
+}
+
+impl Narrowing {
+    fn is_whole(&self) -> bool {
+        self.tags.is_empty() && !self.untagged
+    }
+}
+
 /// The root page: what an instrument reads first, where it refuses one
 /// project rather than failing.
 fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
@@ -675,19 +732,8 @@ fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
         content: Some(families_parts()),
         entries: None,
         changes: None,
-        tags: Some(
-            snapshot
-                .world
-                .tags
-                .values()
-                .map(|tag| {
-                    serde_json::json!({
-                        "name": tag.name.as_str(),
-                        "description": tag.description.as_str(),
-                    })
-                })
-                .collect(),
-        ),
+        tags: Some(tag_values(&snapshot.world)),
+        narrowing: None,
     }
 }
 
@@ -834,6 +880,7 @@ fn agents_page(snapshot: &Snapshot) -> PageDoc {
         entries: None,
         changes: None,
         tags: None,
+        narrowing: None,
     }
 }
 
@@ -891,14 +938,37 @@ fn now_secs() -> u64 {
 /// riding the row for the age to render from, and its location the
 /// board Enter opens through the link. Pure record: the agents' state
 /// shapes are the client's live join, never page data.
-fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
+fn pipeline_page(
+    snapshot: &Snapshot,
+    now: u64,
+    narrowing: &Narrowing,
+) -> Result<PageDoc, PageFail> {
     let world = &snapshot.world;
+    let kept = world
+        .narrowed_tasks(&narrowing.tags, narrowing.untagged)
+        .map_err(|text| {
+            let mut fail = PageFail::new(StatusCode::BAD_REQUEST, "unknown_tag", text);
+            fail.tags = Some(tag_values(world));
+            fail
+        })?;
+    let echo = (!narrowing.is_whole()).then(|| {
+        let mut names: Vec<String> = Vec::new();
+        for name in &narrowing.tags {
+            let id = world.tag_named(name).expect("the narrowing resolved");
+            let recorded = world.tags[&id].name.as_str().to_string();
+            if !names.contains(&recorded) {
+                names.push(recorded);
+            }
+        }
+        serde_json::json!({ "tags": names, "untagged": narrowing.untagged })
+    });
     let day = 24 * 60 * 60;
     let mut waiting: Vec<TableRow> = Vec::new();
     let mut in_flight: Vec<TableRow> = Vec::new();
     let mut offered: Vec<TableRow> = Vec::new();
     let mut concluded: Vec<TableRow> = Vec::new();
-    for (index, ctx) in world.tasks.iter().enumerate() {
+    for index in kept {
+        let ctx = &world.tasks[index];
         let task = format!("t-{index}");
         let agents = views::current_owner(ctx)
             .map(|entry| match &entry.owner {
@@ -973,7 +1043,7 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
         section("awaiting judgment", offered),
         section("concluded last 24h", concluded),
     ];
-    PageDoc {
+    Ok(PageDoc {
         view: ViewMajor { major: VIEW_MAJOR },
         kind: "document",
         location: "tasks".to_string(),
@@ -990,7 +1060,8 @@ fn pipeline_page(snapshot: &Snapshot, now: u64) -> PageDoc {
         entries: None,
         changes: None,
         tags: None,
-    }
+        narrowing: echo,
+    })
 }
 
 /// The event time of one record, by its seq: the rows are the fold in
@@ -1168,6 +1239,7 @@ fn board_page(
                 .map(serde_json::Value::String)
                 .collect(),
         ),
+        narrowing: None,
     })
 }
 
@@ -1312,6 +1384,7 @@ fn history_page(
         entries: Some(entries),
         changes: None,
         tags: None,
+        narrowing: None,
     })
 }
 
@@ -1390,6 +1463,7 @@ fn diff_page(
         entries: None,
         changes: Some(changes),
         tags: None,
+        narrowing: None,
     })
 }
 
@@ -1439,6 +1513,7 @@ fn component_page(
         entries: None,
         changes: None,
         tags: None,
+        narrowing: None,
     })
 }
 
@@ -1495,19 +1570,44 @@ fn raw_bytes(path: &str, bytes: Vec<u8>) -> Response {
 
 // -- the doors ----------------------------------------------------------
 
+/// What the query string asks: the cursor to wait past, how long to
+/// hold, and the tasks page's narrowing.
+#[derive(Debug)]
+struct Query {
+    after: Option<u64>,
+    hold: Duration,
+    narrowing: Narrowing,
+}
+
 /// The query string a page accepts: `?after=<seq>` waits, `?timeout=`
-/// bounds the hold. A malformed value refuses as a document.
-fn parse_query(raw: Option<&str>) -> Result<(Option<u64>, Duration), PageFail> {
+/// bounds the hold, and the tasks page narrows by `?tag=<name>`
+/// (repeatable) or `?untagged`. A malformed value refuses as a document.
+fn parse_query(raw: Option<&str>) -> Result<Query, PageFail> {
     let Some(raw) = raw else {
-        return Ok((None, Duration::ZERO));
+        return Ok(Query {
+            after: None,
+            hold: Duration::ZERO,
+            narrowing: Narrowing::default(),
+        });
     };
     let mut after = None;
     let mut timeout = None;
+    let mut narrowing = Narrowing::default();
     for pair in raw.split('&') {
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         match key {
+            "untagged" => narrowing.untagged = true,
+            "tag" => {
+                if value.is_empty() {
+                    return Err(PageFail::new(
+                        StatusCode::BAD_REQUEST,
+                        "bad_query",
+                        "tag= names a tag; an empty name narrows nothing",
+                    ));
+                }
+                narrowing.tags.push(value.to_string());
+            }
+            _ if !pair.contains('=') => {}
             "after" => match value.parse::<u64>() {
                 Ok(parsed) => after = Some(parsed),
                 Err(_) => {
@@ -1531,6 +1631,13 @@ fn parse_query(raw: Option<&str>) -> Result<(Option<u64>, Duration), PageFail> {
             _ => {}
         }
     }
+    if narrowing.untagged && !narrowing.tags.is_empty() {
+        return Err(PageFail::new(
+            StatusCode::BAD_REQUEST,
+            "bad_query",
+            "tag= and untagged ask different things; give one",
+        ));
+    }
     let hold = match after {
         None => Duration::ZERO,
         Some(_) => timeout
@@ -1538,7 +1645,11 @@ fn parse_query(raw: Option<&str>) -> Result<(Option<u64>, Duration), PageFail> {
             .unwrap_or(DEFAULT_HOLD)
             .min(MAX_HOLD),
     };
-    Ok((after, hold))
+    Ok(Query {
+        after,
+        hold,
+        narrowing,
+    })
 }
 
 /// The page door: build, park on the landing wake until a relevant
@@ -1548,7 +1659,11 @@ fn parse_query(raw: Option<&str>) -> Result<(Option<u64>, Duration), PageFail> {
 /// a write landing between the read and the park wakes the hold, and
 /// the wait's only timer is the deadline itself.
 async fn serve_page(app: &AppState, location: &str, raw_query: Option<&str>) -> Response {
-    let (after, hold) = match parse_query(raw_query) {
+    let Query {
+        after,
+        hold,
+        narrowing,
+    } = match parse_query(raw_query) {
         Ok(parsed) => parsed,
         Err(fail) => return serve_refusal(location, &fail, None),
     };
@@ -1558,7 +1673,7 @@ async fn serve_page(app: &AppState, location: &str, raw_query: Option<&str>) -> 
         let served = app
             .landing
             .hold(
-                || match evaluate(app, location, after) {
+                || match evaluate(app, location, after, &narrowing) {
                     Step::Serve(response) => Some(response),
                     Step::Park => None,
                 },
@@ -1570,7 +1685,7 @@ async fn serve_page(app: &AppState, location: &str, raw_query: Option<&str>) -> 
         }
         if Instant::now() >= deadline {
             // the hold expired quiet: answer the page as it stands
-            return match evaluate(app, location, None) {
+            return match evaluate(app, location, None, &narrowing) {
                 Step::Serve(response) => response,
                 Step::Park => unreachable!("a wait-free evaluation serves"),
             };
@@ -1727,14 +1842,29 @@ mod test {
             parse_query(Some("timeout=soon")).unwrap_err().code,
             "bad_query"
         );
-        let (after, hold) = parse_query(Some("after=9")).unwrap();
-        assert_eq!(after, Some(9));
-        assert_eq!(hold, DEFAULT_HOLD);
-        let (_, hold) = parse_query(Some("after=9&timeout=70")).unwrap();
-        assert_eq!(hold, MAX_HOLD);
-        let (after, hold) = parse_query(None).unwrap();
-        assert_eq!(after, None);
-        assert_eq!(hold, Duration::ZERO);
+        let query = parse_query(Some("after=9")).unwrap();
+        assert_eq!(query.after, Some(9));
+        assert_eq!(query.hold, DEFAULT_HOLD);
+        let query = parse_query(Some("after=9&timeout=70")).unwrap();
+        assert_eq!(query.hold, MAX_HOLD);
+        let query = parse_query(None).unwrap();
+        assert_eq!(query.after, None);
+        assert_eq!(query.hold, Duration::ZERO);
+        assert!(query.narrowing.is_whole());
+    }
+
+    #[test]
+    fn the_tasks_narrowing_parses_from_the_query() {
+        let query = parse_query(Some("tag=auth&tag=ui&after=3")).unwrap();
+        assert_eq!(query.narrowing.tags, vec!["auth", "ui"]);
+        assert!(!query.narrowing.untagged);
+        assert!(parse_query(Some("untagged")).unwrap().narrowing.untagged);
+        assert_eq!(parse_query(Some("tag=")).unwrap_err().code, "bad_query");
+        assert_eq!(parse_query(Some("tag")).unwrap_err().code, "bad_query");
+        assert_eq!(
+            parse_query(Some("tag=a&untagged")).unwrap_err().code,
+            "bad_query"
+        );
     }
 
     #[test]
@@ -1882,7 +2012,7 @@ mod test {
             })
             .collect();
         let snapshot = Snapshot { world, rows };
-        let doc = pipeline_page(&snapshot, now);
+        let doc = pipeline_page(&snapshot, now, &Narrowing::default()).unwrap();
         let content = doc.content.expect("the pipeline page holds content");
         let table_of = |title: &str| {
             content.iter().find_map(|part| match part {

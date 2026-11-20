@@ -42,6 +42,18 @@ export class SourceUnavailableError extends Error {
   }
 }
 
+/** A local request that failed with an HTTP error status and carried
+ * the tracker's own refusal document back: the message is the
+ * transport's account of the failure (unchanged), the body the
+ * document verbatim. */
+export class RequestRefused extends SourceUnavailableError {
+  readonly body: string;
+  constructor(code: LaneCode, message: string, body: string) {
+    super(code, message);
+    this.body = body;
+  }
+}
+
 // The decode codes mirror the board-grammar crate's ErrorKind families
 // one for one, plus the two bridge verdict codes (board-refused for a
 // crate refusal, decoder-mismatch for the never-expected case where the

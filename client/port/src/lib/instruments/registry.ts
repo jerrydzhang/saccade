@@ -25,6 +25,7 @@ import type {
   Unsubscribe,
   Viewport,
 } from "../contracts/buffer.ts";
+import { splitNarrowing } from "../location.ts";
 import type { KeyDisposition, KeyInput } from "../contracts/input.ts";
 import type {
   AnchorData,
@@ -117,6 +118,8 @@ export interface RegisteredInstrument {
   /** The location form this instrument offers for a registered
    * project's name, or null. */
   projectView(project: string): string | null;
+  /** Validate and canonicalize a claimed location's narrowing. */
+  canonicalNarrowing?(opaque: string): import("./contract.ts").NarrowingVerdict;
   /** The targets this instrument publishes beneath a project's rail
    * entry (its `inside` names the project's rail id), or at the rail's
    * foot when the project is null. The instrument's own data, read
@@ -156,6 +159,24 @@ export function instrumentForAddress(
   return registered.find((entry) => entry.claims(address)) ?? null;
 }
 
+/** An address in its canonical spelling, or why it is refused: an
+ * address whose path carries a narrowing is canonicalized by the
+ * instrument that claims it, and refused when that instrument takes
+ * none. Addresses with no narrowing pass untouched. */
+export function canonicalAddress(
+  address: import("../contracts/places.ts").Address,
+): { ok: true; address: import("../contracts/places.ts").Address } | { ok: false; refusal: string } {
+  const { base, narrowing } = splitNarrowing(address.path);
+  if (narrowing === null) return { ok: true, address };
+  const instrument = instrumentForAddress(address);
+  if (instrument === null || instrument.canonicalNarrowing === undefined) {
+    return { ok: false, refusal: `'${base}' takes no narrowing` };
+  }
+  const verdict = instrument.canonicalNarrowing(narrowing);
+  if (!verdict.ok) return verdict;
+  return { ok: true, address: { ...address, path: `${base}?${verdict.canonical}` } };
+}
+
 export function registerInstrument<
   T extends object, UI extends object, A extends AnchorData,
 >(definition: InstrumentDefinition<T, UI, A>): RegisteredInstrument {
@@ -164,6 +185,7 @@ export function registerInstrument<
     title: definition.title,
     claims: definition.claims,
     projectView: definition.projectView,
+    canonicalNarrowing: definition.canonicalNarrowing,
     railTargets: definition.railTargets,
     railNote: definition.railNote,
     railFootnote: definition.railFootnote,

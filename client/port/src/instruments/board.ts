@@ -11,7 +11,7 @@ import { connectBoard } from "./boardController.ts";
 import type { BoardAnchor, BoardData, BoardServices, BoardUI } from "./boardController.ts";
 import type { InstrumentDefinition } from "../lib/instruments/contract.ts";
 import { registerInstrument, type RegisteredInstrument } from "../lib/instruments/registry.ts";
-import { TASKS_PATH } from "../lib/location.ts";
+import { isTasksPath } from "../lib/location.ts";
 
 export * from "./boardController.ts";
 
@@ -24,7 +24,7 @@ export function register(): RegisteredInstrument {
   return registerInstrument({
     kind: "board",
     title: "this board",
-    claims: (address) => !(address.machine.startsWith("tracker:") && address.path === TASKS_PATH),
+    claims: (address) => !(address.machine.startsWith("tracker:") && isTasksPath(address.path)),
     projectView: () => null,
     railTargets: () => [],
     Component: BoardView as Component<InstrumentProps<BoardData, BoardUI>>,

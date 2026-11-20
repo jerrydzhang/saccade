@@ -24,6 +24,8 @@ async function boundedFetch(fetcher: Fetcher, url: string): Promise<Response> {
   try {
     return await fetcher(url);
   } catch (error) {
+    // the tracker's own refusal, carried back by the transport, stands
+    if (error instanceof PageRefusal) throw error;
     throw new SourceUnavailableError(
       "core-unavailable",
       `the tracker server did not answer at ${url}: ${String(error)}`,
@@ -140,15 +142,49 @@ export type ViewPage = {
   /** The diff page's component changes; absent on every other page
    * (and from a tracker older than t-57). */
   changes?: PageChange[];
+  /** The root page's tags: every tag with its line, in birth order;
+   * absent from a tracker before tags. */
+  tags?: { name: string; description: string }[];
+  /** What the tasks page says it narrowed by: absent when it did not
+   * narrow (or is a tracker that cannot). */
+  narrowing?: { tags: string[]; untagged: boolean };
 };
 
 /** A refusal document, raised: the code names the refusal, the detail
  * is the text naming what would make it answerable. */
 export class PageRefusal extends SourceUnavailableError {
   readonly status: number;
-  constructor(code: string, detail: string, status: number) {
+  /** The tags a refusal lists beside its text (an unknown tag names
+   * the ones that exist). */
+  readonly tags: { name: string; description: string }[] | undefined;
+  constructor(code: string, detail: string, status: number, tags?: { name: string; description: string }[]) {
     super(refusalLaneCode(status), `${code}: ${detail}`);
     this.status = status;
+    this.tags = tags;
+  }
+}
+
+/** The refusal a refusal document raises: its code, its text parts
+ * as the detail, the status it was answered with. */
+export function refusalOf(page: ViewPage, status: number): PageRefusal {
+  const detail = (page.content ?? [])
+    .filter((part): part is TextPart => part.kind === "text")
+    .map((part) => part.text)
+    .join(" ");
+  return new PageRefusal(page.code ?? "refused", detail, status, page.tags);
+}
+
+/** A refusal document carried verbatim by a failed request: the
+ * refusal it raises, or null when the body is not one. The status is
+ * the one the failure names (curl's account of it), else 400. */
+export function refusalOfBody(body: string, failure: string): PageRefusal | null {
+  try {
+    const page = decodePage(JSON.parse(body));
+    if (page.kind !== "refusal") return null;
+    const status = Number(/error: (\d{3})/.exec(failure)?.[1] ?? 400);
+    return refusalOf(page, status);
+  } catch {
+    return null;
   }
 }
 
@@ -351,6 +387,35 @@ export function decodePage(value: unknown): ViewPage {
               : decodeHistoryEntry(record);
           }),
     changes: changes === undefined ? undefined : changes.flatMap((entry) => decodeChange(entry)),
+    tags: decodeTagLines(raw.tags),
+    narrowing: decodeNarrowing(raw.narrowing),
+  };
+}
+
+/** The root page's tags as {name, description}; a task page's plain
+ * names are not tag lines and decode to nothing. */
+function decodeTagLines(value: unknown): { name: string; description: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const lines: { name: string; description: string }[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record === null || typeof record.name !== "string") continue;
+    lines.push({
+      name: record.name,
+      description: typeof record.description === "string" ? record.description : "",
+    });
+  }
+  return lines.length === 0 && value.length > 0 ? undefined : lines;
+}
+
+function decodeNarrowing(value: unknown): { tags: string[]; untagged: boolean } | undefined {
+  const record = asRecord(value);
+  if (record === null || !Array.isArray(record.tags) || typeof record.untagged !== "boolean") {
+    return undefined;
+  }
+  return {
+    tags: record.tags.filter((tag): tag is string => typeof tag === "string"),
+    untagged: record.untagged,
   };
 }
 
@@ -385,13 +450,7 @@ export async function fetchPage(fetcher: Fetcher, url: string): Promise<ViewPage
     );
   }
   const page = decodePage(value);
-  if (page.kind === "refusal") {
-    const detail = (page.content ?? [])
-      .filter((part): part is TextPart => part.kind === "text")
-      .map((part) => part.text)
-      .join(" ");
-    throw new PageRefusal(page.code ?? "refused", detail, response.status);
-  }
+  if (page.kind === "refusal") throw refusalOf(page, response.status);
   return page;
 }
 

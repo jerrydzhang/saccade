@@ -21,6 +21,7 @@
 // milliseconds late, as a remote machine's would.
 
 import { directAsks } from "../../../src/lib/asks.ts";
+import { RequestRefused } from "../../../src/lib/board/errors.ts";
 
 type LaneSeed = { machine: string; repoPath: string; base: string; latencyMs?: number };
 
@@ -72,7 +73,17 @@ if (seed !== undefined) {
     // tracker's origin allowlist names this page
     const reply = await fetch(`http://127.0.0.1:${port}${route}`);
     if (!reply.ok) {
-      throw new Error(`the tracker answered ${reply.status} for ${route}`);
+      const message = `the tracker answered ${reply.status} for ${route}`;
+      const text = await reply.text();
+      let refusal = false;
+      try {
+        refusal = typeof (JSON.parse(text) as { code?: unknown }).code === "string";
+      } catch {
+        // a non-JSON body is no refusal document
+      }
+      // the shell hands a refusal document through with the failure;
+      // the lane does the same
+      throw refusal ? new RequestRefused("machine-unavailable", message, text) : new Error(message);
     }
     return new Uint8Array(await reply.arrayBuffer());
   },
