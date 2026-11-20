@@ -141,7 +141,19 @@ view; the reading keys never scroll it. -->
     aria-label="projects"
     bind:this={pane}
   >
-    <div class="port-rail-list" bind:this={list} onwheel={() => keepShownInView()}>
+    <!-- a press on an entry never moves focus onto it: the entries are
+    driven by their clicks and the select session, never by focus, and
+    a button left focused would draw the keyboard ring when the next
+    key (Escape) arrives -->
+    <div
+      class="port-rail-list"
+      bind:this={list}
+      role="presentation"
+      onwheel={() => keepShownInView()}
+      onmousedown={(event) => {
+        if ((event.target as Element | null)?.closest("button") !== null) event.preventDefault();
+      }}
+    >
       {#each projects as project (project.part)}
         <section class="port-rail-project" data-port-shown={project.current ? "" : undefined}>
           <button
