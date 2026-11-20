@@ -213,6 +213,9 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
     async focusWindow(label) {
       if (label !== "main") throw new Error(`the browser has one window; no ${label}`);
     },
+    async lateAnswer() {
+      throw new Error("a late answer is native only: the browser driver has no shell (tag the scenario multi-window)");
+    },
   };
   return { app, close: () => frame.remove() };
 }
