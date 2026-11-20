@@ -127,16 +127,14 @@ pub(super) fn render_tasks(
     tags: &[String],
     untagged: bool,
 ) -> Result<String, Fail> {
-    let wanted = super::tag::names_to_tags(world, tags)?;
-    let views: Vec<TaskView> = (0..world.tasks.len())
-        .filter(|i| {
-            let carried = &world.tasks[*i].tags;
-            if untagged {
-                carried.is_empty()
-            } else {
-                wanted.iter().all(|tag| carried.contains(tag))
-            }
-        })
+    let kept = world
+        .narrowed_tasks(tags, untagged)
+        .map_err(|text| Fail::Taught {
+            code: Reject::InvalidTagId.code(),
+            text,
+        })?;
+    let views: Vec<TaskView> = kept
+        .into_iter()
         .map(|i| task_view(world, TaskId(i)))
         .collect::<Option<_>>()
         .expect("indices come from the vec itself");

@@ -329,3 +329,141 @@ async fn the_door_the_board_log_and_the_pages_carry_tags() {
     }
     assert_eq!(seen, 2, "both tasks ride the pipeline rows");
 }
+
+/// The task ids a tasks page names across every section, sorted.
+fn page_tasks(url: &str, query: &str) -> (u16, Value) {
+    let (status, body) = get_json(url, &format!("/view/v1/tasks{query}"));
+    (status, json_of(&body))
+}
+
+fn ids_of(doc: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    for section in doc["content"].as_array().unwrap() {
+        for table in section["content"].as_array().unwrap() {
+            for row in table["rows"].as_array().unwrap() {
+                ids.push(row["cells"][0].as_str().unwrap().to_string());
+            }
+        }
+    }
+    ids.sort();
+    ids
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tasks_page_and_the_cli_listing_narrow_to_the_same_tasks() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("tags-narrowed");
+    let (repo, _, _) = scratch_repo(&scratch.dir);
+    let (_serve, url) = spawn_serve(
+        bin,
+        scratch.db.as_path(),
+        &["--repo", repo.to_str().unwrap()],
+        &[],
+    );
+    let sac = |args: &[&str]| -> String {
+        let out = scrubbed(std::process::Command::new(bin))
+            .arg("--server")
+            .arg(&url)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for name in ["auth", "ui"] {
+        let (status, body) = post_command(
+            &url,
+            &envelope(
+                "someone",
+                "human",
+                json!({"create_tag": {"name": name, "description": format!("{name} things")}}),
+            ),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    sac(&["create", "task", "--tag", "auth", "one"]);
+    sac(&["create", "task", "--tag", "auth", "--tag", "ui", "two"]);
+    sac(&["create", "task", "--tag", "ui", "three"]);
+    sac(&["create", "task", "four"]);
+
+    let listed = |flags: &[&str]| -> Vec<String> {
+        let mut args = vec!["--json", "list"];
+        args.extend_from_slice(flags);
+        let doc: Value = serde_json::from_str(&sac(&args)).unwrap();
+        let mut ids: Vec<String> = doc["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| task["id"].as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let cases: [(&[&str], &str, Vec<&str>); 5] = [
+        (&[], "", vec!["t-0", "t-1", "t-2", "t-3"]),
+        (&["--tag", "auth"], "?tag=auth", vec!["t-0", "t-1"]),
+        (&["--tag", "UI"], "?tag=UI", vec!["t-1", "t-2"]),
+        (
+            &["--tag", "auth", "--tag", "ui"],
+            "?tag=auth&tag=ui",
+            vec!["t-1"],
+        ),
+        (&["--untagged"], "?untagged", vec!["t-3"]),
+    ];
+    for (flags, query, expected) in cases {
+        let (status, doc) = page_tasks(&url, query);
+        assert_eq!(status, 200, "{query}");
+        assert_eq!(ids_of(&doc), listed(flags), "{query}");
+        assert_eq!(ids_of(&doc), expected, "{query}");
+    }
+
+    // the page echoes what it applied, names as recorded; whole when not narrowed
+    let (_, doc) = page_tasks(&url, "?tag=UI&tag=ui&tag=auth");
+    assert_eq!(
+        doc["narrowing"],
+        json!({"tags": ["ui", "auth"], "untagged": false})
+    );
+    let (_, doc) = page_tasks(&url, "?untagged");
+    assert_eq!(doc["narrowing"], json!({"tags": [], "untagged": true}));
+    let (_, doc) = page_tasks(&url, "");
+    assert!(doc.get("narrowing").is_none(), "{doc}");
+
+    // narrowing works with polling
+    let (status, doc) = page_tasks(&url, "?tag=auth&after=0&timeout=1");
+    assert_eq!(status, 200);
+    assert_eq!(ids_of(&doc), vec!["t-0", "t-1"]);
+
+    // a tag no one bears refuses with the CLI's text and the tags beside it
+    let (status, doc) = page_tasks(&url, "?tag=nope");
+    assert_eq!(status, 400);
+    assert_eq!(doc["code"], "unknown_tag");
+    assert_eq!(
+        doc["tags"],
+        json!([
+            {"name": "auth", "description": "auth things"},
+            {"name": "ui", "description": "ui things"}
+        ])
+    );
+    let out = scrubbed(std::process::Command::new(bin))
+        .arg("--server")
+        .arg(&url)
+        .env("SACCADE_ACTOR", "pi")
+        .args(["list", "--tag", "nope"])
+        .output()
+        .unwrap();
+    let cli_text = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success());
+    let page_text = doc["content"][1]["text"].as_str().unwrap();
+    assert!(cli_text.contains(page_text), "{cli_text} vs {page_text}");
+
+    for query in ["?tag=", "?tag=auth&untagged"] {
+        let (status, doc) = page_tasks(&url, query);
+        assert_eq!(status, 400, "{query}");
+        assert_eq!(doc["code"], "bad_query", "{query}");
+    }
+}

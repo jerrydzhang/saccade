@@ -41,7 +41,7 @@ doors only, unless the task itself is the change.
   the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a package with a flake input naming its tag, e.g.
-`saccade.url = "github:jerrydzhang/saccade/sac-v0.22.1"` - the
+`saccade.url = "github:jerrydzhang/saccade/sac-v0.22.2"` - the
 lockfile is the version identity.
 
 ## Model law
@@ -206,7 +206,18 @@ through. A write door with no caller is a retirement candidate.
   carries `tags`, every tag as `{name, description}` in birth order;
   each task row of the `tasks` page and each board page carries
   `tags`, the names the task carries now, in the tags' birth order.
-  No page filters by tag.
+  Only the `tasks` page narrows: `?tag=<name>` (repeatable; a task
+  must carry every tag named, names matched ignoring ASCII case) or
+  `?untagged`, beside `after=` and `timeout=`, with the meaning of
+  `sac list --tag` and `--untagged` - both narrow through one function
+  of the fold, every section of the page included. A page so narrowed
+  echoes what it applied as `narrowing: {tags: [names as recorded],
+  untagged: bool}`; an un-narrowed page carries no `narrowing`, so a
+  tracker that does not narrow is told by the echo's absence. A name
+  no tag bears refuses 400 `unknown_tag` with the same text the CLI
+  prints (every existing tag with its line) and `tags: [{name,
+  description}]` beside it, never an empty list; `tag` with
+  `untagged`, or `tag=` empty, refuses 400 `bad_query`.
 - **A page belongs to a location, not an endpoint.** The location
   grammar v1 serves: `` (the root, naming the tracker, the host facts
   a consumer needs to prove hub identity per t-24@r14 and t-24@r16 -
