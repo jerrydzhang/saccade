@@ -77,9 +77,10 @@ export function register(): RegisteredInstrument {
         open: (spec) => windowServices.open(spec),
         elsewhere: (spec, act) => windowServices.elsewhere?.(spec, act),
         copy: (text) => windowServices.copy(text),
-        // the rows' agent marks read the rail publication's words
+        // the rows' agent marks read the rail publication's view: the
+        // agents joined with their words
         railWords: (observer) => {
-          const push = (): void => observer(railData.words());
+          const push = (): void => observer(railData.view());
           push();
           return railData.subscribe(push);
         },

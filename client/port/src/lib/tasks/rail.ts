@@ -118,12 +118,13 @@ export function wordRunsOf(agents: readonly RailAgent[]): { state: string; agent
   return out;
 }
 
-/** The live word of each registered agent the rail shows under the
- * shown project, by incarnation: the pipeline marks a row's agents
- * with it. An agent with no word is absent. */
-export function wordsByIncarnationOf(rail: Rail): Map<string, string> {
+/** The live word of each registered agent the rail shows under a
+ * project, by incarnation: the pipeline marks a row's agents with it.
+ * The project is the one named, else the rail's shown one. An agent
+ * with no word is absent. */
+export function wordsByIncarnationOf(rail: Rail, name?: string): Map<string, string> {
   const out = new Map<string, string>();
-  const project = rail.projects.find((entry) => entry.current);
+  const project = rail.projects.find((entry) => (name === undefined ? entry.current : entry.name === name));
   for (const group of project?.groups ?? []) {
     if (group.state === "") continue;
     for (const agent of group.agents) {

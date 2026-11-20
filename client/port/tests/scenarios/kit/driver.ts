@@ -23,6 +23,9 @@ export type SeededTracker = {
 /** The throwaway tracker's door, mid-scenario (kit/tracker-wire.ts). */
 export interface TrackerDoor {
   createTask(name: string): Promise<string>;
+  /** Claim a task as the suite's own actor: the list's row then
+   * names that actor in its agents cell. */
+  claimTask(task: string): Promise<void>;
   /** Commit a board, with any figure files beside board.yaml. */
   commit(
     task: string,

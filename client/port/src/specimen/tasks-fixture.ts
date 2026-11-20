@@ -117,7 +117,7 @@ export function fixtureTasksUI(add: AddView = ADD_CLOSED): TasksUI {
   return {
     getSelection: () => null,
     subscribeWords: (observer) => {
-      observer(words);
+      observer(tasksRail);
       return () => {};
     },
   };

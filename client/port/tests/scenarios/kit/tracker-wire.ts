@@ -42,6 +42,14 @@ export function trackerDoor(base: string): TrackerDoor {
       });
       return String(reply.id);
     },
+    async claimTask(task) {
+      await call("POST", "/api/v1/command", {
+        context: CONTEXT,
+        command: { claim_task: { id: Number(task.replace(/^t-/, "")), incarnation: null } },
+        at: null,
+        client: CLIENT,
+      });
+    },
     async commit(task, board, message, files = []) {
       const reply = await call("POST", "/api/v1/boards/commit", {
         context: CONTEXT,

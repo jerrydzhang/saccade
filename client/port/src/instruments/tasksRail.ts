@@ -15,7 +15,7 @@ import { theProjects } from "../lib/asks.ts";
 import { sourceFor, tauriInvoke } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { formatLocation } from "../lib/location.ts";
-import { agentFactsOf, railOf, railAgentPart, railAgentText, terminalPart, wordsOf, type RailAgent, type WordsSnapshot, NO_WORDS } from "../lib/tasks/rail.ts";
+import { agentFactsOf, railOf, railAgentPart, railAgentText, terminalPart, wordsOf, type Rail, type RailAgent, type WordsSnapshot, NO_WORDS } from "../lib/tasks/rail.ts";
 import type { TaskPorts } from "../lib/tasks/menu.ts";
 import type { Component } from "svelte";
 
@@ -314,9 +314,14 @@ export function createTasksRail(deps: TasksRailDeps) {
     railFootnote(): string | null {
       return words.problem ?? null;
     },
-    /** The current rail view (the rows' agent marks read its words). */
+    /** The words feed's latest snapshot, as the shell sent it. */
     words(): WordsSnapshot {
       return words;
+    },
+    /** The current rail view: each project's agents joined with
+     * their live words (the rows' agent marks read it). */
+    view(): Rail {
+      return rail ?? { projects: [], unregistered: [], herdr: null };
     },
     subscribe(observer: () => void): () => void {
       observers.add(observer);

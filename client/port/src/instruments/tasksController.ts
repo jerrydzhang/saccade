@@ -48,7 +48,7 @@ import type {
 } from "../lib/contracts/places.ts";
 import type { AnchorData, AnchorLocation, ViewportMetrics } from "../lib/contracts/places.ts";
 export type { TaskAnchor };
-import type { WordsSnapshot } from "../lib/tasks/rail.ts";
+import type { Rail } from "../lib/tasks/rail.ts";
 import type { StructuredIssue } from "../lib/board/errors.ts";
 import { TASKS_PATH, formatLocation } from "../lib/location.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
@@ -97,9 +97,10 @@ export interface TasksUI {
    * the frame clears it when no published target carries the anchor
    * any more). */
   getSelection(): string | null;
-  /** The frame rail's words feed (the rows' agent marks read the
-   * words). The rail publication is the instrument's own. */
-  subscribeWords(observer: (words: WordsSnapshot) => void): () => void;
+  /** The rail publication's feed: its agents joined with their live
+   * words (the rows' agent marks read it). The rail publication is
+   * the instrument's own. */
+  subscribeWords(observer: (rail: Rail) => void): () => void;
 }
 
 /** How often a shown list re-reads its page (a named tunable; the
@@ -318,9 +319,9 @@ export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts):
   // the frame rail's words, for the rows' agent marks: the door is
   // the window's injection (the rail is the frame's); absent, the
   // rows show no live marks
-  const wordsObservers = new Set<(words: WordsSnapshot) => void>();
-  const offWords = ports.railWords?.((words) => {
-    for (const observer of [...wordsObservers]) observer(words);
+  const wordsObservers = new Set<(rail: Rail) => void>();
+  const offWords = ports.railWords?.((rail) => {
+    for (const observer of [...wordsObservers]) observer(rail);
   });
 
   return {

@@ -685,6 +685,19 @@ test("words in importance order: error, blocked, done, working, idle, any other 
   // only the shown project's agents join
   const unshown = railOf([{ name: "pyrimel", agents, problem: null }], { generation: 1, connected: true, words: {} }, null);
   assert.equal(wordsByIncarnationOf(unshown).size, 0);
+  // a named project joins whether or not the rail marks it shown (the
+  // task list names its own project; the rail publication marks none)
+  const unmarked = railOf(
+    [{ name: "pyrimel", agents, problem: null }],
+    {
+      generation: 1,
+      connected: true,
+      words: Object.fromEntries(states.map((state, index) => [`t${index}`, state === "" ? { at: 1 } : { state, at: 1 }])),
+    },
+    null,
+  );
+  assert.equal(wordsByIncarnationOf(unmarked, "pyrimel").get("i-7"), "error");
+  assert.equal(wordsByIncarnationOf(unmarked, "elsewhere").size, 0);
 });
 
 test("the foot group reads as runs of one word, in its own order", () => {
