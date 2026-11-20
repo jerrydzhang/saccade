@@ -45,7 +45,8 @@ test("Space a shows the rail, registers machine:/path, and opens nothing", async
   const after = await app.readout();
   expect(after.tasks?.project ?? null).toBe(null);
   expect(await app.windows()).toEqual(["main"]);
-  expect((await app.readout()).railAdd?.open ?? null).toBe(false);
+  // the field closes once the registration's declaration read answers
+  await expect.poll(async () => (await app.readout()).railAdd?.open ?? null).toBe(false);
   await expect.poll(() => app.shows(`project-${tracker.repo}`), { timeout: 20_000 }).toBe(true);
   await expect.poll(() => app.shows("empty-register")).toBe(false);
   expect(await app.shows("empty-surface")).toBe(true);

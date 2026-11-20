@@ -150,6 +150,7 @@ view; the reading keys never scroll it. -->
             data-port-part={project.part}
             data-port-kind="project"
             data-port-title={project.name}
+            data-port-hover={hovered === project.part ? "" : undefined}
             aria-current={project.current ? "page" : undefined}
             onclick={(event) => entryActivate(partOf(event) ?? project.part, event)}
             oncontextmenu={(event) => {

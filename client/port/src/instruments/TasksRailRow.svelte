@@ -22,12 +22,13 @@ claimed task at the right, the status line beneath. -->
   <span class="port-state-mark" data-port-word={agent.state} aria-hidden="true"></span>
   {#if agent.incarnation === null}
     <!-- unregistered: the terminal's address stands in the id column,
-    Herdr's label in the name column; no tasks column (the foot's rows
-    carry none) -->
+    Herdr's label in the name column; beneath a project the tasks
+    column says so, the foot group's rows carry no tasks column -->
     <span class="port-rail-who">
       <span class="port-rail-incarnation">{agent.address}</span>
       {#if agent.label !== null}<span class="port-rail-agent-name">{agent.label}</span>{/if}
     </span>
+    {#if target.inside !== null}<span class="port-rail-tasks port-rail-unregistered">unregistered</span>{/if}
   {:else}
     <span class="port-rail-who">
       <span class="port-rail-incarnation">{agent.incarnation}</span>
