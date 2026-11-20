@@ -120,6 +120,9 @@ export interface RegisteredInstrument {
   projectView(project: string): string | null;
   /** Validate and canonicalize a claimed location's narrowing. */
   canonicalNarrowing?(opaque: string): import("./contract.ts").NarrowingVerdict;
+  /** The words the rail shows for a kept view of a location this
+   * instrument claims, or null to show the path. */
+  locationTitle?(path: string): string | null;
   /** The targets this instrument publishes beneath a project's rail
    * entry (its `inside` names the project's rail id), or at the rail's
    * foot when the project is null. The instrument's own data, read
@@ -186,6 +189,7 @@ export function registerInstrument<
     claims: definition.claims,
     projectView: definition.projectView,
     canonicalNarrowing: definition.canonicalNarrowing,
+    locationTitle: definition.locationTitle,
     railTargets: definition.railTargets,
     railNote: definition.railNote,
     railFootnote: definition.railFootnote,

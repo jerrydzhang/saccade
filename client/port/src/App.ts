@@ -151,6 +151,9 @@ export interface PortWindow {
   /** The targets published beneath a project's rail entry (the
    * claims seam), or the foot group's when the project is null. */
   railTargets(project: string | null): import("./lib/contracts/buffer.ts").RailPublication[];
+  /** A project's kept views as the pane draws them, with the notes
+   * for the file's views that cannot be read. */
+  railViews(project: string): { entries: import("./lib/frame/rail.ts").RailViewEntry[]; notes: string[] };
   /** The presentations the rail's entries ride now: the shown
    * buffer's when one is shown, the frame's own when none is (the
    * empty window), null while a pending open still draws the
@@ -234,10 +237,30 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return null;
   }
 
+  /** The canonical location this window shows: what the shown
+   * content asked for. */
+  function shownLocation(): string | null {
+    let state: ReturnType<typeof displayedFrame>;
+    try {
+      state = displayedFrame();
+    } catch {
+      return null;
+    }
+    if (state.kind !== "alive" || state.content.kind !== "available") return null;
+    const content = state.content.value.props["content"] as { asked?: unknown } | undefined;
+    return typeof content?.asked === "string" && content.asked.length > 0 ? content.asked : null;
+  }
+
   const frameRail = createFrameRail({
     capture: frameCapture,
     open: (spec) => openSpec(spec),
     shownProject,
+    shownLocation,
+    elsewhere: (spec, act) => windowServices.elsewhere?.(spec, act),
+    say: (text) => {
+      note = text;
+      notifyStrip();
+    },
   });
 
   // the add field's view rides the pane's own view: every add change
@@ -872,6 +895,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         railVisible = !railVisible;
         notifyRailState();
       },
+      keepView: () => frameRail.keepShown(),
       registerProject: () => {
         (window as unknown as { __probe?: string[] }).__probe = [
           ...(window as unknown as { __probe?: string[] }).__probe ?? [],
@@ -987,6 +1011,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       lastFrames[surface] = state;
       if (surface !== activeSurface) return;
       watchRailLease();
+      frameRail.refreshIfShownMoved();
       for (const observer of [...frameObservers]) observer(state);
       notifyRailState();
       notifyStrip();
@@ -1640,6 +1665,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     },
     subscribeRail: (observer) => frameRail.subscribeRail(observer),
     railTargets: (project) => frameRail.railTargets(project),
+    railViews: (project) => frameRail.railViews(project),
     railLease: () => railLeaseOf(),
     typeAdd: (value) => frameRail.add.type(value),
     submitAdd: () => void frameRail.add.submit(),

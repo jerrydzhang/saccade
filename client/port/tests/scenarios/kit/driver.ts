@@ -129,12 +129,20 @@ export interface AppDriver {
   controlBox(control: string): Promise<Box | null>;
   /** A rendered control's visible text, or null. */
   controlText(control: string): Promise<string | null>;
+  /** Set the seeded repository's declared views (raw location
+   * strings) or null for none; takes effect at the next launch.
+   * Browser only. */
+  setDeclaredViews(views: string[] | null): Promise<void>;
+  /** Whether a rendered control carries the shown mark (aria-current):
+   * the rail's entry for what this window shows. */
+  shownMark(control: string): Promise<boolean>;
   /** Whether a port control is rendered now. */
   shows(control: string): Promise<boolean>;
-  /** The window strip's fields as rendered (location, status, link);
-   * status is "" while the view is simply loaded (the strip shows it
-   * only when loading or failed). */
-  strip(): Promise<{ location: string; status: string; link: string }>;
+  /** The window strip's fields as rendered (location, status, link,
+   * note); status is "" while the view is simply loaded (the strip
+   * shows it only when loading or failed), note is "" when the window
+   * has nothing to say. */
+  strip(): Promise<{ location: string; status: string; link: string; note: string }>;
   /** The select labels painted now (after s): each chip's text, the
    * part it marks, and whether it is drawn nested (t-63: its target
    * sits inside another labelled one). */

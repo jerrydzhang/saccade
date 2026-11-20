@@ -6,6 +6,8 @@
 // spellings of one narrowing are one location. A different spelling
 // changes this file and its tests and nothing else.
 
+import { isTasksPath } from "../location.ts";
+
 export type Narrowing = Readonly<{
   /** Lowercase, sorted, no repeats; empty when untagged. */
   tags: readonly string[];
@@ -52,6 +54,16 @@ export function parseNarrowing(opaque: string): NarrowingVerdict {
 /** The tasks path a narrowing spells: the canonical location tail. */
 export function narrowedPath(narrowing: Narrowing): string {
   return narrowing.untagged ? "tasks?untagged" : `tasks?tag=${narrowing.tags.join(",")}`;
+}
+
+/** The words a kept view of a tasks path shows on the rail: the tag
+ * names ("app, ui"), "untagged", or "tasks" for the whole list; null
+ * for a path that is no task list. */
+export function locationTitleOf(path: string): string | null {
+  const parsed = narrowingOfPath(path);
+  if (!parsed.ok || !isTasksPath(path)) return null;
+  if (parsed.narrowing === null) return "tasks";
+  return parsed.narrowing.untagged ? "untagged" : parsed.narrowing.tags.join(", ");
 }
 
 /** The query the tracker's tasks page takes for a narrowing. */

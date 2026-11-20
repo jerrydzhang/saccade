@@ -62,7 +62,29 @@ the canonical form (lowercase, sorted, no repeats), so differing
 spellings are one location. The list is held to what it asked: a
 tracker that does not echo the narrowing (before sac 0.22.2) is
 refused on the list's problem line, never shown whole. The picker
-offers each of the repository's tags. A window with no location is the empty window: the frame's own
+offers each of the repository's tags.
+
+The rail keeps views: a kept location, shown on the rail beneath its
+repository, above the instruments' own entries. Space k keeps the
+location the window shows; keeping one already kept says so on the
+strip's note. The device stores them under `saccade.views`, a map from
+each registered path to the canonical paths kept there, written
+without the repository's name (a renamed repository keeps them), and
+unregistering a repository forgets them. The declaration may offer
+views too: a top-level `views = ["tasks?tag=app", "tasks?untagged"]`
+before any section, locations inside the repository written without
+its name (the array may span lines). A view the file offers shows
+first, in the file's order, has no forget act, and says so in its
+menu; one the app cannot read is named under the repository and the
+rest still show. The frame holds canonical locations only; the
+instrument that claims a location spells it and words its label (the
+task list: `app, ui`, `untagged`, `tasks`; any other location shows
+its path). These three spellings are provisional: the file's line
+(`parseDeclaration` in `port/src/lib/projects.ts`), the key
+(`WINDOW_CHORDS` in `port/src/lib/input/contexts.ts`) and the label
+(`locationTitle`, the task list's in `port/src/lib/tasks/narrowing.ts`).
+
+A window with no location is the empty window: the frame's own
 surface, blank - and the window at launch is one.
 
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the

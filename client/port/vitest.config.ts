@@ -17,7 +17,7 @@ import type { Plugin } from "vite";
 import { playwright } from "@vitest/browser-playwright";
 import viteConfig from "./vite.config.ts";
 import { freePort } from "./tests/scenarios/kit/tracker.ts";
-import { portDrag, portWheel } from "./tests/scenarios/kit/pointer-commands.ts";
+import { portDrag, portSetViews, portWheel } from "./tests/scenarios/kit/pointer-commands.ts";
 
 const here = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
 
@@ -157,7 +157,7 @@ export default mergeConfig(
               // the port's controls carry data-port-control ids
               locators: { testIdAttribute: "data-port-control" },
               // real drag and wheel input (kit/pointer-commands.ts)
-              commands: { portDrag, portWheel },
+              commands: { portDrag, portSetViews, portWheel },
             },
           },
         },

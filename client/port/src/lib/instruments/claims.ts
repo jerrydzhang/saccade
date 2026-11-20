@@ -5,7 +5,7 @@
 // index.ts is the one file that names them).
 
 import type { Address } from "../contracts/places.ts";
-import { registeredInstruments } from "./registry.ts";
+import { instrumentForAddress as claimingInstrument, registeredInstruments } from "./registry.ts";
 
 export type InstrumentClaim = Readonly<{
   /** The instrument's registration kind (the registry's one). */
@@ -46,6 +46,13 @@ export function projectViewFor(project: string): string | null {
     if (view !== null) return view;
   }
   return null;
+}
+
+/** The words the claiming instrument offers for a kept view of an
+ * address (its path canonical), or null when it offers none: the rail
+ * then shows the path. */
+export function locationTitleFor(address: Address): string | null {
+  return claimingInstrument(address)?.locationTitle?.(address.path) ?? null;
 }
 
 /** The picker's task candidates on a tracker machine: the registered

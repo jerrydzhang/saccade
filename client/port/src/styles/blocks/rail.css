@@ -96,8 +96,14 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.port-rail-name[aria-current] {
+.port-rail-name[aria-current],
+.port-rail-entry[aria-current] {
   color: var(--port-color-ink-strong);
+}
+/* a kept view the window shows: the project's weight, since the shown
+ * project's fill already lies under every entry beneath it */
+.port-rail-entry[aria-current] {
+  font-weight: 600;
 }
 /* the foot group's heading names the group; it is no target */
 .port-rail-group {
@@ -117,6 +123,14 @@
   padding: 4px 8px;
   line-height: 24px;
   font-size: 0.875rem;
+}
+/* a kept view's words: one line in the entry's name column */
+.port-rail-view-label {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* the row component's root: it spans the entry's columns and lays its
  * cells on the entry's own tracks, so the cells sit exactly where they

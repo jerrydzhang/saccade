@@ -18,6 +18,7 @@ from the registry's reviewed erasure boundary. -->
   import FrameRail from "./components/FrameRail.svelte";
   import { railNoteFor } from "./lib/instruments/claims.ts";
   import type { FrameRailProject } from "./App.ts";
+  import type { RailViewEntry } from "./lib/frame/rail.ts";
   import type { TargetDefinition } from "./lib/contracts/buffer.ts";
 
   let port: PortWindow | null = null;
@@ -48,6 +49,7 @@ from the registry's reviewed erasure boundary. -->
   let railBeneath = $state<readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[]>([]);
   let railFoot = $state<readonly TargetDefinition[]>([]);
   let railNotes = $state<readonly { part: string; note: string }[]>([]);
+  let railViews = $state<readonly { project: string; entries: readonly RailViewEntry[]; notes: readonly string[] }[]>([]);
   let railSelectLabels = $state<readonly { part: string; label: string; nested?: boolean }[]>([]);
   let railSelectTyped = $state("");
   let railMenu = $state<import("./lib/menu/session.ts").MenuView | null>(null);
@@ -95,6 +97,9 @@ from the registry's reviewed erasure boundary. -->
         project,
         targets: windowPort.railTargets(project.name),
       }));
+      railViews = next
+        .map((project) => ({ project: project.part, ...windowPort.railViews(project.name) }))
+        .filter((group) => group.entries.length > 0 || group.notes.length > 0);
       railFoot = windowPort.railTargets(null);
       railNotes = next
         .map((project) => ({ part: project.part, note: railNoteFor(project.name) }))
@@ -184,6 +189,7 @@ from the registry's reviewed erasure boundary. -->
     }
     const project = part.startsWith("rail/project/") ? part.slice("rail/project/".length) : null;
     if (project !== null) port?.openSpec(`${project}/tasks`);
+    if (part.startsWith("rail/view/")) port?.openSpec(part.slice("rail/view/".length));
   }
 
   function railEntryMenu(part: string, event: MouseEvent): void {
@@ -243,6 +249,7 @@ from the registry's reviewed erasure boundary. -->
           beneath={railBeneath}
           foot={railFoot}
           notes={railNotes}
+          views={railViews}
           view={railState}
           shown={railShown}
           labels={railSelectLabels}

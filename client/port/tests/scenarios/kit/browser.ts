@@ -109,6 +109,13 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
     async shows(control) {
       return portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`) !== null;
     },
+    async setDeclaredViews(views) {
+      await (commands as unknown as { portSetViews(v: string[] | null): Promise<void> }).portSetViews(views);
+    },
+    async shownMark(control) {
+      const element = portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`);
+      return element !== null && element.hasAttribute("aria-current");
+    },
     async menuOpen() {
       return portWindow().document.querySelector("[data-port-menu]") !== null;
     },
@@ -132,7 +139,7 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
     async strip() {
       const field = (name: string): string =>
         portWindow().document.querySelector(`[data-port-strip=${JSON.stringify(name)}]`)?.textContent?.trim() ?? "";
-      return { location: field("location"), status: field("status"), link: field("link") };
+      return { location: field("location"), status: field("status"), link: field("link"), note: field("note") };
     },
     async activeMatch() {
       const element = portWindow().document.querySelector("[data-port-find-active]");
