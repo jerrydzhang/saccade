@@ -15790,11 +15790,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1794880950,
-        "narHash": "sha256-22JGtw+2GKBAQXKfEuJP8YmNYSDluYciW5J1zVrGi+c=",
+        "lastModified": 1794961302,
+        "narHash": "sha256-vcGf4MvxKRL7tGU1oCS+5nMegRawzSiE0QjpaywdXg4=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "69756adef341e6e2eb236e2722f84c4b8e7af6e0",
+        "rev": "676023ae465bedb544f0b0a3f8093aecd722c567",
         "type": "github"
       },
       "original": {
