@@ -14,6 +14,7 @@ directly. The wheel scrolls the rail and keeps the shown project in
 view; the reading keys never scroll it. -->
 <script lang="ts">
   import type { AddView } from "../lib/frame/add.ts";
+  import type { RailViewEntry } from "../lib/frame/rail.ts";
   import type { RailPublication } from "../contracts/buffer.ts";
   import type { MenuView } from "../lib/menu/session.ts";
   import LabelOverlay from "./LabelOverlay.svelte";
@@ -25,6 +26,7 @@ view; the reading keys never scroll it. -->
     beneath,
     foot,
     notes,
+    views,
     view,
     shown,
     labels,
@@ -50,6 +52,9 @@ view; the reading keys never scroll it. -->
     /** The unreachable notes under the project headers, keyed by the
      * project's rail id. */
     notes: readonly { part: string; note: string }[];
+    /** The kept views beneath each project (keyed by its rail id),
+     * with a note for each file view that cannot be read. */
+    views: readonly { project: string; entries: readonly RailViewEntry[]; notes: readonly string[] }[];
     view: { visible: boolean; footnote: string | null; add: AddView; pane: HTMLElement | null };
     /** The project this window shows: the rail's mark. */
     shown: string | null;
@@ -88,7 +93,7 @@ view; the reading keys never scroll it. -->
     if (lastPointer !== null && lastPointer.x === event.clientX && lastPointer.y === event.clientY) return;
     lastPointer = { x: event.clientX, y: event.clientY };
     const element = (event.target as HTMLElement | null)?.closest?.(
-      '[data-port-kind="project"], [data-port-kind="agent"]',
+      '[data-port-kind="project"], [data-port-kind="agent"], [data-port-kind="view"]',
     );
     hovered = element instanceof HTMLElement ? element.getAttribute("data-port-part") : null;
   }
@@ -173,6 +178,25 @@ view; the reading keys never scroll it. -->
           {#if noteFor(project.part) !== null}
             <div class="port-rail-note" title={noteFor(project.part) ?? undefined}>unreachable</div>
           {/if}
+          {#each views.find((group) => group.project === project.part)?.notes ?? [] as problem}
+            <div class="port-rail-note" data-port-control="rail-view-problem">{problem}</div>
+          {/each}
+          {#each views.find((group) => group.project === project.part)?.entries ?? [] as entry (entry.part)}
+            <button
+              class="port-rail-entry"
+              data-port-control={`rail-view-${entry.location}`}
+              data-port-part={entry.part}
+              data-port-kind="view"
+              data-port-title={entry.location}
+              data-port-hover={hovered === entry.part ? "" : undefined}
+              aria-current={entry.shown ? "page" : undefined}
+              onclick={(event) => entryActivate(partOf(event) ?? entry.part, event)}
+              oncontextmenu={(event) => {
+                event.preventDefault();
+                entryMenu(partOf(event) ?? entry.part, event);
+              }}
+            ><span class="port-rail-view-label">{entry.label}</span></button>
+          {/each}
           {#each beneath.find((group) => group.project.part === project.part)?.targets as publication (publication.target.id)}
             <button
               class="port-rail-entry"

@@ -14,7 +14,7 @@ const windowKeys = () =>
   windowContext({
     openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
     trailBack: (): boolean => true, trailForward: (): boolean => true,
-    toggleHistory: () => {}, linkByLabels: () => {}, unlink: () => {}, toggleRail: () => {}, registerProject: () => {}, showHelp: () => {},
+    toggleHistory: () => {}, linkByLabels: () => {}, unlink: () => {}, toggleRail: () => {}, registerProject: () => {}, keepView: () => {}, showHelp: () => {},
   });
 
 const boardKeys = () =>
@@ -34,7 +34,7 @@ test("which-key: the head is the pending prefix, the rows its next strokes, case
   assert.equal(view.prefix, "space");
   assert.deepEqual(
     view.rows.map((row) => row.key),
-    ["space", "h", "l", "u", "r", "a"],
+    ["space", "h", "l", "u", "r", "a", "k"],
     "space's continuations, in declaration order; no space /",
   );
   assert.equal(view.rows[0]!.label, "open a location");

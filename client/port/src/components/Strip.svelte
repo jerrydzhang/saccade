@@ -24,7 +24,7 @@ only; the view is the window's (App.ts stripView). -->
       data-port-strip-failed={shownStatus.failed ? "" : undefined}>{shownStatus.text}</span>
   {/if}
   {#if strip?.note}
-    <span class="port-strip-note">{strip.note}</span>
+    <span class="port-strip-note" data-port-strip="note">{strip.note}</span>
   {/if}
   {#if strip?.jumpChip}
     <span class="port-strip-chip">{strip.jumpChip}</span>

@@ -71,7 +71,7 @@ test("the pinned window chords run back/forward through the host matcher", () =>
       trailBack: (): boolean => { ran.push("back"); return true; },
       trailForward: (): boolean => { ran.push("forward"); return true; },
       linkByLabels: () => {},
-      toggleRail: () => {}, registerProject: () => {},
+      toggleRail: () => {}, registerProject: () => {}, keepView: () => {},
     unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
@@ -114,7 +114,7 @@ test("the seam carve-out names the prototype's six Ctrl chords and the column-wi
 
 test("the real port contexts validate at construction", () => {
   windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false, linkByLabels: () => {},
-    unlink: () => {}, toggleRail: () => {}, registerProject: () => {}, showHelp: () => {} });
+    unlink: () => {}, toggleRail: () => {}, registerProject: () => {}, keepView: () => {}, showHelp: () => {} });
   boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, scrollDown: () => {}, scrollUp: () => {}, scrollFraction: () => {}, enterSelect: () => {}, enterFind: () => {}, nextMatch: () => {}, prevMatch: () => {}, clearSearch: () => {}, readingLayout: () => {} });
 });
 
@@ -191,7 +191,7 @@ test("a stray key ends the pending sequence, closing its which-key, and still ru
       trailBack: (): boolean => true,
       trailForward: (): boolean => true,
       linkByLabels: () => {},
-      toggleRail: () => {}, registerProject: () => {},
+      toggleRail: () => {}, registerProject: () => {}, keepView: () => {},
       unlink: () => {}, showHelp: () => {},
     }),
     { scheduler, expirySuspended: () => true },
@@ -232,7 +232,7 @@ test("the window chain: space-space opens the picker at the window level; other 
       trailBack: (): boolean => { windowEvents.push("back"); return true; },
       trailForward: (): boolean => { windowEvents.push("forward"); return true; },
       linkByLabels: () => {},
-      toggleRail: () => {}, registerProject: () => {},
+      toggleRail: () => {}, registerProject: () => {}, keepView: () => {},
     unlink: () => {}, showHelp: () => {},
     }),
     { scheduler },
@@ -321,7 +321,7 @@ test("find is / alone: the window binds no space /, so / after space reaches the
       openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
       trailBack: (): boolean => true, trailForward: (): boolean => true,
       linkByLabels: () => {},
-      toggleRail: () => {}, registerProject: () => {}, unlink: () => {}, showHelp: () => {},
+      toggleRail: () => {}, registerProject: () => {}, keepView: () => {}, unlink: () => {}, showHelp: () => {},
     }),
     { scheduler: manualScheduler() },
   );

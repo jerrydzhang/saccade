@@ -25,6 +25,7 @@ export const WINDOW_CHORDS = {
   picker: [key(" "), key(" ")],
   rail: [key(" "), key("r")],
   register: [key(" "), key("a")],
+  keep: [key(" "), key("k")],
 } as const;
 
 export interface WindowActions {
@@ -47,6 +48,9 @@ export interface WindowActions {
   /** space-a: show the rail if it is hidden and open the add field
    * in it; Enter registers, nothing opens. */
   registerProject(): void;
+  /** space-k: keep the location this window shows as a view on the
+   * rail, beneath its repository. */
+  keepView(): void;
   /** ?: the help surface - the which-key popup over the ACTIVE
    * context's whole command table (a recorded deliberate
    * difference from the prototype's hand-curated list). */
@@ -152,6 +156,14 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.registerProject(),
       },
       keys: [sequence(...WINDOW_CHORDS.register)],
+    },
+    {
+      action: {
+        id: "window.keep-view",
+        label: "keep this location on the rail (beneath its repository)",
+        run: () => actions.keepView(),
+      },
+      keys: [sequence(...WINDOW_CHORDS.keep)],
     },
     {
       action: {

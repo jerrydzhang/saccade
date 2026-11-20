@@ -211,6 +211,9 @@ test("a project's acts: f shows its tasks here first; a opens the add field; d u
     capture: () => ({ release: () => {} }),
     open: (spec) => opened.push(spec),
     shownProject: () => null,
+    shownLocation: () => null,
+    elsewhere: () => {},
+    say: () => {},
   });
   rail.add.enter();
   rail.add.type("box:/srv/tasks-test");
@@ -332,6 +335,9 @@ test("a declared project with no tracker section is a plain rail entry: no benea
     capture: () => ({ release: () => {} }),
     open: () => {},
     shownProject: () => null,
+    shownLocation: () => null,
+    elsewhere: () => {},
+    say: () => {},
   });
   rail.start();
   try {
@@ -556,7 +562,7 @@ test("a declaration with no tracker section registers and lists; one that names 
   const registered = parseRegisteredPath("box:/srv/bare");
   assert.ok(registered !== null);
   const declaration = await projects.register(registered);
-  assert.deepEqual(declaration, { name: "bare", port: null }, "a declaration without a tracker section names the project alone");
+  assert.deepEqual(declaration, { name: "bare", port: null, views: [], viewsProblem: null }, "a declaration without a tracker section names the project alone");
   const listed = await projects.projects();
   assert.deepEqual(listed.map((project) => project.declaration.name), ["bare"]);
   assert.deepEqual(await projects.projectByName("bare"), listed[0]);

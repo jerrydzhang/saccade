@@ -10,6 +10,11 @@
 import { createAddProject, type AddProject, type AddView } from "./add.ts";
 import { theProjects } from "../asks.ts";
 import { projectViewFor } from "../instruments/claims.ts";
+import { canonicalAddress } from "../instruments/registry.ts";
+import { parseLocation } from "../location.ts";
+import { formatRegisteredPath, type Declaration } from "../projects.ts";
+import { deviceViews, forgetDeviceView, keepDeviceView } from "../views.ts";
+import { readView, resolveViews, type RailView } from "./views.ts";
 import { registeredInstruments } from "../instruments/registry.ts";
 import type { InputContext } from "../contracts/input.ts";
 import type { RailPublication, TargetDefinition } from "../contracts/buffer.ts";
@@ -25,6 +30,10 @@ export type FrameRailProject = {
   part: string;
 };
 
+/** A kept view as the pane draws it: the entry's rail id, the words,
+ * and whether this window shows exactly that location. */
+export type RailViewEntry = RailView & { shown: boolean };
+
 export const projectPart = (name: string): string => `rail/project/${name}`;
 
 export interface FrameRailDeps {
@@ -36,6 +45,13 @@ export interface FrameRailDeps {
   /** The project this window shows, when it shows one: the rail's
    * mark. */
   shownProject(): string | null;
+  /** The canonical location this window shows, when it shows one. */
+  shownLocation(): string | null;
+  /** Open a location through the elsewhere acts (the window's own
+   * link, ask or new window). */
+  elsewhere(spec: string, act: "link" | "once" | "new"): void;
+  /** Say something on the window's strip note. */
+  say(text: string): void;
 }
 
 /** The seam's publications: beneath each project's header, then the
@@ -65,6 +81,10 @@ export function createFrameRail(deps: FrameRailDeps) {
   const forgotten = new Set<string>();
   let registeredNames: string[] = [];
   let pathsByName = new Map<string, { machine: string; path: string }>();
+  let declarationsByName = new Map<string, Declaration>();
+  // what the pane was last told is shown: the mark moves when the
+  // window's location does, not only on the poll
+  let notifiedShown: string | null = null;
 
   function railCurrent(): string | null {
     const current = deps.shownProject();
@@ -82,6 +102,7 @@ export function createFrameRail(deps: FrameRailDeps) {
   }
 
   function notifyRail(): void {
+    notifiedShown = deps.shownLocation();
     const projects = projectsNow();
     for (const observer of [...railObservers]) observer(projects);
   }
@@ -95,9 +116,11 @@ export function createFrameRail(deps: FrameRailDeps) {
       pathsByName = new Map(
         projects.map((project) => [project.declaration.name, { machine: project.machine, path: project.path }]),
       );
+      declarationsByName = new Map(projects.map((project) => [project.declaration.name, project.declaration]));
     } catch {
       registeredNames = [];
       pathsByName = new Map();
+      declarationsByName = new Map();
     }
     notifyRail();
   }
@@ -110,6 +133,102 @@ export function createFrameRail(deps: FrameRailDeps) {
     forgotten.add(project);
     registeredNames = registeredNames.filter((name) => name !== project);
     notifyRail();
+  }
+
+  // -- the kept views: the file's and this device's ------------------
+  function viewsOf(name: string): { views: RailView[]; problems: string[] } {
+    const declaration = declarationsByName.get(name);
+    const registered = pathsByName.get(name);
+    if (declaration === undefined || registered === undefined) return { views: [], problems: [] };
+    const resolved = resolveViews(
+      name,
+      declaration.views,
+      deviceViews(formatRegisteredPath(registered)),
+    );
+    if (declaration.viewsProblem !== null) {
+      resolved.problems.unshift(`workbench.toml views cannot be read: ${declaration.viewsProblem}`);
+    }
+    return resolved;
+  }
+
+  /** A project's views as the pane draws them. */
+  function railViews(name: string): { entries: RailViewEntry[]; notes: string[] } {
+    const shown = deps.shownLocation();
+    const { views, problems } = viewsOf(name);
+    return {
+      entries: views.map((view) => ({ ...view, shown: shown === view.location })),
+      notes: problems,
+    };
+  }
+
+  function viewActs(name: string, view: RailView): import("../contracts/buffer.ts").TargetAct[] {
+    const elsewhere = (act: "link" | "once" | "new", label: string): import("../contracts/buffer.ts").TargetAct => ({
+      key: act === "link" ? "o" : act === "once" ? "i" : "w",
+      action: { id: `rail.view.elsewhere.${act}`, label, run: () => deps.elsewhere(view.location, act) },
+    });
+    const acts: import("../contracts/buffer.ts").TargetAct[] = [
+      {
+        key: "f",
+        action: { id: "rail.view.show", label: `show ${view.location} here`, run: () => deps.open(view.location) },
+      },
+      elsewhere("link", "open (through the link, or ask once)"),
+      elsewhere("once", "open in... (ask; keep the link)"),
+      elsewhere("new", "open in a new window"),
+    ];
+    // a view the file offers is the file's to drop; only a view this
+    // device kept can be forgotten here
+    if (view.source === "device") {
+      acts.push({
+        key: "d",
+        action: {
+          id: "rail.view.forget",
+          label: "forget this view (the location itself is untouched)",
+          run: () => forgetView(name, view),
+        },
+      });
+    }
+    return acts;
+  }
+
+  function forgetView(name: string, view: RailView): void {
+    const registered = pathsByName.get(name);
+    if (registered === undefined) return;
+    forgetDeviceView(formatRegisteredPath(registered), view.path);
+    notifyRail();
+  }
+
+  /** Space k: keep the location this window shows beneath its
+   * repository. The strip note says why when nothing is kept. */
+  function keepShown(): void {
+    const asked = deps.shownLocation();
+    if (asked === null) {
+      deps.say("no view to keep: this window shows no location");
+      return;
+    }
+    const address = parseLocation(asked);
+    const name = address !== null && address.machine.startsWith("tracker:") ? address.machine.slice("tracker:".length) : null;
+    const registered = name === null ? undefined : pathsByName.get(name);
+    if (address === null || name === null || registered === undefined) {
+      deps.say(`cannot keep ${asked}: it belongs to no registered repository`);
+      return;
+    }
+    const canonical = canonicalAddress(address);
+    if (!canonical.ok) {
+      deps.say(`cannot keep ${asked}: ${canonical.refusal}`);
+      return;
+    }
+    const verdict = readView(name!, canonical.address.path);
+    if (!verdict.ok) {
+      deps.say(`cannot keep ${asked}: ${verdict.refusal}`);
+      return;
+    }
+    if (viewsOf(name!).views.some((view) => view.location === verdict.location)) {
+      deps.say(`already kept: ${verdict.location}`);
+      return;
+    }
+    keepDeviceView(formatRegisteredPath(registered), verdict.path);
+    notifyRail();
+    deps.say(`kept ${verdict.location} beneath ${name}`);
   }
 
   // -- the add field: registering opens nothing -----------------------
@@ -139,6 +258,19 @@ export function createFrameRail(deps: FrameRailDeps) {
       acts: () => projectActs(project),
       anchor: null,
     }));
+    for (const project of projects) {
+      for (const view of viewsOf(project.name).views) {
+        out.push({
+          id: view.part,
+          kind: "view",
+          label: view.source === "file" ? `${view.location} (offered by workbench.toml)` : view.location,
+          inside: project.part,
+          clickable: true,
+          acts: () => viewActs(project.name, view),
+          anchor: null,
+        });
+      }
+    }
     out.push(...targetsBeneathAndFoot(projects));
     return out;
   }
@@ -190,6 +322,15 @@ export function createFrameRail(deps: FrameRailDeps) {
       notifyRail();
     },
     forget,
+    /** The project's kept views, as the pane draws them. */
+    railViews,
+    /** Space k. */
+    keepShown,
+    /** The pane's mark follows the window: re-notify when the shown
+     * location moved since the pane was last told. */
+    refreshIfShownMoved(): void {
+      if (deps.shownLocation() !== notifiedShown) notifyRail();
+    },
     /** The add field: the frame's registration act. */
     add,
 

@@ -43,6 +43,10 @@ export type InstrumentDefinition<
   /** Validate and canonicalize the narrowing a location this
    * instrument claims carries; absent, the instrument takes none. */
   canonicalNarrowing?(opaque: string): NarrowingVerdict;
+  /** The words the rail shows for a kept view of a location this
+   * instrument claims: the path inside the repository (canonical, no
+   * repository name), or null to show the path itself. */
+  locationTitle?(path: string): string | null;
   /** The targets this instrument publishes beneath a project's rail
    * entry (its `inside` names the project's rail id), or at the rail's
    * foot when the project is null. The instrument's own data, read and

@@ -9,34 +9,66 @@
 
 import type { Machine, MachineAsks } from "./asks.ts";
 import { SourceUnavailableError } from "./board/errors.ts";
+import { forgetDeviceViews } from "./views.ts";
 
 const PROJECTS_KEY = "saccade.projects";
 
-/** What a declaration file says: the project's name, and its
- * tracker's port when it declares one - a project with no [tracker]
- * section registers and lists, it just has no tracker source. */
+/** What a declaration file says: the project's name, its tracker's
+ * port when it declares one - a project with no [tracker] section
+ * registers and lists, it just has no tracker source - and the views
+ * it offers, each a location inside the repository written without
+ * the repository's name, raw as the file spells it. A views line the
+ * parser cannot read leaves `views` empty and says why in
+ * `viewsProblem`; it never touches the name or the port. */
 export type Declaration = {
   name: string;
   port: number | null;
+  views: string[];
+  viewsProblem: string | null;
 };
 
+const VIEWS_PROBLEM = 'views must be a list of quoted locations: views = ["tasks?tag=app"]';
+
+/** The quoted strings of a views array's text ("[...]"), or null when
+ * the text is no such list. A trailing comma is allowed. */
+function parseViewList(text: string): string[] | null {
+  const body = /^\[([\s\S]*)\]$/.exec(text.trim());
+  if (body === null || body[1] === undefined) return null;
+  const out: string[] = [];
+  let rest = body[1].trim();
+  while (rest.length > 0) {
+    const item = /^"([^"]*)"\s*(,\s*|$)/.exec(rest);
+    if (item === null || item[1] === undefined) return null;
+    out.push(item[1]);
+    rest = rest.slice(item[0].length).trim();
+  }
+  return out;
+}
+
 /** The declaration file's one shape (the ratified single-project
- * form): `name = "..."`, then an optional `[tracker]` section
- * carrying `port = N`. Anything else is ignored; a file that names no
- * project is not a declaration. */
+ * form): `name = "..."`, a top-level `views = [...]` before any
+ * section (the array may span lines), then an optional `[tracker]`
+ * section carrying `port = N`. Anything else is ignored; a file that
+ * names no project is not a declaration. */
 export function parseDeclaration(text: string): Declaration | null {
   let name: string | null = null;
   let port: number | null = null;
+  let views: string[] | null = null;
+  let viewsProblem: string | null = null;
   let inTracker = false;
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.replace(/(^|\s)#.*$/, "").trim();
+  let inSection = false;
+  const lines = text.split("\n").map((raw) => raw.replace(/(^|\s)#.*$/, "").trim());
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
     if (line.length === 0) continue;
     if (line === "[tracker]") {
       inTracker = true;
+      inSection = true;
       continue;
     }
     if (line.startsWith("[") && line.endsWith("]")) {
       inTracker = false;
+      inSection = true;
       continue;
     }
     const assign = /^([A-Za-z0-9_-]+)\s*=\s*(.+)$/.exec(line);
@@ -48,6 +80,24 @@ export function parseDeclaration(text: string): Declaration | null {
       if (quoted && quoted[1] !== undefined) name = quoted[1];
       continue;
     }
+    if (key === "views" && !inSection && views === null && viewsProblem === null) {
+      // the array may run over several lines: read on until the
+      // closing bracket
+      let array = value;
+      while (
+        array.startsWith("[") &&
+        !array.trimEnd().endsWith("]") &&
+        at + 1 < lines.length &&
+        !/^\[[A-Za-z0-9_.-]+\]$/.test(lines[at + 1] ?? "")
+      ) {
+        at += 1;
+        array += ` ${lines[at] ?? ""}`;
+      }
+      const parsed = parseViewList(array);
+      if (parsed === null) viewsProblem = VIEWS_PROBLEM;
+      else views = parsed;
+      continue;
+    }
     if (key === "port" && inTracker && port === null) {
       const number = /^\d+$/.exec(value);
       if (number) {
@@ -57,7 +107,7 @@ export function parseDeclaration(text: string): Declaration | null {
     }
   }
   if (name === null || name.trim().length === 0) return null;
-  return { name, port };
+  return { name, port, views: views ?? [], viewsProblem };
 }
 
 function readStore(): string[] {
@@ -174,6 +224,8 @@ export class ProjectRegistry {
   forget(registered: RegisteredPath): void {
     const key = formatRegisteredPath(registered);
     writeStore(readStore().filter((entry) => entry !== key));
+    // the views the device kept beneath it go with it
+    forgetDeviceViews(key);
     this.cache.delete(key);
     this.changed();
   }

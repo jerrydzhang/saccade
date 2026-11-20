@@ -22,7 +22,7 @@ import { serveRailAgents } from "./tasksRail.ts";
 import { sourceFor } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { isTasksPath } from "../lib/location.ts";
-import { narrowedPath, parseNarrowing } from "../lib/tasks/narrowing.ts";
+import { locationTitleOf, narrowedPath, parseNarrowing } from "../lib/tasks/narrowing.ts";
 import { tasksPageOf } from "../lib/tasks/page.ts";
 
 export * from "./tasksController.ts";
@@ -57,6 +57,7 @@ export function register(): RegisteredInstrument {
       const verdict = parseNarrowing(opaque);
       return verdict.ok ? { ok: true, canonical: verdict.canonical } : verdict;
     },
+    locationTitle: locationTitleOf,
     railTargets: (project) => railData.railTargets(project),
     railNote: (project) => railData.railNote(project),
     railFootnote: () => railData.railFootnote(),
