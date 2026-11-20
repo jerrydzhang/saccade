@@ -389,13 +389,15 @@ in
                 # race at runtime), so the server always joins the machine
                 # core through the system binary
                 env.SACCADE_HERDR = "/etc/profiles/per-user/jerry/bin/herdr-core";
-                # the served repository is the checkout this shell sits
-                # in, read at start: a moved or renamed checkout needs no
-                # edit here
+                # the served repository is the main checkout, read at
+                # start: the parent of the shared git directory, so a
+                # workspace's shell serves the repository's one record
+                # (never the workspace as a record of its own) and a
+                # moved or renamed checkout needs no edit here
                 exec = ''
                   ${
                     saccade.packages.${system}.default
-                  }/bin/sac serve --repo "$(${pkgs.git}/bin/git -C ${lib.escapeShellArg config.devenv.root} rev-parse --show-toplevel)" --bind 0.0.0.0 --port 8811
+                  }/bin/sac serve --repo "$(${pkgs.coreutils}/bin/dirname "$(${pkgs.git}/bin/git -C ${lib.escapeShellArg config.devenv.root} rev-parse --path-format=absolute --git-common-dir)")" --bind 0.0.0.0 --port 8811
                 '';
                 restart = {
                   on = "on_failure";
