@@ -50,6 +50,27 @@ export type MenuGeometry = { menu: Box; target: Box | null; part: string; viewpo
 /** One painted find mark (AppDriver.findMarks). */
 export type FindMark = { part: string | null; text: string; active: boolean };
 
+/** What the window did while one shell request waited on a late
+ * answer (AppDriver.lateAnswer). Times are milliseconds. */
+export type LateAnswer = {
+  /** From the request reaching the slow server to its answer reaching
+   * the page. */
+  answeredMs: number;
+  /** From the request reaching the slow server to the page's first
+   * keydown: how long the window could not take a key. */
+  firstKeyMs: number;
+  /** Each key's delay from its send to the page's keydown. */
+  keyDelaysMs: number[];
+  /** Whether every key reached the page before the answer did. */
+  keysBeforeAnswer: boolean;
+  /** How long a plain shell command asked 200 ms into the wait took
+   * to answer: it runs on the interface's own thread, the one that
+   * draws the window and takes its keys. */
+  plainAskMs: number;
+  /** Whether that plain command answered before the late one did. */
+  plainBeforeAnswer: boolean;
+};
+
 /** A fresh app: one window, no launch restore, its own data. */
 export interface AppDriver {
   /** The lane's seeded registered path ("machine:/path/to/repository"),
@@ -142,6 +163,12 @@ export interface AppDriver {
   windows(): Promise<string[]>;
   /** Route input and the default readout to a window. */
   focusWindow(label: string): Promise<void>;
+  /** One request through the shell's local request command to a
+   * loopback server that answers `lateMs` late, as a far machine
+   * would; `keys` are pressed while it is outstanding. Reports how
+   * the window drew and took keys meanwhile. Native only: the browser
+   * driver has no shell and refuses. */
+  lateAnswer(lateMs: number, keys: string[]): Promise<LateAnswer>;
 }
 
 /** The readout's input field (batch 3, served by D6): the input

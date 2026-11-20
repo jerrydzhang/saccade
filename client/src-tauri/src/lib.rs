@@ -79,7 +79,7 @@ pub fn run() {
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some((name, on)) = commands::deck_address() {
-                    let deletion = std::panic::catch_unwind(|| commands::deck_delete(name, on));
+                    let deletion = std::panic::catch_unwind(|| commands::deck_delete_now(name, on));
                     eprintln!(
                         "[bridge] deck delete at close: {}",
                         match deletion {

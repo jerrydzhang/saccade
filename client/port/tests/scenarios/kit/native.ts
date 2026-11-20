@@ -10,13 +10,15 @@
 // sandbox it refuses; it never reaches for the person's display.
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, openSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test as base, inject } from "vitest";
 import { Key, remote } from "webdriverio";
 
-import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
+import type { AppDriver, LateAnswer, PortObservation, Tracker } from "./driver.ts";
 import { freePort } from "./tracker.ts";
 import { pinned } from "./native-env.ts";
 import { trackerDoor } from "./tracker-wire.ts";
@@ -344,6 +346,9 @@ async function launch(runRoot: string, registered: string, reuse?: string): Prom
       if (handle === undefined) throw new Error(`no window carries the label ${label}`);
       await browser.switchToWindow(handle);
     },
+    async lateAnswer(lateMs, keys) {
+      return lateAnswer(browser, lateMs, keys);
+    },
   };
   // the app's own boot is the readiness: its readout door answers
   await expect
@@ -360,6 +365,98 @@ async function launch(runRoot: string, registered: string, reuse?: string): Prom
       }
     },
   };
+}
+
+type LateProbe = {
+  answeredAt: number | null;
+  failed: string | null;
+  keys: number[];
+  plainAskedAt: number | null;
+  plainAnsweredAt: number | null;
+};
+
+// One shell request held open by a loopback server that answers late:
+// once the server holds the request the keys are sent, and the page
+// also asks a plain shell command, which runs on the interface's own
+// thread - the thread that draws the window and takes its keys - so
+// its answer says when that thread was free. The page records its
+// keydowns; page and driver share this machine's clock (Date.now).
+// The lane's headless compositor runs no animation frames even for a
+// quiet window, so drawing cannot be read from frames here.
+async function lateAnswer(browser: Browser, lateMs: number, keys: string[]): Promise<LateAnswer> {
+  let arrived: (at: number) => void = () => {};
+  const arrival = new Promise<number>((resolve) => {
+    arrived = resolve;
+  });
+  const server = createServer((_request, response) => {
+    arrived(Date.now());
+    setTimeout(() => response.end("late"), lateMs);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    // the script's own return is not awaited first: while the shell
+    // holds the request on the interface's thread, the driver's
+    // answer waits too, and that wait is part of the stall
+    const asking = browser.execute((machine: string, port: number) => {
+      type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+      const page = window as unknown as { __TAURI_INTERNALS__: { invoke: Invoke }; __saccadeLateProbe?: LateProbe };
+      const probe: LateProbe = { answeredAt: null, failed: null, keys: [], plainAskedAt: null, plainAnsweredAt: null };
+      page.__saccadeLateProbe = probe;
+      const key = (event: KeyboardEvent): void => {
+        if (!["Shift", "Control", "Alt", "Meta"].includes(event.key)) probe.keys.push(Date.now());
+      };
+      window.addEventListener("keydown", key, true);
+      void page.__TAURI_INTERNALS__
+        .invoke("local_request", { on: machine, port, route: "/late" })
+        .then(
+          () => {
+            probe.answeredAt = Date.now();
+          },
+          (error: unknown) => {
+            probe.failed = JSON.stringify(error);
+          },
+        );
+      window.setTimeout(() => {
+        probe.plainAskedAt = Date.now();
+        void page.__TAURI_INTERNALS__.invoke("viewer_identity", {}).then(() => {
+          probe.plainAnsweredAt = Date.now();
+        });
+      }, 200);
+      // a key held up by the wait arrives after the answer: the
+      // listener stays until every key has arrived
+      window.setTimeout(() => window.removeEventListener("keydown", key, true), 60_000);
+    }, pinned().SAC_APP_HERDR_MACHINE, port);
+    const heldAt = await arrival;
+    await asking;
+    const sent: number[] = [];
+    for (const key of keys) {
+      sent.push(Date.now());
+      await stroke(browser, key);
+    }
+    const read = async (): Promise<LateProbe> =>
+      JSON.parse(await browser.execute(() => JSON.stringify((window as unknown as { __saccadeLateProbe: LateProbe }).__saccadeLateProbe))) as LateProbe;
+    await expect
+      .poll(async () => {
+        const probe = await read();
+        return probe.failed !== null
+          || (probe.answeredAt !== null && probe.plainAnsweredAt !== null && probe.keys.length >= keys.length);
+      }, { timeout: lateMs + 30_000 })
+      .toBe(true);
+    const probe = await read();
+    if (probe.failed !== null) throw new Error(`the late request failed: ${probe.failed}`);
+    const answeredAt = probe.answeredAt!;
+    return {
+      answeredMs: answeredAt - heldAt,
+      firstKeyMs: probe.keys[0]! - heldAt,
+      keyDelaysMs: probe.keys.map((at, index) => at - sent[index]!),
+      keysBeforeAnswer: probe.keys.every((at) => at < answeredAt),
+      plainAskMs: probe.plainAnsweredAt! - probe.plainAskedAt!,
+      plainBeforeAnswer: probe.plainAnsweredAt! < answeredAt,
+    };
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 // the lane's run root when inside the sandbox (SHOTS_DIR is its

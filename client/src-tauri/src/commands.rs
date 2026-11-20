@@ -176,6 +176,19 @@ fn core_failure(fail: CoreFail) -> BridgeError {
     }
 }
 
+/// A command that waits on the core, a program or another machine
+/// runs here, on a blocking thread: a plain command runs on the
+/// interface's own thread, and a request to a far machine would hold
+/// the window's drawing and keys for its whole length. The work and
+/// its answer are the command's own; only the thread differs.
+async fn off_the_interface<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, BridgeError> + Send + 'static,
+) -> Result<T, BridgeError> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| deny("the bridge task failed"))?
+}
+
 /// The one file write the suite makes (t-14 ratified item 3, t-24@r21):
 /// an explainer annotation submit. One exact-text replacement through
 /// the local core's `file.edit` - all-or-none, old found exactly once -
@@ -184,7 +197,16 @@ fn core_failure(fail: CoreFail) -> BridgeError {
 /// elsewhere). Identity-free: a file write lands no record, so the
 /// log line below is the act's trace.
 #[tauri::command]
-pub fn edit_declaration(
+pub async fn edit_declaration(
+    path: String,
+    old: String,
+    new: String,
+    on: Option<String>,
+) -> Result<EditedText, BridgeError> {
+    off_the_interface(move || edit_declaration_now(path, old, new, on)).await
+}
+
+fn edit_declaration_now(
     path: String,
     old: String,
     new: String,
@@ -331,7 +353,14 @@ fn core_machine_label(machine: &str) -> String {
 }
 
 #[tauri::command]
-pub fn read_declaration(path: String, on: Option<String>) -> Result<DeclaredText, BridgeError> {
+pub async fn read_declaration(
+    path: String,
+    on: Option<String>,
+) -> Result<DeclaredText, BridgeError> {
+    off_the_interface(move || read_declaration_now(path, on)).await
+}
+
+fn read_declaration_now(path: String, on: Option<String>) -> Result<DeclaredText, BridgeError> {
     if path.is_empty() {
         return Err(deny("empty path"));
     }
@@ -370,7 +399,15 @@ fn read_asset_remote(machine: &str, base: &str, relative: &str) -> Result<Vec<u8
 }
 
 #[tauri::command]
-pub fn read_asset(
+pub async fn read_asset(
+    base: String,
+    relative: String,
+    on: Option<String>,
+) -> Result<Vec<u8>, BridgeError> {
+    off_the_interface(move || read_asset_now(base, relative, on)).await
+}
+
+fn read_asset_now(
     base: String,
     relative: String,
     on: Option<String>,
@@ -466,7 +503,11 @@ fn local_request_argv(port: u16, route: &str) -> Result<Vec<String>, BridgeError
 /// webview names the machine, the port and the route; nothing else
 /// crosses this line.
 #[tauri::command]
-pub fn local_request(on: String, port: u16, route: String) -> Result<Vec<u8>, BridgeError> {
+pub async fn local_request(on: String, port: u16, route: String) -> Result<Vec<u8>, BridgeError> {
+    off_the_interface(move || local_request_now(on, port, route)).await
+}
+
+fn local_request_now(on: String, port: u16, route: String) -> Result<Vec<u8>, BridgeError> {
     let argv = local_request_argv(port, &route)?;
     let client = core_client()?;
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -588,7 +629,7 @@ mod tests {
             ("/abs", "a\0".to_string(), "b".to_string()),
             ("/abs", "a".to_string(), "b\0".to_string()),
         ] {
-            let failure = super::edit_declaration(path.into(), old, new, Some("".into()))
+            let failure = super::edit_declaration_now(path.into(), old, new, Some("".into()))
                 .expect_err("refused");
             assert_eq!(failure.code, "asset-denied", "{failure:?}");
         }
@@ -596,7 +637,7 @@ mod tests {
 
     #[test]
     fn an_edit_without_a_resolved_machine_is_refused() {
-        let failure = super::edit_declaration("/abs/x.yaml".into(), "a".into(), "b".into(), None)
+        let failure = super::edit_declaration_now("/abs/x.yaml".into(), "a".into(), "b".into(), None)
             .expect_err("refused");
         assert_eq!(failure.code, "asset-denied");
         assert!(failure.message.contains("bare paths"), "{failure:?}");
@@ -754,7 +795,11 @@ fn deck_name_guard(name: &str) -> Result<(), BridgeError> {
 /// A conflict means the name is not fresh - the frontend generates a
 /// new address rather than adopting a document it did not create.
 #[tauri::command]
-pub fn deck_create(name: String, on: String) -> Result<u64, BridgeError> {
+pub async fn deck_create(name: String, on: String) -> Result<u64, BridgeError> {
+    off_the_interface(move || deck_create_now(name, on)).await
+}
+
+fn deck_create_now(name: String, on: String) -> Result<u64, BridgeError> {
     deck_name_guard(&name)?;
     deck_machine_guard(&on)?;
     let client = core_client()?;
@@ -780,7 +825,11 @@ pub struct DeckDoc {
 }
 
 #[tauri::command]
-pub fn deck_read(name: String, on: String) -> Result<DeckDoc, BridgeError> {
+pub async fn deck_read(name: String, on: String) -> Result<DeckDoc, BridgeError> {
+    off_the_interface(move || deck_read_now(name, on)).await
+}
+
+fn deck_read_now(name: String, on: String) -> Result<DeckDoc, BridgeError> {
     deck_name_guard(&name)?;
     deck_machine_guard(&on)?;
     let client = core_client()?;
@@ -797,7 +846,14 @@ pub fn deck_read(name: String, on: String) -> Result<DeckDoc, BridgeError> {
 /// already gone is success - the address is dead either way. Best
 /// effort and bounded: the close path never hangs on it.
 #[tauri::command]
-pub fn deck_delete(name: String, on: String) -> Result<(), BridgeError> {
+pub async fn deck_delete(name: String, on: String) -> Result<(), BridgeError> {
+    off_the_interface(move || deck_delete_now(name, on)).await
+}
+
+/// The delete itself, for the command and for the close hook, which
+/// runs it in place: the window is closing and the hook must finish
+/// before it does.
+pub fn deck_delete_now(name: String, on: String) -> Result<(), BridgeError> {
     deck_name_guard(&name)?;
     deck_machine_guard(&on)?;
     let client = core_client()?;
@@ -841,7 +897,11 @@ pub enum DeckFeedMessage {
 /// only timer is the hold's own deadline, and the core's heartbeat
 /// sits far inside it.
 #[tauri::command]
-pub fn deck_watch(name: String, on: String) -> Result<(), BridgeError> {
+pub async fn deck_watch(name: String, on: String) -> Result<(), BridgeError> {
+    off_the_interface(move || deck_watch_now(name, on)).await
+}
+
+fn deck_watch_now(name: String, on: String) -> Result<(), BridgeError> {
     deck_name_guard(&name)?;
     deck_machine_guard(&on)?;
     let socket = SocketTransport::default_path().map_err(core_failure)?;
