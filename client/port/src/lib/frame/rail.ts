@@ -192,11 +192,6 @@ export function createFrameRail(deps: FrameRailDeps) {
     forget,
     /** The add field: the frame's registration act. */
     add,
-    /** Whether any project is registered (the empty window's third
-     * line). */
-    registered(): boolean {
-      return registeredNames.length > 0;
-    },
 
     /** The rail's targets: the project headers the frame owns, then
      * whatever the claims seam publishes beneath each, then the foot

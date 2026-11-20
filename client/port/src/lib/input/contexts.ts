@@ -6,12 +6,10 @@
 import {
   commandContext,
   ctrl,
-  formatSequence,
   key,
   sequence,
   type CommandBinding,
   type InputContext,
-  type KeySequence,
 } from "./input-context.ts";
 import { validateNoCollisions } from "./key-matcher.ts";
 import type { ReadingLayoutChange } from "../board/reading-layout.ts";
@@ -22,23 +20,12 @@ import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 // Escape closes the picker only while it is open. Find belongs to
 // the reading instrument, not this window command table: it is `/`
 // alone, bound in the board's reading context (no space /).
-/** The window chords, declared once: the bindings below and the
- * empty window's lines read the same constants, so a rebind cannot
- * leave one telling the human the other's key. */
+/** The window chords, declared once. */
 export const WINDOW_CHORDS = {
   picker: [key(" "), key(" ")],
   rail: [key(" "), key("r")],
   register: [key(" "), key("a")],
 } as const;
-
-/** The chord's name as the human reads it ("Space r"): the shared
- * formatter's strokes, each capitalized. */
-export function chordName(sequence: KeySequence): string {
-  return formatSequence(sequence)
-    .split(" ")
-    .map((word) => (word === "spc" ? "Space" : word.charAt(0).toUpperCase() + word.slice(1)))
-    .join(" ");
-}
 
 export interface WindowActions {
   openPicker(): void;

@@ -54,9 +54,7 @@ claim (`port/src/lib/instruments/` - the task list claims
 `name/tasks`); the frame never names an instrument (the suite holds
 the boundary: no frame file imports an instrument, the assembly names
 none). A window with no location is the empty window: the frame's own
-surface, three lines - Space Space open something, Space r show
-projects, and Space a register a project while no project is
-registered - and the window at launch is one.
+surface, blank - and the window at launch is one.
 
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the
 features first asked for, but was never usable enough for any of them to

@@ -40,18 +40,14 @@ test("Space a shows the rail, registers machine:/path, and opens nothing", async
   await app.type(`machine:${tracker.repoPath}`);
   await app.press("Enter");
   // the project joined the rail: its entry is on screen, nothing
-  // opened (the window stays the empty window); the third line
-  // disappears with the registry's state
+  // opened (the window stays the empty window)
   const after = await app.readout();
   expect(after.tasks?.project ?? null).toBe(null);
   expect(await app.windows()).toEqual(["main"]);
   // the field closes once the registration's declaration read answers
   await expect.poll(async () => (await app.readout()).railAdd?.open ?? null).toBe(false);
   await expect.poll(() => app.shows(`project-${tracker.repo}`), { timeout: 20_000 }).toBe(true);
-  await expect.poll(() => app.shows("empty-register")).toBe(false);
   expect(await app.shows("empty-surface")).toBe(true);
-  expect(await app.shows("empty-open")).toBe(true);
-  expect(await app.shows("empty-projects")).toBe(true);
 
   // Escape left no field behind: Space a again opens it, Escape leaves
   await app.press(" ", "a");

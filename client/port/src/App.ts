@@ -84,11 +84,9 @@ export const WHICH_KEY_DELAY_MS = 400;
 
 /** The frame rail's live view: the pane renders from it. The pane
  * element registers itself (attachRailPane) so the rail targets'
- * bounds measure in it; `registered` says whether any project is on
- * the rail (the empty window's third line). */
+ * bounds measure in it. */
 export interface FrameRailView {
   visible: boolean;
-  registered: boolean;
   /** The words feed's note (why the agents' words may be stale). */
   footnote: string | null;
   add: Readonly<{ open: boolean; value: string; problem: string | null }>;
@@ -261,7 +259,6 @@ export function createPortWindow(windowId = "main"): PortWindow {
   function railStateView(): FrameRailView {
     return {
       visible: railVisible && !railCramped,
-      registered: frameRail.registered(),
       // the words feed's note rides the claims face (the feed is the
       // instrument's own)
       footnote: railFootnote(),
@@ -1344,7 +1341,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     if (!requested) {
       // nothing was asked for (no restore, no test open): a window
       // with no location is the empty window - it stays one (the
-      // frame's empty surface names the ways out)
+      // frame's empty surface is blank)
       console.log(`[port] observation: ${JSON.stringify(readout())}`);
       return;
     }

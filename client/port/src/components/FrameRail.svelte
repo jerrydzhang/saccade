@@ -50,7 +50,7 @@ view; the reading keys never scroll it. -->
     /** The unreachable notes under the project headers, keyed by the
      * project's rail id. */
     notes: readonly { part: string; note: string }[];
-    view: { visible: boolean; registered: boolean; footnote: string | null; add: AddView; pane: HTMLElement | null };
+    view: { visible: boolean; footnote: string | null; add: AddView; pane: HTMLElement | null };
     /** The project this window shows: the rail's mark. */
     shown: string | null;
     /** The select session's labels over the presented set (the

@@ -16,7 +16,6 @@ from the registry's reviewed erasure boundary. -->
   import type { WhichKeyView } from "./lib/input/key-matcher.ts";
   import Strip from "./components/Strip.svelte";
   import FrameRail from "./components/FrameRail.svelte";
-  import { chordName, WINDOW_CHORDS } from "./lib/input/contexts.ts";
   import { railNoteFor } from "./lib/instruments/claims.ts";
   import type { FrameRailProject } from "./App.ts";
   import type { TargetDefinition } from "./lib/contracts/buffer.ts";
@@ -40,7 +39,6 @@ from the registry's reviewed erasure boundary. -->
   let inspection = $state<import("./lib/figures/inspection.ts").InspectionState | null>(null);
   let railState = $state<FrameRailView>({
     visible: false,
-    registered: false,
     footnote: null,
     notes: [],
     add: { open: false, value: "", problem: null },
@@ -274,16 +272,9 @@ from the registry's reviewed erasure boundary. -->
       <div class="port-frame-body">
         {#if frame !== null && frame.kind === "alive"}
           {#if frame.content.kind === "empty"}
-            <!-- the empty window: the frame's surface, no instrument
-            involved - three lines and nothing else; the third appears
-            with the registry's state -->
-            <div class="port-empty" data-port-control="empty-surface" role="document">
-              <p class="port-empty-line" data-port-control="empty-open">{chordName(WINDOW_CHORDS.picker)} open something</p>
-              <p class="port-empty-line" data-port-control="empty-projects">{chordName(WINDOW_CHORDS.rail)} show projects</p>
-              {#if !railState.registered}
-                <p class="port-empty-line" data-port-control="empty-register">{chordName(WINDOW_CHORDS.register)} register a project</p>
-              {/if}
-            </div>
+            <!-- the empty window: the frame's surface, blank; no instrument
+            involved -->
+            <div class="port-empty" data-port-control="empty-surface" role="document"></div>
           {:else if frame.content.kind === "available"}
             {@const pair = frame.content.value}
             {@const Component = pair.Component}
