@@ -100,6 +100,11 @@
 .port-rail-entry[aria-current] {
   color: var(--port-color-ink-strong);
 }
+/* a kept view the window shows: the project's weight, since the shown
+ * project's fill already lies under every entry beneath it */
+.port-rail-entry[aria-current] {
+  font-weight: 600;
+}
 /* the foot group's heading names the group; it is no target */
 .port-rail-group {
   cursor: default;

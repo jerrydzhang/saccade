@@ -2,7 +2,7 @@
 // beneath its repository, as an ordinary entry that opens it again by
 // one click or one select label - in the window that kept it, in a
 // relaunched window that began empty. The repository's own file may
-// offer views too (kit/tracker.ts seeds two: one readable, one not);
+// offer views too (a scenario sets two, one readable and one not);
 // those show on a device that kept nothing, have no forget act, and
 // an unreadable one is named without losing the rest. The shown mark
 // sits on a view exactly when the window shows that location.
