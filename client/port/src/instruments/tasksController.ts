@@ -56,10 +56,9 @@ import {
   echoMatches,
   narrowingOfPath,
   narrowingQuery,
-  unknownTagText,
   type Narrowing,
 } from "../lib/tasks/narrowing.ts";
-import { PageRefusal, type ViewPage } from "../lib/pages.ts";
+import type { ViewPage } from "../lib/pages.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { taskRowActs, type TaskPorts } from "../lib/tasks/menu.ts";
@@ -134,26 +133,9 @@ const EMPTY_FRAME: TasksData = {
  * refused - the un-narrowed rows never stand in for a narrowed list. */
 async function narrowedPage(source: TrackerSource, narrowing: Narrowing | null): Promise<ViewPage> {
   if (narrowing === null) return source.instrumentPage(TASKS_PATH);
-  let page: ViewPage;
-  try {
-    page = await source.instrumentPage(TASKS_PATH, narrowingQuery(narrowing));
-  } catch (error) {
-    // a refusal that arrives with its words stands; one the transport
-    // reduced to a failed status is explained from the tags themselves
-    if (error instanceof PageRefusal) throw error;
-    const text = await explainUnknownTag(source, narrowing);
-    throw text === null ? error : new Error(text);
-  }
+  const page = await source.instrumentPage(TASKS_PATH, narrowingQuery(narrowing));
   if (!echoMatches(narrowing, page.narrowing)) throw new Error(NOT_NARROWED_BY_THIS_TRACKER);
   return page;
-}
-
-async function explainUnknownTag(source: TrackerSource, narrowing: Narrowing): Promise<string | null> {
-  try {
-    return unknownTagText(narrowing, await source.tags());
-  } catch {
-    return null;
-  }
 }
 
 export function connectTasks(buffer: BufferAccess<TasksData>, ports: TaskPorts): InstrumentAttachment<TasksUI, TaskAnchor> {

@@ -8,7 +8,7 @@
 // implementation that answers the asks directly.
 
 import { tauriInvoke, type TauriInvoke } from "./sources.ts";
-import { LANE_CODES, SourceUnavailableError, type LaneCode } from "./board/errors.ts";
+import { LANE_CODES, RequestRefused, SourceUnavailableError, type LaneCode } from "./board/errors.ts";
 
 export type Machine = string;
 
@@ -34,11 +34,13 @@ export interface MachineAsks {
 // An unknown code is a bridge bug, surfaced as one.
 function bridgeRefusal(error: unknown): SourceUnavailableError {
   if (typeof error === "object" && error !== null) {
-    const candidate = error as { code?: unknown; message?: unknown };
+    const candidate = error as { code?: unknown; message?: unknown; body?: unknown };
     if (typeof candidate.code === "string" && typeof candidate.message === "string") {
       const known = (LANE_CODES as readonly string[]).includes(candidate.code);
       const code = known ? (candidate.code as LaneCode) : "bridge-invalid";
-      return new SourceUnavailableError(code, candidate.message);
+      return typeof candidate.body === "string"
+        ? new RequestRefused(code, candidate.message, candidate.body)
+        : new SourceUnavailableError(code, candidate.message);
     }
   }
   return new SourceUnavailableError("read-failed", String(error));

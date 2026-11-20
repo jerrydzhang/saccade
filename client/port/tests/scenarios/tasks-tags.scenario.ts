@@ -75,3 +75,19 @@ test("the picker offers the repository's tags, each opening its narrowed list", 
     .toBe(`${tracker.repo}/tasks?tag=ntpick`);
   await expect.poll(() => rowsOf(app), { timeout: 20_000 }).toEqual([tagged]);
 });
+
+// The real shell carries a failed status's body back (curl
+// --fail-with-body): the problem line holds the tracker's own words.
+// Native only; the browser lane's request layer does the same through
+// its own fetch.
+test("the built app shows the tracker's unknown-tag words on the problem line", { tags: ["native"] }, async ({ app, tracker }) => {
+  await tracker.createTag("ntnative", "a tag the native refusal names");
+  await submitLocation(app, `${tracker.repo}/tasks?tag=nosuchtag`);
+  await expect
+    .poll(async () => (await app.readout()).tasks?.problem ?? null, { timeout: 20_000 })
+    .toMatch(/no tag 'nosuchtag'; the tags are:/);
+  const tasks = (await app.readout()).tasks!;
+  expect(tasks.status).toBe("invalid");
+  expect(tasks.problem).toContain("ntnative - a tag the native refusal names");
+  expect(tasks.rows).toEqual([]);
+});

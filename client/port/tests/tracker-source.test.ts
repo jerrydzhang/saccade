@@ -7,6 +7,8 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import { TrackerSource } from "../src/lib/tracker.ts";
+import { RequestRefused } from "../src/lib/board/errors.ts";
+import { PageRefusal } from "../src/lib/pages.ts";
 import { directAsks, theProjects } from "../src/lib/asks.ts";
 
 const REGISTERED = { machine: "box", path: "/srv/tasks-test" };
@@ -18,6 +20,8 @@ const REGISTERED = { machine: "box", path: "/srv/tasks-test" };
 let projectName = "";
 let servedRepo: string | null = REGISTERED.path;
 let counter = 0;
+// a failed status the canned transport answers the tasks page with
+let refusedWith: RequestRefused | null = null;
 
 function stubAsks(): void {
   const root = (served: string | null): unknown => ({
@@ -51,6 +55,7 @@ function stubAsks(): void {
         throw new Error("no assets here");
       },
       requestLocal: async (_machine, _port, route) => {
+        if (refusedWith !== null && route.includes("tasks")) throw refusedWith;
         const body = route === "/view/v1/" ? root(servedRepo) : tasks();
         return new TextEncoder().encode(JSON.stringify(body));
       },
@@ -106,4 +111,37 @@ test("a tracker serving the registered repository's path loads", async () => {
   const page = await source.instrumentPage("tasks");
   assert.equal(page.kind, "document");
   assert.equal(page.location, "tasks");
+});
+
+const UNKNOWN_TAG = JSON.stringify({
+  view: { major: 1 },
+  kind: "refusal",
+  location: "tasks",
+  code: "unknown_tag",
+  content: [{ kind: "text", text: "no tag 'nope'; the tags are:\nauth - sign-in" }],
+  tags: [{ name: "auth", description: "sign-in" }],
+});
+
+test("a narrowed tasks page's refusal reaches the app as the tracker's own words and tags", async () => {
+  stubAsks();
+  const source = freshSource();
+  await theProjects().register(REGISTERED);
+  refusedWith = new RequestRefused("machine-unavailable", "failed: curl: (22) The requested URL returned error: 400", UNKNOWN_TAG);
+  try {
+    await assert.rejects(source.instrumentPage("tasks", "tag=nope"), (error: unknown) => {
+      assert.ok(error instanceof PageRefusal);
+      assert.equal(error.status, 400);
+      assert.match(error.message, /^unknown_tag: no tag 'nope'; the tags are:\nauth - sign-in$/);
+      assert.deepEqual(error.tags, [{ name: "auth", description: "sign-in" }]);
+      return true;
+    });
+    // any other page keeps the generic failure it always had
+    await assert.rejects(source.instrumentPage("tasks"), (error: unknown) => {
+      assert.ok(!(error instanceof PageRefusal));
+      assert.match((error as Error).message, /did not answer at .*failed: curl: \(22\)/);
+      return true;
+    });
+  } finally {
+    refusedWith = null;
+  }
 });

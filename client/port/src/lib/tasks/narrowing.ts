@@ -88,21 +88,3 @@ export function narrowingOfPath(
 
 export const NOT_NARROWED_BY_THIS_TRACKER =
   "this tracker does not narrow by tag; move the binaries in step (sac 0.22.2 or later)";
-
-/** The tracker's refusal for a narrowing naming a tag it does not
- * hold, composed from the repository's tags when the transport hid the
- * refusal's body (a failed status carries none through the shell's
- * request): the same words the tracker speaks, naming each existing
- * tag with its line. Null when every named tag exists. */
-export function unknownTagText(
-  asked: Narrowing,
-  tags: readonly { name: string; description: string }[],
-): string | null {
-  const held = new Set(tags.map((tag) => tag.name.toLowerCase()));
-  const missing = asked.tags.find((name) => !held.has(name));
-  if (missing === undefined) return null;
-  if (tags.length === 0) {
-    return 'no tags exist; only the human creates one: sac tag create <name> "<line>"';
-  }
-  return `no tag '${missing}'; the tags are:\n${tags.map((tag) => `${tag.name} - ${tag.description}`).join("\n")}`;
-}

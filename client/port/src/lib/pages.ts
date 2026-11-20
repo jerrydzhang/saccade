@@ -24,6 +24,8 @@ async function boundedFetch(fetcher: Fetcher, url: string): Promise<Response> {
   try {
     return await fetcher(url);
   } catch (error) {
+    // the tracker's own refusal, carried back by the transport, stands
+    if (error instanceof PageRefusal) throw error;
     throw new SourceUnavailableError(
       "core-unavailable",
       `the tracker server did not answer at ${url}: ${String(error)}`,
@@ -152,9 +154,37 @@ export type ViewPage = {
  * is the text naming what would make it answerable. */
 export class PageRefusal extends SourceUnavailableError {
   readonly status: number;
-  constructor(code: string, detail: string, status: number) {
+  /** The tags a refusal lists beside its text (an unknown tag names
+   * the ones that exist). */
+  readonly tags: { name: string; description: string }[] | undefined;
+  constructor(code: string, detail: string, status: number, tags?: { name: string; description: string }[]) {
     super(refusalLaneCode(status), `${code}: ${detail}`);
     this.status = status;
+    this.tags = tags;
+  }
+}
+
+/** The refusal a refusal document raises: its code, its text parts
+ * as the detail, the status it was answered with. */
+export function refusalOf(page: ViewPage, status: number): PageRefusal {
+  const detail = (page.content ?? [])
+    .filter((part): part is TextPart => part.kind === "text")
+    .map((part) => part.text)
+    .join(" ");
+  return new PageRefusal(page.code ?? "refused", detail, status, page.tags);
+}
+
+/** A refusal document carried verbatim by a failed request: the
+ * refusal it raises, or null when the body is not one. The status is
+ * the one the failure names (curl's account of it), else 400. */
+export function refusalOfBody(body: string, failure: string): PageRefusal | null {
+  try {
+    const page = decodePage(JSON.parse(body));
+    if (page.kind !== "refusal") return null;
+    const status = Number(/error: (\d{3})/.exec(failure)?.[1] ?? 400);
+    return refusalOf(page, status);
+  } catch {
+    return null;
   }
 }
 
@@ -420,13 +450,7 @@ export async function fetchPage(fetcher: Fetcher, url: string): Promise<ViewPage
     );
   }
   const page = decodePage(value);
-  if (page.kind === "refusal") {
-    const detail = (page.content ?? [])
-      .filter((part): part is TextPart => part.kind === "text")
-      .map((part) => part.text)
-      .join(" ");
-    throw new PageRefusal(page.code ?? "refused", detail, response.status);
-  }
+  if (page.kind === "refusal") throw refusalOf(page, response.status);
   return page;
 }
 

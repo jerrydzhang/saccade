@@ -12,10 +12,10 @@
 
 import { SUPPORTED_GRAMMAR_VERSIONS } from "./board/decode.ts";
 import type { BoardSource, LoadedAsset, LoadedText, Location } from "./sources.ts";
-import { SourceUnavailableError } from "./board/errors.ts";
+import { RequestRefused, SourceUnavailableError } from "./board/errors.ts";
 import { instrumentPath, parseTaskSpec, viewRoute } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
-import { fetchFileBytes, fetchPage, pageFact, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
+import { fetchFileBytes, fetchPage, pageFact, refusalOfBody, type Fetcher, type PageChange, type ViewPage } from "./pages.ts";
 import { theAsks, theProjects } from "./asks.ts";
 import type { Project } from "./projects.ts";
 
@@ -87,7 +87,20 @@ export class TrackerSource implements BoardSource {
       );
     }
     const machine = project.machine;
-    return async (route) => new Response(await theAsks().requestLocal(machine, port, route));
+    return async (route) => {
+      try {
+        return new Response(await theAsks().requestLocal(machine, port, route));
+      } catch (error) {
+        // only the tasks page's narrowing asks for the tracker's own
+        // words on a refusal; every other failed status reads as it
+        // always has
+        if (error instanceof RequestRefused && route.startsWith("/view/v1/tasks?")) {
+          const refusal = refusalOfBody(error.body, error.message);
+          if (refusal !== null) throw refusal;
+        }
+        throw error;
+      }
+    };
   }
 
   /** The version contract, checked before any board read: the server

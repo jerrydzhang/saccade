@@ -531,14 +531,3 @@ test("an unknown tag shows the tracker's refusal with the tags that exist, on th
   assert.match(frame.problem ?? "", /auth - sign-in/);
   assert.match(frame.problem ?? "", /ui - screens/);
 });
-
-test("a refusal the transport reduced to a failed status is explained from the repository's tags", async (t) => {
-  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
-  const source = sourceFor(MACHINE) as TrackerSource;
-  vi.spyOn(source, "instrumentPage").mockRejectedValue(new Error("the tracker answered 400 for /view/v1/tasks?tag=nope"));
-  vi.spyOn(source, "tags").mockResolvedValue([{ name: "auth", description: "sign-in" }]);
-  await h.attachment.places.request({ machine: MACHINE, path: "tasks?tag=nope" });
-  const state = h.built.host.snapshot();
-  assert.ok(state.kind === "alive" && state.content.kind === "available");
-  assert.equal(state.content.value.value.problem, "no tag 'nope'; the tags are:\nauth - sign-in");
-});

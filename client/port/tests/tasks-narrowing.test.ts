@@ -10,7 +10,7 @@ import { parseLocation, formatLocation } from "../src/lib/location.ts";
 import { canonicalAddress } from "../src/lib/instruments/registry.ts";
 import { instrumentForAddress } from "../src/lib/instruments/claims.ts";
 import { tasks } from "../src/lib/instruments/index.ts";
-import { echoMatches, narrowingOfPath, narrowingQuery, parseNarrowing, unknownTagText } from "../src/lib/tasks/narrowing.ts";
+import { echoMatches, narrowingOfPath, narrowingQuery, parseNarrowing } from "../src/lib/tasks/narrowing.ts";
 import { pickList } from "../src/lib/picker/model.ts";
 import { decodePage } from "../src/lib/pages.ts";
 import { TrackerSource } from "../src/lib/tracker.ts";
@@ -110,14 +110,4 @@ test("a narrowed list opened before is the same picker entry as its candidate", 
   });
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.name, "Auth - sign-in");
-});
-
-test("the unknown-tag words are the tracker's, naming every tag with its line", () => {
-  const tags = [{ name: "auth", description: "sign-in" }, { name: "ui", description: "screens" }];
-  assert.equal(unknownTagText({ tags: ["auth"], untagged: false }, tags), null);
-  assert.equal(
-    unknownTagText({ tags: ["auth", "nope"], untagged: false }, tags),
-    "no tag 'nope'; the tags are:\nauth - sign-in\nui - screens",
-  );
-  assert.match(unknownTagText({ tags: ["nope"], untagged: false }, []) ?? "", /^no tags exist; only the human creates one/);
 });
