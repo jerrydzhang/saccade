@@ -434,6 +434,60 @@ test("the backoff doubles per consecutive failure, caps at a minute, and resets 
   }
 });
 
+test("a poll that answers after a newer one changes nothing: its late failure leaves no note and no backoff", async () => {
+  const moment = 2_000_000;
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/saccade"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "saccade"\n\n[tracker]\nport = 8814\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const source = sourceFor("tracker:saccade") as TrackerSource;
+  let failLate: (error: Error) => void = () => {};
+  const late = new Promise<ViewPage>((_resolve, reject) => {
+    failLate = reject;
+  });
+  let asks = 0;
+  vi.spyOn(source, "agentsPage").mockImplementation(() => {
+    asks += 1;
+    return asks === 1 ? late : Promise.resolve(agentsPage());
+  });
+  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: null }));
+  const rail = createTasksRail({
+    ports: () => ({ open: () => {}, elsewhere: undefined, copy: undefined }),
+    now: () => moment,
+  });
+  rail.start();
+  try {
+    const older = rail.tick();
+    await vi.waitFor(() => assert.equal(asks, 1, "the older poll is out"));
+    await rail.tick();
+    assert.equal(asks, 2, "the newer poll asked and answered");
+    assert.equal(rail.railNote("saccade"), null);
+    failLate(new Error("the older ask failed late"));
+    await older;
+    assert.equal(rail.railNote("saccade"), null, "the late failure left no note");
+    await rail.tick();
+    assert.equal(asks, 3, "the late failure set no backoff: the next poll asks");
+  } finally {
+    rail.stop();
+  }
+});
+
 test("registering reads the declaration through the module; the store keeps paths alone; forgetting drops the path", async () => {
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {

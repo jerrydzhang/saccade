@@ -262,6 +262,30 @@ test("an address that is not a project's task list refuses with the named gap, n
   );
 });
 
+test("a late answer for a list no longer shown changes nothing: the newer load's rows stay", async (t) => {
+  const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
+  const source = sourceFor(MACHINE) as TrackerSource;
+  let answerLate: (page: ViewPage) => void = () => {};
+  const late = new Promise<ViewPage>((resolve) => {
+    answerLate = resolve;
+  });
+  vi.spyOn(source, "instrumentPage")
+    .mockImplementationOnce(() => late)
+    .mockImplementationOnce(async () => tasksPageFixture([{ task: "t-1", title: "the newer list" }]));
+  const older = h.attachment.places.request(TASKS);
+  const newer = h.attachment.places.request(TASKS);
+  assert.equal(await newer, "applied");
+  answerLate(tasksPageFixture([{ task: "t-0", title: "the older list, answered late" }]));
+  assert.equal(await older, "superseded");
+  const state = h.built.host.snapshot();
+  if (state.kind !== "alive" || state.content.kind !== "available") assert.fail("the newer list is shown");
+  assert.deepEqual(
+    state.content.value.targets.map((target) => target.label),
+    ["t-1 the newer list"],
+    "the late answer never overwrote the newer list",
+  );
+});
+
 test("j/k is pure scrolling (no row cursor); gg/G hit the ends", (t) => {
   const h = harness(t, [{ task: "t-0", title: "x" }], ROW_BOUNDS);
   assert.equal(h.press("j"), "consume");

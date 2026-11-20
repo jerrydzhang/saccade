@@ -135,7 +135,15 @@ export function createTasksRail(deps: TasksRailDeps) {
   // cleared on success
   const notes = new Map<string, string>();
 
+  // polls overlap (the word feed asks for one while the cadence's is
+  // still out) and their answers land in any order: each poll is
+  // numbered, and one that lands after a newer poll was applied
+  // changes nothing - neither the rail nor the backoff
+  let pollsBegun = 0;
+  let pollApplied = 0;
+
   async function poll(): Promise<void> {
+    const mine = ++pollsBegun;
     let projects: { machine: string; path: string; declaration: { name: string; port: number | null } }[] = [];
     try {
       projects = await theProjects().projects();
@@ -150,37 +158,42 @@ export function createTasksRail(deps: TasksRailDeps) {
     const due = projects.filter(
       (project) => project.declaration.port !== null && (nextDue.get(project.declaration.name) ?? 0) <= moment,
     );
+    // each page says how its ask went: "plain" asked nothing, else
+    // the ask answered (failure null) or failed with its reason
     const pages = await Promise.all(
       due.map(async (project) => {
         try {
           const source = sourceFor(`tracker:${project.declaration.name}`);
           if (!(source instanceof TrackerSource)) {
-            return { name: project.declaration.name, agents: null, repoPath: null };
+            return { name: project.declaration.name, agents: null, repoPath: null, failure: "plain" as const };
           }
           const agents = agentFactsOf(await source.agentsPage());
           const repoPath = await source.identity().then(
             (identity) => identity.repoPath,
             () => null,
           );
-          failures.delete(project.declaration.name);
-          nextDue.delete(project.declaration.name);
-          notes.delete(project.declaration.name);
-          return { name: project.declaration.name, agents, repoPath };
+          return { name: project.declaration.name, agents, repoPath, failure: null };
         } catch (error) {
-          const failed = (failures.get(project.declaration.name) ?? 0) + 1;
-          failures.set(project.declaration.name, failed);
-          nextDue.set(
-            project.declaration.name,
-            Math.min(moment + RAIL_RETRY_MS * 2 ** (failed - 1), moment + RAIL_RETRY_CAP_MS),
-          );
-          notes.set(
-            project.declaration.name,
-            error instanceof Error ? error.message : String(error),
-          );
-          return { name: project.declaration.name, agents: null, repoPath: null };
+          const failure = { reason: error instanceof Error ? error.message : String(error) };
+          return { name: project.declaration.name, agents: null, repoPath: null, failure };
         }
       }),
     );
+    if (mine < pollApplied) return;
+    pollApplied = mine;
+    for (const page of pages) {
+      if (page.failure === "plain") continue;
+      if (page.failure === null) {
+        failures.delete(page.name);
+        nextDue.delete(page.name);
+        notes.delete(page.name);
+        continue;
+      }
+      const failed = (failures.get(page.name) ?? 0) + 1;
+      failures.set(page.name, failed);
+      nextDue.set(page.name, Math.min(moment + RAIL_RETRY_MS * 2 ** (failed - 1), moment + RAIL_RETRY_CAP_MS));
+      notes.set(page.name, page.failure.reason);
+    }
     rail = railOf(
       pages.map((page) => ({
         name: page.name,
