@@ -16,14 +16,14 @@
 // cwd is the project's repo path (its root page's repo_path) or under
 // it, or under the project's worktree home - the tracker's state-dir
 // slug (<repo basename>-<fnv1a of the repo path>,
-// tracker/src/host/paths.rs) followed by /worktrees/. The deepest repo
+// saccade/tracker/src/host/paths.rs) followed by /worktrees/. The deepest repo
 // path wins. Any other shows in the unregistered group at the rail's
 // foot, named by the terminal's title and its address.
 
 import type { ViewPage } from "../pages.ts";
 
 /** One live terminal's words, as the shell's feed serializes them
- * (client/src-tauri/src/words.rs WordRow): a field the program did not
+ * (app/src-tauri/src/words.rs WordRow): a field the program did not
  * send is absent. */
 export type HerdrWord = {
   state?: string;
@@ -135,7 +135,7 @@ export function wordsByIncarnationOf(rail: Rail, name?: string): Map<string, str
 }
 
 /** The incarnations an agents page lists: one group per incarnation,
- * its facts by label (tracker/src/serve/pages.rs agents_page). */
+ * its facts by label (saccade/tracker/src/serve/pages.rs agents_page). */
 export function agentFactsOf(page: ViewPage): AgentFacts[] {
   const out: AgentFacts[] = [];
   for (const part of page.content ?? []) {
@@ -193,7 +193,7 @@ export function wordKeyFor(words: Readonly<Record<string, HerdrWord>>, address: 
 }
 
 /** FNV-1a over the path's UTF-8 bytes: the tracker's state-dir slug
- * hash (tracker/src/host/paths.rs fnv1a). */
+ * hash (saccade/tracker/src/host/paths.rs fnv1a). */
 function fnv1a(text: string): number {
   let hash = 0x811c9dc5;
   for (const byte of new TextEncoder().encode(text)) {

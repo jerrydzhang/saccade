@@ -11,7 +11,7 @@ implemented `input-context.ts`) and the scenario inventory
 of record is the round-16 mockup (templates
 `t-34@r6:reference/inst16.html` + `shell16.html`; the compiled
 artifact t-22@r3 is the same code assembled), materialized by
-`client/harness/t36_prototype.py`. Fidelity: port the logic as the
+`app/harness/t36_prototype.py`. Fidelity: port the logic as the
 prototype behaves it, except where a ratified difference applies.
 
 Gates: `node --experimental-strip-types --test *.test.ts` (60 tests,

@@ -1,5 +1,5 @@
 // The shared key matcher over the ratified input-context contract.
-// Lifted into the port from client/port-staging/key-matcher.ts
+// Lifted into the port from app/port-staging/key-matcher.ts
 // (t-36@r65) with ONE ratified change: collision detection at load
 // (validateNoCollisions, t-36@r49 standing policy "collisions = error
 // at load", confirmed by the r65 disposition). The staged first-wins

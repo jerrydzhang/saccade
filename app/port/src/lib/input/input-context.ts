@@ -1,5 +1,5 @@
 // The ratified input-context contract, implemented. Lifted into the
-// port from client/port-staging/input-context.ts (the t-36 slice-2
+// port from app/port-staging/input-context.ts (the slice-2
 // extraction, t-36@r65) unchanged: it implements t-36@r46's
 // reference/input-context-contract.ts. Pure logic only: no DOM, no
 // Svelte, no instrument or buffer imports.

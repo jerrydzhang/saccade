@@ -14,7 +14,7 @@ Lanes:
                compositor or SSH activity in this lane.
   session      GATED. session suite: the enforced sandbox with a private
                headless Weston around the packaged app, then the app's
-               vitest native project (client/port, the payload
+               vitest native project (app/port, the payload
                suite_payload.py).
   serve        GATED, not implemented in this change.
 
@@ -49,7 +49,7 @@ FAST_STEPS = [
     # the harness's own unit tests (the seed module the scenarios' tracker
     # is seeded with)
     ("harness-tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "harness/tests", "-t", "."]),
-    # the app's frontend typecheck (client/port; its suites run through
+    # the app's frontend typecheck (app/port; its suites run through
     # vitest: just app-test and just app-test-browser)
     ("typecheck", ["node_modules/.bin/tsc", "--noEmit", "-p", "port/tsconfig.json"]),
     # the read-only herdr-core client is a pure crate: its contract
@@ -443,7 +443,7 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
 
 def session_suite(board_arg: str, tracker_db_candidate: str, vitest_args: list[str] | None = None) -> int:
     """One bounded sandbox run of the port suite's native project
-    (client/port/tests/scenarios/README.md, native): the session lane's
+    (app/port/tests/scenarios/README.md, native): the session lane's
     resolution, env and binds unchanged, plus the suite payload, the
     client tree read-only and the pinned node. The payload runs the
     canary, starts the private Weston, then vitest; each test owns its
@@ -463,7 +463,7 @@ def session_suite(board_arg: str, tracker_db_candidate: str, vitest_args: list[s
         print(f"containment refusal: node must be a pinned store binary: {node}", file=sys.stderr)
         return 1
     if not (VIEWER / "node_modules" / "vitest").is_dir():
-        print("containment refusal: client/node_modules lacks vitest; run npm ci in client", file=sys.stderr)
+        print("containment refusal: app/node_modules lacks vitest; run npm ci in app", file=sys.stderr)
         return 1
 
     import uuid

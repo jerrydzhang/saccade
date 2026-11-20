@@ -1,6 +1,6 @@
 // The scenarios' throwaway tracker (node side only): one real
 // `sac serve` on a fresh temp db and repo, on a free loopback port,
-// seeded with the t36 seed set by client/harness/t36_seeds.py itself
+// seeded with the t36 seed set by app/harness/t36_seeds.py itself
 // (the seed boards stay single-sourced there until the Python harness
 // cuts over). Never the production tracker: the db is always a fresh
 // file under a new temp root, and the server is spawned and stopped

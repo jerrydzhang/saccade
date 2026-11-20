@@ -99,8 +99,9 @@ is this file and `src/` at commit `0809fe7^`.
 # the app, built and run (the flake's default app)
 nix run .#saccade-app
 
-# the full suite from the repository root: cargo, the shell's own tests,
-# the frontend's vitest unit and browser projects
+# the app's suite from app/ (just test at the repository root runs
+# saccade's suite and then this one): the shell's own tests, the
+# frontend's vitest unit and browser projects
 just test
 
 # the plain uncontained checks: the harness's own checks, pyflakes, the
@@ -108,8 +109,16 @@ just test
 just viewer-check
 ```
 
+The recipes live in `justfile` here; the root justfile loads it as the
+module `app` (`just app::test`) and keeps the names the repository has
+always used (`just app-test`, `just viewer-check`, ...) as aliases.
+Every recipe enters the app's shell itself (`nix develop ..#app`;
+`.envrc` loads the same shell for direnv), and the suites that serve a
+tracker build `sac` through saccade's justfile and serve
+`saccade/target/debug/sac`.
+
 The recipes that run the frontend's tools depend on `just client-deps`,
-which runs `npm ci` in `client/` whenever `package-lock.json` is newer
+which runs `npm ci` in `app/` whenever `package-lock.json` is newer
 than the installed copy, so a merge that adds a dependency never leaves
 a checkout or worktree on a stale install.
 
@@ -124,9 +133,11 @@ The native test project runs only through the gated session lane:
   targets in `lib/frame/`), `tests/` (vitest: unit tests in `tests/`,
   scenarios in `tests/scenarios/` with their kit), `vitest.config.ts`
   (the three projects), `vite.config.ts`
-- `port-shell/` - the app's crate: its own workspace root, the binary
-  `saccade-app`, and the tauri conf embedding `port/dist`
-  (identifier `dev.saccade.app`)
+- `Cargo.toml`, `Cargo.lock` - the app's cargo workspace: `port-shell`
+  and `src-tauri/core-client`, with `board-grammar` by path from
+  `saccade/grammar`
+- `port-shell/` - the app's crate: the binary `saccade-app`, and the
+  tauri conf embedding `port/dist` (identifier `dev.saccade.app`)
 - `src-tauri/src/` - the shell library the crate compiles: read-only
   declaration and asset commands with path guards, the one local
   request command (loopback, a bounded curl argv composed here), board
@@ -142,10 +153,12 @@ The native test project runs only through the gated session lane:
 - `tauri-driver/` - the pinned `Cargo.lock` the flake builds tauri-driver
   from, for the native test project
 - `harness/` - the gated sandbox (below)
+- `flake-module.nix`, `nix/saccade-app.nix` - the app's flake outputs
+  and its packaging (below)
 
 ## The harness
 
-One entry point: `python3 client/harness/entry.py <lane>`. Every lane
+One entry point: `python3 app/harness/entry.py <lane>`. Every lane
 that spawns runs inside one bwrap sandbox under
 `isolation.PidfdSupervisor`, canary first, requiring a caller-side
 tracker db (`SACCADE_DB`) the canary proves invisible:
@@ -176,3 +189,11 @@ nixpkgs.overlays = [ inputs.saccade.overlays.default ];
 ```
 
 then `pkgs.saccade-app` is the app.
+
+`flake-module.nix` is the app's part of the repository's one flake
+(flake-parts; the root `flake.nix` imports it): the three packages,
+`packages.app` (all three in one build; the root's `packages.all`
+carries it), the dev shell `devShells.app` (also named
+`devShells.saccade-app`), the apps and the overlay. The builds take
+their source from this directory and `saccade/grammar` only, so a
+tracker-only change leaves the app's derivations as they were.

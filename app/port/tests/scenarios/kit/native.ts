@@ -4,7 +4,7 @@
 // with fresh XDG data/config/cache/state dirs under the run root (no
 // launch restore, one window, empty trail), stopped by its own handle
 // after the test. It must run where tauri-driver can reach a display:
-// inside the session lane's sandbox (client/harness/entry.py
+// inside the session lane's sandbox (app/harness/entry.py
 // session), which supplies the pinned binaries and the compositor
 // through the env names its payload already reads. Outside that
 // sandbox it refuses; it never reaches for the person's display.
@@ -228,7 +228,7 @@ async function launch(runRoot: string, registered: string, reuse?: string): Prom
       });
     },
     async resize() {
-      throw new Error("the lane's kiosk-shell holds every window at the output's size (client/harness/suite_payload.py): resize scenarios are browser-only");
+      throw new Error("the lane's kiosk-shell holds every window at the output's size (app/harness/suite_payload.py): resize scenarios are browser-only");
     },
     async labels() {
       return browser.execute(() =>

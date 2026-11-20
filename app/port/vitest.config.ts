@@ -106,7 +106,7 @@ export default mergeConfig(
     server: { host: "127.0.0.1" },
     plugins: [laneDeclarationReader()],
     // the lane's suite mode binds the client tree read-only and names a
-    // cache under its run root (client/harness/suite_payload.py)
+    // cache under its run root (app/harness/suite_payload.py)
     ...(process.env.SUITE_CACHE_DIR ? { cacheDir: process.env.SUITE_CACHE_DIR } : {}),
     test: {
       projects: [

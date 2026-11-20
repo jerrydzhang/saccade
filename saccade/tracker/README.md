@@ -4,17 +4,17 @@
 is a fold of that log; each task's board lives in the tracker's own Git
 repository. This README carries the tracker's law - what the code must
 honor and where its tests pin it. The board grammar's law is
-`grammar/README.md`; world belief lives in the root `AXIOMS.md`.
+`saccade/grammar/README.md`; world belief lives in the root `AXIOMS.md`.
 
 ## Serving as a service
 
-The dogfood server is infrastructure, not a dev artifact: the flake's
-devenv process manager runs it from the pinned release, started with
-`devenv up` in the project. The `sac` process is declared in
-`flake.nix`; this is the line it runs:
+The dogfood server is infrastructure, not a dev artifact: the saccade
+shell's devenv process manager runs it from the pinned release,
+started with `devenv up` in the saccade shell. The `sac` process is
+declared in `saccade/flake-module.nix`; this is the line it runs:
 
 ```
-sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811
+sac serve --repo "$(git -C <the saccade shell's root> rev-parse --show-toplevel)" --bind 0.0.0.0 --port 8811
 ```
 
 with `restart.on = "on_failure"` (max 10) and a readiness probe on
@@ -22,7 +22,9 @@ with `restart.on = "on_failure"` (max 10) and a readiness probe on
 doors only, unless the task itself is the change.
 
 - `--repo` names the tracker: the shell may sit anywhere, so the db's
-  repo is declared, not discovered from the working directory.
+  repo is declared, not discovered from the working directory - the
+  checkout the saccade shell belongs to, read when the process starts,
+  so a moved or renamed checkout needs no edit.
 - `--bind 0.0.0.0` spans loopback (CLI default) and the tailnet. Any
   device that can reach the port writes at human tier through the
   client - the conceded boundary. The wildcard never lands in the

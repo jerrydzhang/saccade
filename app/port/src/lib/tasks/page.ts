@@ -149,7 +149,7 @@ export function taskRowOf(model: TasksPageModel, part: string): TaskRow | undefi
 }
 
 /** The state a pipeline stage mirrors, by the stage's title as the
- * tracker's pipeline page names it (tracker/src/serve/pages.rs): its
+ * tracker's pipeline page names it (saccade/tracker/src/serve/pages.rs): its
  * title takes that state's hue (t-59). Null for a stage it does not
  * know. */
 export function stageStateOf(title: string): string | null {

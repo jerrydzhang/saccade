@@ -1,6 +1,6 @@
 // History mode's diff (t-49, t-57), its pure half: components aligned
 // by the changes the tracker serves (the shapes `sac board diff` names;
-// tracker/tests/api.rs pins the page carrying them), words marked
+// saccade/tracker/tests/api.rs pins the page carrying them), words marked
 // inside changed text with Markdown's structure kept, and every shown
 // part placed in both revisions. Painting the marks needs a DOM: the
 // history scenario covers it.

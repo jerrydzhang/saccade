@@ -11,7 +11,7 @@ import { expect, test } from "#scenario";
 import { openLocation, spec } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 
-// a 1x1 PNG (the landing seed's own bytes, client/harness/t36_seeds.py)
+// a 1x1 PNG (the landing seed's own bytes, app/harness/t36_seeds.py)
 const PNG = Uint8Array.from(
   atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="),
   (ch) => ch.charCodeAt(0),

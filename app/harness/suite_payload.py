@@ -11,7 +11,7 @@ Order, enforced here:
   3. the private headless Weston (start_weston below: headless pixman,
      a fake seat, kiosk-shell, one socket in the private runtime)
   4. the port suite's native project: vitest in the bound client tree
-     (client/port/vitest.config.ts --project native), whose fixture gives
+     (app/port/vitest.config.ts --project native), whose fixture gives
      each test its own tauri-driver -> WebKitWebDriver -> packaged app
      chain, fresh XDG dirs under this run root, and a WebdriverIO session
   5. owned teardown: the core stopped by its own door, Weston stopped

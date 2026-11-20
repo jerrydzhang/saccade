@@ -1,12 +1,13 @@
 # AGENTS.md - how agents work in this repo
 
-Saccade is a tracker for agent work. The packages: `tracker` (the `sac`
-binary: event log, server, CLI, boards), `grammar` (the board format),
-`client` (the Saccade app). Each package owns its version and its
-docs. `AXIOMS.md` carries world belief - read it before proposing
-anything architectural. Using the tracker is not required to develop this
-project; `tracker/skill/SKILL.md` teaches the `sac` CLI for when you
-do, and `tracker/README.md` carries the tracker's law.
+Saccade is a tracker for agent work. The packages: `saccade/tracker`
+(the `sac` binary: event log, server, CLI, boards), `saccade/grammar`
+(the board format), `app` (the Saccade app). Each package owns its
+version and its docs. `AXIOMS.md` carries world belief - read it
+before proposing anything architectural. Using the tracker is not
+required to develop this project; `saccade/tracker/skill/SKILL.md`
+teaches the `sac` CLI for when you do, and `saccade/tracker/README.md`
+carries the tracker's law.
 
 ## Decisions and ratification
 
@@ -44,8 +45,8 @@ do, and `tracker/README.md` carries the tracker's law.
 
 - Markdown lives in the root law files and per-package READMEs,
   written for anyone working on the repository. The skill shares
-  `sac`'s life cycle: source in `tracker/skill/`, deployed copies
-  generated and git-ignored (`sac skill install`).
+  `sac`'s life cycle: source in `saccade/tracker/skill/`, deployed
+  copies generated and git-ignored (`sac skill install`).
 - Authored text is ASCII, held by a repository check over every
   tracked file. Record content stays Unicode-capable; the rule never
   rewrites data.
@@ -66,8 +67,10 @@ do, and `tracker/README.md` carries the tracker's law.
 
 ## Building and testing
 
-- Run cargo and nix through `direnv exec . bash -c '...'`.
-- `just fmt`, `just lint`, `just test`; the clippy gate is
+- Run cargo and nix through `direnv exec saccade bash -c '...'` or
+  `direnv exec app bash -c '...'` (the root has no .envrc).
+- `just fmt`, `just lint`, `just test`; the clippy gate, from
+  `saccade/`, is
   `cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings`.
 - `cargo build` is the judge, not grep.
 - While iterating, run the suites that own the touched contract (the
@@ -75,21 +78,23 @@ do, and `tracker/README.md` carries the tracker's law.
   and the app's vitest projects, `just app-test` and
   `just app-test-browser`); the full suite runs once before a commit
   lands.
-- A phase gate: the suites (`just test`: cargo, the app shell's
-  tests, the app's vitest unit and browser projects), fmt, every prek
-  hook on each commit, and the app's native project in the gated
-  session lane:
+- A phase gate: the suites (`just test`: cargo, the native node
+  suites, the app shell's tests, the app's vitest unit and browser
+  projects, the gate's scope test), fmt, every prek hook on each
+  commit, and the app's native project in the gated session lane:
   `SACCADE_DB=<db> just app-test-native`
   (the sandbox, the canary, a private Weston, then vitest's native
   project against the built app; `SAC_APP_BIN` names a built app, else
   `.#saccade-app` is built). The lane logs are inspected, not assumed.
 - The merge gate is the pre-push hook (`merge-gate` in prek.toml):
-  the full suite runs first, then the hook builds the commit being
-  pushed - the sha prek hands it in `PRE_COMMIT_TO_REF`, fetched as
+  the suites the push touches run first (`gate_scope.py`: `app/`
+  alone runs the app's, `saccade/` or a root file both), then the
+  hook builds the commit being pushed - the sha prek hands it in
+  `PRE_COMMIT_TO_REF`, fetched as
   `git+file://<repo>?rev=<sha>#all`, so the build reads the pushed
   commit and never this working tree (branch deletions never fire
   the hook), and `#all` covers every package, not a hand-picked two.
-  Nothing reaches GitHub without the suite and the build; the nix
+  Nothing reaches GitHub without the suites and the build; the nix
   build is not part of the per-commit phase gate.
 - Agents run nix once, last, before handing work over for merge.
   The fast phase gate first (the suites, clippy -D warnings, the
@@ -101,12 +106,13 @@ do, and `tracker/README.md` carries the tracker's law.
 - Phase reviews diff the test inventory by name against the previous
   phase: additions fine, every removal explained.
 - Tracker test placement and suite contracts live in
-  `tracker/README.md`; the grammar's fixtures in `grammar/README.md`.
+  `saccade/tracker/README.md`; the grammar's fixtures in
+  `saccade/grammar/README.md`.
 
 ## Sandboxes and safety
 
 - Drive the Saccade app headless only through the session lane
-  (`just app-test-native`, `client/harness/entry.py`); never
+  (`just app-test-native`, `app/harness/entry.py`); never
   reconstruct its runtime environment.
 - Never add production machines to a sandbox, never automate the
   person's real display, never stop another session's core or

@@ -1,4 +1,4 @@
-// The find session, lifted from client/port-staging/find-session.ts
+// The find session, lifted from app/port-staging/find-session.ts
 // (t-36@r65) into the port unchanged.
 //
 // Find is a facility of the shown revision: entry, live typing, match

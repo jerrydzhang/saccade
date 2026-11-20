@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
-// The port tree's vite root is client/port: the config anchors every
+// The port tree's vite root is app/port: the config anchors every
 // path to its own directory, so the build behaves the same from any
 // working directory. The npm tree itself stays at the client root
 // (reused, never duplicated); the config resolves it from there.

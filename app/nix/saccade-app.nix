@@ -7,7 +7,7 @@
 # name when the old frontend retired, t-36 m-554.)
 #
 # The npm build runs vite against the port tree's own vite config from
-# the client root's npm graph; the cargo build compiles the shared
+# the app root's npm graph; the cargo build compiles the shared
 # shell through the port crate with its tauri conf embedding this
 # dist.
 {
@@ -35,7 +35,7 @@
 }:
 let
   clientRoot = repoRoot + "/app";
-  # the frontend and its npm graph: the client's package-lock, the port
+  # the frontend and its npm graph: the app's package-lock, the port
   # tree, and the fixture corpus its bundled globs reach
   src = lib.sourceByRegex clientRoot [
     "^port$"
@@ -55,7 +55,7 @@ let
     npm
     // {
       # not `npm run build`: the port builds through its own vite
-      # config from the client root, reusing the client's node_modules
+      # config from the app root, reusing the app's node_modules
       dontNpmBuild = true;
       buildPhase = ''
         runHook preBuild

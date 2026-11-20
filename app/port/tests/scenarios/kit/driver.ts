@@ -16,7 +16,7 @@ export type SeededTracker = {
   repo: string;
   /** the served repo's absolute path: what the app registers */
   repoPath: string;
-  /** the t36 seed tasks (client/harness/t36_seeds.py), as t-N ids */
+  /** the t36 seed tasks (app/harness/t36_seeds.py), as t-N ids */
   tasks: { cited: string; citing: string; citingChild: string; landing: string };
 };
 

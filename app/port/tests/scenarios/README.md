@@ -1,10 +1,10 @@
 # The port's scenarios
 
-One runner (vitest), three projects (`client/port/vitest.config.ts`), and one
+One runner (vitest), three projects (`app/port/vitest.config.ts`), and one
 way to write a scenario. These projects are the app's test gate: the old
 app's harness lanes retired with it (t-36 m-554), and the t36 Python port
 lane's scenarios migrated here (t-36 m-556). The tracker's seed boards still
-come from `client/harness/t36_seeds.py`.
+come from `app/harness/t36_seeds.py`.
 
 | project | what | command | runtime |
 | --- | --- | --- | --- |
@@ -12,7 +12,7 @@ come from `client/harness/t36_seeds.py`.
 | browser | `tests/scenarios/*.scenario.ts` and `*.browser.ts` in headless WebKit | `just app-test-browser` | about 10s |
 | native | the scenarios tagged `native` or `multi-window`, in the built app, in the session sandbox | `just app-test-native` (gated, below) | about 8s in the sandbox |
 
-`just test` runs the unit and browser projects after the cargo suite, and the
+`just test` runs the unit and browser projects after the cargo suites, and the
 `port-unit` prek hook runs the unit project on every commit. One file or test
 name: `just app-test-browser s14` (vitest's own filters pass through), and the
 same for the native project: `just app-test-native s18`.
@@ -131,28 +131,29 @@ Every module is a test-infrastructure module; each line says why it exists.
   (commits, window-state reads), usable from both realms.
 - `kit/tracker.ts`, `kit/tracker-setup.ts`: the throwaway tracker, a real
   `sac serve` on a fresh temp db and repo on a free loopback port, seeded by
-  `client/harness/t36_seeds.py` (the one source of the seed boards, with its
-  own unit tests in `client/harness/tests/`). It is never the production
+  `app/harness/t36_seeds.py` (the one source of the seed boards, with its
+  own unit tests in `app/harness/tests/`). It is never the production
   tracker; the run root is printed and kept.
 
 ## Browser
 
 WebKit is the nix-pinned Playwright WebKit (`PLAYWRIGHT_BROWSERS_PATH` from
-the `saccade-app` devshell; npm `playwright` is pinned to the same 1.63.0, so
+the app devshell; npm `playwright` is pinned to the same 1.63.0, so
 nothing is downloaded). It runs display-less on the devshell's pinned mesa
 with software EGL (the retired browser lane's recipe), so the recipe enters
-`nix develop .#saccade-app`. There is no Tauri bridge in a browser: the lane
-installs the app's asks before boot (`kit/lane-asks.ts`) and the tracker
-allows exactly the vitest server's origin.
+`nix develop ..#app` (the app devshell, also named `saccade-app`). There
+is no Tauri bridge in a browser: the lane installs the app's asks before
+boot (`kit/lane-asks.ts`) and the tracker allows exactly the vitest
+server's origin.
 
 ## Native
 
 The native project runs the scenarios tagged `native` or `multi-window` in
 the built port app, inside the session lane's enforced sandbox, through its
-suite mode (`client/harness/entry.py session suite`, payload
-`client/harness/suite_payload.py`): the containment canary, then the lane's
+suite mode (`app/harness/entry.py session suite`, payload
+`app/harness/suite_payload.py`): the containment canary, then the lane's
 own private Weston, then `vitest --project native` in the read-only bound
-`client/` tree. Each test's fixture (`kit/native.ts`) starts its own
+`app/` tree. Each test's fixture (`kit/native.ts`) starts its own
 `tauri-driver` with fresh XDG dirs under the run root, so every test gets a
 fresh app: one window, no launch restore. WebdriverIO is the client, in
 classic WebDriver mode (WebKitWebDriver has no BiDi).

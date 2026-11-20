@@ -1,7 +1,7 @@
 // The native project's sandbox check, free of vitest imports so the
 // globalSetup can refuse before any tracker starts (kit/tracker-setup.ts).
 
-// the session lane's own env names (client/harness/entry.py
+// the session lane's own env names (app/harness/entry.py
 // session_env); WAYLAND_DISPLAY names the lane's private compositor;
 // SAC_APP_HERDR_MACHINE names the core the lane runs (the registered
 // paths' machine - the app's own ask face reaches the tracker through

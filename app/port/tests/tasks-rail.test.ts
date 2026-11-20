@@ -592,7 +592,7 @@ test("the worktree home's slug is the tracker's own: basename and the FNV-1a of 
   // ~/.local/state/saccade/pyrimel-11f6a386/worktrees/
   assert.equal(stateSlugOf("/home/jerry/Projects/pyrimel"), "pyrimel-11f6a386");
   assert.equal(stateSlugOf("/home/jerry/Projects/pyrimel/"), "pyrimel-11f6a386", "a trailing slash is the same repo");
-  // tracker/src/host/paths.rs pins the hue as the same hash mod 360
+  // saccade/tracker/src/host/paths.rs pins the hue as the same hash mod 360
   assert.equal(Number.parseInt(stateSlugOf("/srv/hornet").split("-")[1]!, 16) % 360, 324);
 });
 

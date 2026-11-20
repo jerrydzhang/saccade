@@ -1,5 +1,5 @@
 // The selection interaction's narrowing logic, lifted from
-// client/port-staging/label-select.ts (t-36@r65) unchanged. Pure port:
+// app/port-staging/label-select.ts unchanged. Pure port:
 // labels are assigned to the visible targets and typing a label
 // selects its target (the prototype's hintKey, inst16.html:106; the
 // text narrowing the staging carried is gone, human ruling m-541).

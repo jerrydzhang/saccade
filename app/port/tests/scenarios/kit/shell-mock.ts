@@ -46,7 +46,7 @@ type PortGlobals = Window & {
   __suiteJumpHide?: () => unknown;
 };
 
-// client/src-tauri/src/suite.rs fresh_label: "w-<unix seconds><hex counter>"
+// app/src-tauri/src/suite.rs fresh_label: "w-<unix seconds><hex counter>"
 function freshLabel(world: ShellWorld): string {
   const seconds = Math.floor(Date.now() / 1000);
   for (let counter = 0; ; counter++) {

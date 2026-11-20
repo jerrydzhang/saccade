@@ -1,4 +1,4 @@
-// Menu invocation, lifted from client/port-staging/menu-invocation.ts
+// Menu invocation, lifted from app/port-staging/menu-invocation.ts
 // (t-36@r65) into the port with only the import path adjusted.
 //
 // One action object behind every invocation path; the menu closes

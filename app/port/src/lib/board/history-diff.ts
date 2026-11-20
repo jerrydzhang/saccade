@@ -1,7 +1,7 @@
 // History mode's diff (t-49, t-57; t-14 "The viewer", History), its
 // pure half: a revision shown against the one before it. The component
 // alignment is the tracker's: the diff page serves the changes `sac
-// board diff` names (tracker/src/boards/changes.rs), and the shown
+// board diff` names (saccade/tracker/src/boards/changes.rs), and the shown
 // board follows them - the client keeps no alignment of its own. The
 // result is ONE board to render: the shown revision's components, each
 // added, changed or moved one marked, and every removed one placed back

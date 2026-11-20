@@ -7,8 +7,8 @@
 //
 // Port carry (t-36 slice 1, the source/transport layer allowlist): the
 // module is the old tree's sources.ts with one port-specific adaptation -
-// the fixture corpus stays at the repository's client/fixtures while this
-// tree's vite root is client/port, so the bundled globs are relative to
+// the fixture corpus stays at the repository's app/fixtures while this
+// tree's vite root is app/port, so the bundled globs are relative to
 // this module and rekeyed to the same /fixtures namespace the adapter's
 // key logic speaks.
 
@@ -51,7 +51,7 @@ export { SourceUnavailableError };
 // are bundled as URLs and fetched, so bytes reach the read model exactly
 // as committed - PNG/JPEG never pass through a UTF-8 decode.
 // The globs reach the shared fixture corpus three directories up from
-// this module (client/port/src/lib -> client/fixtures); vite keys
+// this module (app/port/src/lib -> app/fixtures); vite keys
 // relative globs relative to the importing module, so both maps rekey to
 // the adapter's own /fixtures namespace below. Glob patterns must be
 // string literals, so the prefix repeats in each call.
