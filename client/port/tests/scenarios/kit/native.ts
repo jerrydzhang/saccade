@@ -211,6 +211,9 @@ async function launch(runRoot: string, registered: string, reuse?: string): Prom
     async shows(id) {
       return control(id).isExisting();
     },
+    async setDeclaredViews() {
+      throw new Error("declared views are set by the browser lane only");
+    },
     async shownMark(id) {
       const element = control(id);
       return (await element.isExisting()) && (await element.getAttribute("aria-current")) !== null;

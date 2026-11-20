@@ -129,6 +129,10 @@ export interface AppDriver {
   controlBox(control: string): Promise<Box | null>;
   /** A rendered control's visible text, or null. */
   controlText(control: string): Promise<string | null>;
+  /** Set the seeded repository's declared views (raw location
+   * strings) or null for none; takes effect at the next launch.
+   * Browser only. */
+  setDeclaredViews(views: string[] | null): Promise<void>;
   /** Whether a rendered control carries the shown mark (aria-current):
    * the rail's entry for what this window shows. */
   shownMark(control: string): Promise<boolean>;

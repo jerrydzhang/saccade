@@ -69,13 +69,7 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   const base = `http://127.0.0.1:${port}`;
   // the port's two places agree by construction here: the declaration
   // the app reads and the flag the server starts with carry one port
-  // the repository offers two views: one a task list narrowed by a
-  // tag the views scenarios create, and one nothing can read (an
-  // empty tag list), which the rail must name without losing the other
-  writeFileSync(
-    join(repo, "workbench.toml"),
-    `name = "${REPO_NAME}"\nviews = ["tasks?tag=vwfile", "tasks?tag="]\n\n[tracker]\nport = ${port}\n`,
-  );
+  writeFileSync(join(repo, "workbench.toml"), `name = "${REPO_NAME}"\n\n[tracker]\nport = ${port}\n`);
   // two further declared repositories beside the served one (the same
   // port in their declarations): scenarios that register several
   // projects use them; they are inert until a store carries their

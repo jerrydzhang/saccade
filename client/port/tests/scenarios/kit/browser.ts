@@ -109,6 +109,9 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
     async shows(control) {
       return portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`) !== null;
     },
+    async setDeclaredViews(views) {
+      await (commands as unknown as { portSetViews(v: string[] | null): Promise<void> }).portSetViews(views);
+    },
     async shownMark(control) {
       const element = portWindow().document.querySelector(`[data-port-control=${JSON.stringify(control)}]`);
       return element !== null && element.hasAttribute("aria-current");

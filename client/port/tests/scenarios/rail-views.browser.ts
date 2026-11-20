@@ -7,6 +7,7 @@
 // an unreadable one is named without losing the rest. The shown mark
 // sits on a view exactly when the window shows that location.
 import { afterEach } from "vitest";
+import { commands } from "vitest/browser";
 
 import { expect, test } from "./kit/browser.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
@@ -28,7 +29,11 @@ const viewsStore = (): Record<string, string[]> =>
 function startWithNoViews(): void {
   frameRealm().localStorage.removeItem("saccade.views");
 }
-afterEach(() => frameRealm().localStorage.removeItem("saccade.views"));
+// the declaration goes back to the file as seeded, whatever a scenario did
+afterEach(async () => {
+  frameRealm().localStorage.removeItem("saccade.views");
+  await (commands as unknown as { portSetViews(v: null): Promise<void> }).portSetViews(null);
+});
 
 const control = (tracker: Tracker, path: string): string => `rail-view-${tracker.repo}/${path}`;
 const part = (tracker: Tracker, path: string): string => `rail/view/${tracker.repo}/${path}`;
@@ -113,6 +118,17 @@ test("keeping a kept location again says so and adds nothing", async ({ app, tra
   await app.press("Escape");
 });
 
+test("a rail with no kept or offered views draws none and no note", async ({ app, tracker }) => {
+  startWithNoViews();
+  await showRail(app);
+  await expect.poll(() => app.shows(`project-${tracker.repo}`), { timeout: 20_000 }).toBe(true);
+  expect(await app.shows("rail-view-problem")).toBe(false);
+  await app.press("s");
+  await expect.poll(async () => (await app.labels()).map((chip) => chip.part)).toContain(`rail/project/${tracker.repo}`);
+  expect((await app.labels()).filter((chip) => chip.part.startsWith("rail/view/"))).toEqual([]);
+  await app.press("Escape");
+});
+
 test("a window that has nothing to keep says why", async ({ app }) => {
   startWithNoViews();
   expect(await app.shows("empty-surface")).toBe(true);
@@ -156,6 +172,10 @@ test("the file's views show on a device that kept nothing; a file view has no fo
   startWithNoViews();
   await tracker.createTag("vwfile", "the file's view");
   expect(viewsStore()).toEqual({});
+  // the declaration offers one readable view and one nothing can read;
+  // the app reads it afresh at launch
+  await app.setDeclaredViews(["tasks?tag=vwfile", "tasks?tag="]);
+  await relaunch(app);
   await showRail(app);
   const entry = control(tracker, "tasks?tag=vwfile");
   await expect.poll(() => app.shows(entry), { timeout: 20_000 }).toBe(true);
