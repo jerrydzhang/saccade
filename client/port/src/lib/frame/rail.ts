@@ -12,7 +12,7 @@ import { theProjects } from "../asks.ts";
 import { projectViewFor } from "../instruments/claims.ts";
 import { registeredInstruments } from "../instruments/registry.ts";
 import type { InputContext } from "../contracts/input.ts";
-import type { TargetDefinition } from "../contracts/buffer.ts";
+import type { RailPublication, TargetDefinition } from "../contracts/buffer.ts";
 
 /** The frame rail's project entry: the registry's name and the shown
  * mark. What sits beneath it comes from the claims seam, not from
@@ -197,41 +197,35 @@ export function createFrameRail(deps: FrameRailDeps) {
     registered(): boolean {
       return registeredNames.length > 0;
     },
+
     /** The rail's targets: the project headers the frame owns, then
      * whatever the claims seam publishes beneath each, then the foot
      * group. */
     targets(): TargetDefinition[] {
       return targets();
     },
-    /** The targets beneath one project's rail entry (its header and
-     * the seam's publications), or the foot group's when the project
-     * is null. */
-    railTargets(project: string | null): TargetDefinition[] {
+    /** The targets beneath one project's rail entry: the claims
+     * seam's publications for it (the header is the frame's own), or
+     * the foot group's when the project is null. Each publication
+     * pairs the target with its instrument's row component, if it
+     * handed one over the registration; the frame hosts it. */
+    railTargets(project: string | null): RailPublication[] {
       if (project === null) {
-        const foot: TargetDefinition[] = [];
+        const foot: RailPublication[] = [];
         for (const registration of registeredInstruments()) {
           for (const target of registration.railTargets(null)) {
-            foot.push(target);
+            foot.push({ target, row: registration.railRow ?? null });
           }
         }
         return foot;
       }
-      const entry = projectsNow().find((candidate) => candidate.name === project);
-      if (entry === undefined) return [];
-      return [
-        {
-          id: entry.part,
-          kind: "project",
-          label: entry.name,
-          inside: null,
-          clickable: true,
-          acts: () => projectActs(entry),
-          anchor: null,
-        },
-        ...registeredInstruments().flatMap((registration) =>
-          registration.railTargets(project),
-        ),
-      ];
+      const out: RailPublication[] = [];
+      for (const registration of registeredInstruments()) {
+        for (const target of registration.railTargets(project)) {
+          out.push({ target, row: registration.railRow ?? null });
+        }
+      }
+      return out;
     },
     start(): void {
       if (railTimer !== null) return;

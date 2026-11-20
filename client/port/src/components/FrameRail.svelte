@@ -14,6 +14,7 @@ directly. The wheel scrolls the rail and keeps the shown project in
 view; the reading keys never scroll it. -->
 <script lang="ts">
   import type { AddView } from "../lib/frame/add.ts";
+  import type { RailPublication } from "../contracts/buffer.ts";
   import type { MenuView } from "../lib/menu/session.ts";
   import LabelOverlay from "./LabelOverlay.svelte";
   import ActMenu from "./ActMenu.svelte";
@@ -23,6 +24,7 @@ view; the reading keys never scroll it. -->
     projects,
     beneath,
     foot,
+    notes,
     view,
     shown,
     labels,
@@ -39,12 +41,16 @@ view; the reading keys never scroll it. -->
     /** The registered projects: the frame rail's headers. */
     projects: FrameRailProject[];
     /** The published targets beneath each project (the claims seam's
-     * answer). */
-    beneath: readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[];
+     * answer), each with its instrument's row component when handed
+     * over the registration. */
+    beneath: readonly { project: FrameRailProject; targets: readonly RailPublication[] }[];
     /** The published targets no project claims: the frame's foot
      * group. */
-    foot: readonly TargetDefinition[];
-    view: { visible: boolean; registered: boolean; add: AddView; pane: HTMLElement | null };
+    foot: readonly RailPublication[];
+    /** The unreachable notes under the project headers, keyed by the
+     * project's rail id. */
+    notes: readonly { part: string; note: string }[];
+    view: { visible: boolean; registered: boolean; footnote: string | null; add: AddView; pane: HTMLElement | null };
     /** The project this window shows: the rail's mark. */
     shown: string | null;
     /** The select session's labels over the presented set (the
@@ -73,6 +79,26 @@ view; the reading keys never scroll it. -->
   let pane: HTMLElement | null = $state(null);
   let list: HTMLElement | null = $state(null);
   let addInput: HTMLInputElement | null = $state(null);
+  // the pointer's hover marking (the rows' highlight, the plane's
+  // own): the entry under the pointer carries data-port-hover; any
+  // scroll clears it
+  let hovered = $state<string | null>(null);
+  let lastPointer: { x: number; y: number } | null = null;
+  function pointerMoved(event: MouseEvent): void {
+    if (lastPointer !== null && lastPointer.x === event.clientX && lastPointer.y === event.clientY) return;
+    lastPointer = { x: event.clientX, y: event.clientY };
+    const element = (event.target as HTMLElement | null)?.closest?.(
+      '[data-port-kind="project"], [data-port-kind="agent"]',
+    );
+    hovered = element instanceof HTMLElement ? element.getAttribute("data-port-part") : null;
+  }
+  $effect(() => {
+    const clear = (): void => {
+      hovered = null;
+    };
+    document.addEventListener("scroll", clear, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", clear, { capture: true });
+  });
   $effect(() => {
     attachPane(pane);
   });
@@ -101,6 +127,10 @@ view; the reading keys never scroll it. -->
   function railMenu(): MenuView | null {
     return menu !== null && menu.part.startsWith("rail/") ? menu : null;
   }
+
+  function noteFor(part: string): string | null {
+    return notes.find((entry) => entry.part === part)?.note ?? null;
+  }
 </script>
 
 {#if view.visible}
@@ -127,19 +157,30 @@ view; the reading keys never scroll it. -->
               entryMenu(partOf(event) ?? project.part, event);
             }}
           >{project.name}</button>
-          {#each beneath.find((group) => group.project.part === project.part)?.targets as target (target.id)}
+          {#if noteFor(project.part) !== null}
+            <div class="port-rail-note" title={noteFor(project.part) ?? undefined}>unreachable</div>
+          {/if}
+          {#each beneath.find((group) => group.project.part === project.part)?.targets as publication (publication.target.id)}
             <button
               class="port-rail-entry"
-              data-port-control={`rail-entry-${target.id}`}
-              data-port-part={target.id}
-              data-port-kind={target.kind}
-              data-port-title={target.label}
-              onclick={(event) => entryActivate(partOf(event) ?? target.id, event)}
+              data-port-control={`rail-entry-${publication.target.id}`}
+              data-port-part={publication.target.id}
+              data-port-kind={publication.target.kind}
+              data-port-title={publication.target.label}
+              data-port-hover={hovered === publication.target.id ? "" : undefined}
+              onclick={(event) => entryActivate(partOf(event) ?? publication.target.id, event)}
               oncontextmenu={(event) => {
                 event.preventDefault();
-                entryMenu(partOf(event) ?? target.id, event);
+                entryMenu(partOf(event) ?? publication.target.id, event);
               }}
-            >{target.label}</button>
+            >
+              {#if publication.row !== null}
+                {@const Row = publication.row}
+                <Row target={publication.target} />
+              {:else}
+                {publication.target.label}
+              {/if}
+            </button>
           {/each}
         </section>
       {/each}
@@ -165,19 +206,27 @@ view; the reading keys never scroll it. -->
       {#if foot.length > 0}
         <section class="port-rail-project" data-port-control="unregistered">
           <div class="port-rail-name port-rail-group">unregistered</div>
-          {#each foot as target (target.id)}
+          {#each foot as publication (publication.target.id)}
             <button
               class="port-rail-entry"
-              data-port-control={`unregistered-${target.id}`}
-              data-port-part={target.id}
-              data-port-kind={target.kind}
-              data-port-title={target.label}
-              onclick={(event) => entryActivate(target.id, event)}
+              data-port-control={`unregistered-${publication.target.id}`}
+              data-port-part={publication.target.id}
+              data-port-kind={publication.target.kind}
+              data-port-title={publication.target.label}
+              data-port-hover={hovered === publication.target.id ? "" : undefined}
+              onclick={(event) => entryActivate(publication.target.id, event)}
               oncontextmenu={(event) => {
                 event.preventDefault();
-                entryMenu(target.id, event);
+                entryMenu(publication.target.id, event);
               }}
-            >{target.label}</button>
+            >
+              {#if publication.row !== null}
+                {@const Row = publication.row}
+                <Row target={publication.target} />
+              {:else}
+                {publication.target.label}
+              {/if}
+            </button>
           {/each}
         </section>
       {/if}
@@ -187,6 +236,9 @@ view; the reading keys never scroll it. -->
     {/if}
     {#if railMenu() !== null}
       <ActMenu menu={railMenu()!} host={pane} session={menuSession as never} />
+    {/if}
+    {#if view.footnote !== null}
+      <div class="port-rail-note" data-port-control="herdr-note">{view.footnote}</div>
     {/if}
   </nav>
 {/if}

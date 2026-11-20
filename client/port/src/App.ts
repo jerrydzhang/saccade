@@ -24,7 +24,7 @@ import {
   type WindowEnvironment,
   type WindowServices,
 } from "./lib/instruments/index.ts";
-import { instrumentClaims, instrumentForAddress } from "./lib/instruments/claims.ts";
+import { instrumentClaims, instrumentForAddress, railFootnote } from "./lib/instruments/claims.ts";
 import {
   createBufferFactory,
   createDiagnostics,
@@ -61,7 +61,7 @@ import {
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
 
-import { pickerTasks } from "./lib/instruments/claims.ts";
+import { pickerCandidates } from "./lib/instruments/claims.ts";
 
 import type { PickContext } from "./lib/picker/model.ts";
 import {
@@ -89,6 +89,8 @@ export const WHICH_KEY_DELAY_MS = 400;
 export interface FrameRailView {
   visible: boolean;
   registered: boolean;
+  /** The words feed's note (why the agents' words may be stale). */
+  footnote: string | null;
   add: Readonly<{ open: boolean; value: string; problem: string | null }>;
   pane: HTMLElement | null;
 }
@@ -148,7 +150,7 @@ export interface PortWindow {
   subscribeRail(observer: (projects: import("./lib/frame/rail.ts").FrameRailProject[]) => void): () => void;
   /** The targets published beneath a project's rail entry (the
    * claims seam), or the foot group's when the project is null. */
-  railTargets(project: string | null): import("./lib/contracts/buffer.ts").TargetDefinition[];
+  railTargets(project: string | null): import("./lib/contracts/buffer.ts").RailPublication[];
   typeAdd(value: string): void;
   submitAdd(): void;
   closeAdd(): void;
@@ -260,6 +262,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     return {
       visible: railVisible && !railCramped,
       registered: frameRail.registered(),
+      // the words feed's note rides the claims face (the feed is the
+      // instrument's own)
+      footnote: railFootnote(),
       add: frameRail.add.view(),
       pane: railPane,
     };
@@ -458,7 +463,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       try {
         // the claims face: the task list instrument offers the picker
         // its candidates; the frame never reads a tracker's lib
-        tasks.push(...(await pickerTasks(trackerMachine)));
+        tasks.push(...(await pickerCandidates(trackerMachine)));
       } catch {
         // a dead tracker read: the picker still lists recents
       }

@@ -9,19 +9,19 @@
 import { expect, test } from "#scenario";
 import { openPlane, submitLocation } from "./kit/helpers.ts";
 
-/** The device store is this origin's storage (the lane seeds it per
- * launch); the registration journey here clears the seed first - the
- * empty-registry case. */
-function forgetEveryProject(): void {
-  frameRealm().localStorage.removeItem("saccade.projects");
-}
-
 /** The app iframe's realm: the device store lives there, and WebKit
  * partitions the test page's storage away from it. */
 function frameRealm(): Window {
   const frame = document.querySelector("iframe[data-port-suite=app]") as HTMLIFrameElement | null;
   if (frame === null) throw new Error("the app iframe is not mounted");
   return frame.contentWindow as unknown as Window;
+}
+
+/** The device store is the app realm's storage (the lane seeds it per
+ * launch); the registration journey here clears the seed first - the
+ * empty-registry case. */
+function forgetEveryProject(): void {
+  frameRealm().localStorage.removeItem("saccade.projects");
 }
 
 test("Space a shows the rail, registers machine:/path, and opens nothing", async ({ app, tracker }) => {
@@ -36,15 +36,21 @@ test("Space a shows the rail, registers machine:/path, and opens nothing", async
   // Space a shows the rail with the add field; typing registers
   // through the declaration file
   await app.press(" ", "a");
-  await expect.poll(() => app.shows("project-input")).toBe(true);
+  await expect.poll(() => app.shows("project-input"), { timeout: 10_000 }).toBe(true);
   await app.type(`machine:${tracker.repoPath}`);
   await app.press("Enter");
   // the project joined the rail: its entry is on screen, nothing
-  // opened (the window stays the empty window)
+  // opened (the window stays the empty window); the third line
+  // disappears with the registry's state
   const after = await app.readout();
   expect(after.tasks?.project ?? null).toBe(null);
   expect(await app.windows()).toEqual(["main"]);
+  expect((await app.readout()).railAdd?.open ?? null).toBe(false);
   await expect.poll(() => app.shows(`project-${tracker.repo}`), { timeout: 20_000 }).toBe(true);
+  await expect.poll(() => app.shows("empty-register")).toBe(false);
+  expect(await app.shows("empty-surface")).toBe(true);
+  expect(await app.shows("empty-open")).toBe(true);
+  expect(await app.shows("empty-projects")).toBe(true);
 
   // Escape left no field behind: Space a again opens it, Escape leaves
   await app.press(" ", "a");

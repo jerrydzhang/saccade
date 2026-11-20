@@ -142,6 +142,15 @@ export type TargetDefinition = Readonly<{
    * path changes meaning when rows reorder. Null when none. */
   anchor: string | null;
 }>;
+
+/** A rail target as the frame carries it: the published data, and -
+ * when its instrument handed a row component over the registration -
+ * that component, hosted inside the frame's own entry element. Null,
+ * the frame draws the label alone. */
+export type RailPublication = {
+  target: TargetDefinition;
+  row: import("svelte").Component<{ target: TargetDefinition }> | null;
+};
 /** The reading anchor the frame captures for Back: the published
  * target the reading position sits inside, named by its durable
  * anchor; the default when none holds it. The instrument's places

@@ -289,9 +289,9 @@ test("an agent's acts are its first task's, composed against its own project", a
       assert.ok(rail.words().words.t10 !== undefined, "the words read");
     });
     // the agents publish beneath the project's rail entry (the
-    // instrument's own publication face)
-    const ports = { open: () => {}, elsewhere: (spec: string, act: "link" | "once" | "new") => elsewhere.push([spec, act]), copy: (text: string) => copied.push(text) };
-    const targets = rail.railTargets("saccade", ports);
+    // instrument's own publication face; the ports come from the
+    // rail's own deps)
+    const targets = rail.railTargets("saccade");
     const agent = targets.find((entry) => entry.kind === "agent");
     assert.ok(agent !== undefined, "the rail's agents publish as targets");
     const acts = agent.acts();
@@ -300,6 +300,135 @@ test("an agent's acts are its first task's, composed against its own project", a
     assert.deepEqual(copied, ["hc attach t10"]);
     acts[1]!.action.run();
     assert.deepEqual(elsewhere, [["saccade/t-4", "link"]]);
+  } finally {
+    rail.stop();
+  }
+});
+
+
+test("a declared project with no tracker section is a plain rail entry: no beneath-targets, no problem line", async () => {
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/bare"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "bare"\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  await theProjects().projects();
+  const rail = createFrameRail({
+    capture: () => ({ release: () => {} }),
+    open: () => {},
+    shownProject: () => null,
+  });
+  rail.start();
+  try {
+    await vi.waitFor(() => {
+      assert.deepEqual(rail.projectsNow().map((project) => project.name), ["bare"], "the registry's name lists");
+    });
+    // the plain entry: a header with no problem line, and the seam
+    // publishes nothing beneath it (the tasks instrument's tracker
+    // refuses a repo it does not serve)
+    const targets = rail.targets();
+    const header = targets.find((target) => target.id === projectPart("bare"));
+    assert.ok(header !== undefined, "the plain header draws");
+    assert.equal(header.label, "bare");
+    assert.deepEqual(
+      targets.filter((target) => target.inside === projectPart("bare")),
+      [],
+      "nothing publishes beneath a project no instrument serves",
+    );
+    // no problem line anywhere under the entry
+    assert.ok(!targets.some((target) => target.label.toLowerCase().includes("unreachable")));
+  } finally {
+    rail.stop();
+  }
+});
+
+test("the backoff doubles per consecutive failure, caps at a minute, and resets on success (injected clock)", async () => {
+  let moment = 1_000_000;
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/saccade"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "saccade"\n\n[tracker]\nport = 8814\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  const source = sourceFor("tracker:saccade") as TrackerSource;
+  let answers: "fail" | "succeed" = "fail";
+  const asked: number[] = [];
+  vi.spyOn(source, "agentsPage").mockImplementation(async () => {
+    asked.push(moment);
+    if (answers === "fail") throw new Error("the tracker refused");
+    return agentsPage();
+  });
+  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: null }));
+  const rail = createTasksRail({
+    ports: () => ({ open: () => {}, elsewhere: undefined, copy: undefined }),
+    now: () => moment,
+  });
+  rail.start();
+  const tick = async (): Promise<void> => {
+    await rail.tick();
+  };
+  try {
+    // first ask fails: the next ask is one interval doubled (6s away)
+    await tick();
+    const first = asked.length;
+    assert.equal(first, 1, "the first ask ran");
+    moment += 3000;
+    await tick();
+    assert.equal(asked.length, first, "the doubled interval holds the ask back at +3s");
+    // past the doubled interval: the second ask runs and fails: the
+    // next ask doubles again (12s away)
+    moment += 4000;
+    await tick();
+    assert.equal(asked.length, first + 1, "the doubled interval released the ask");
+    moment += 6000;
+    await tick();
+    assert.equal(asked.length, first + 1, "the second doubling holds the ask back at +6s");
+    moment += 7000;
+    await tick();
+    assert.equal(asked.length, first + 2, "the second doubling released the ask");
+    // the cap: many more failures never wait longer than a minute
+    for (let round = 0; round < 6; round++) {
+      moment += 61_000;
+      await tick();
+      assert.equal(asked.length, first + 2 + round + 1, "the capped ask released");
+    }
+    const cappedGap = asked[asked.length - 1]! - asked[asked.length - 2]!;
+    assert.ok(cappedGap <= 61_000, "the cap keeps the wait under a minute");
+
+    // a success resets: the next ask rides the live cadence again
+    answers = "succeed";
+    moment += 61_000;
+    await tick();
+    const afterSuccess = asked.length;
+    moment += 3000;
+    await tick();
+    assert.equal(asked.length, afterSuccess + 1, "the reset returns the project to the live cadence");
   } finally {
     rail.stop();
   }

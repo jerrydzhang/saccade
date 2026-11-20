@@ -17,6 +17,8 @@ import type { TasksData, TasksUI } from "./tasksController.ts";
 import type { InstrumentProps } from "../lib/instruments/contract.ts";
 import type { TaskPorts } from "../lib/tasks/menu.ts";
 import { registerInstrument, type RegisteredInstrument } from "../lib/instruments/registry.ts";
+import TasksRailRow from "./TasksRailRow.svelte";
+import { serveRailAgents } from "./tasksRail.ts";
 import { sourceFor } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { tasksPageOf } from "../lib/tasks/page.ts";
@@ -37,6 +39,10 @@ const railData = createTasksRail({
 });
 let services: TaskPorts | null = null;
 
+// the row component reads the live rail view through the lookup (the
+// frame hands it only the target)
+serveRailAgents((id) => railData.railAgentFor(id));
+
 /** The task list's registration: called once by the instruments'
  * index (the registry's one list). */
 export function register(): RegisteredInstrument {
@@ -45,8 +51,11 @@ export function register(): RegisteredInstrument {
     title: "the project's tasks",
     claims: (address) => address.machine.startsWith("tracker:") && address.path === "tasks",
     projectView: (project) => `${project}/tasks`,
-    railTargets: (project) => railData.railTargets(project, windowPorts()),
-    pickerTasks: async (machine) => {
+    railTargets: (project) => railData.railTargets(project),
+    railNote: (project) => railData.railNote(project),
+    railFootnote: () => railData.railFootnote(),
+    railRow: TasksRailRow,
+    pickerCandidates: async (machine) => {
       const source = sourceFor(machine);
       if (!(source instanceof TrackerSource)) return [];
       const model = tasksPageOf(await source.instrumentPage("tasks"));

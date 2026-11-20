@@ -15,8 +15,9 @@ import { theProjects } from "../lib/asks.ts";
 import { sourceFor, tauriInvoke } from "../lib/sources.ts";
 import { TrackerSource } from "../lib/tracker.ts";
 import { formatLocation } from "../lib/location.ts";
-import { agentFactsOf, railOf, railAgentPart, railAgentText, terminalPart, wordsOf, type WordsSnapshot, NO_WORDS } from "../lib/tasks/rail.ts";
+import { agentFactsOf, railOf, railAgentPart, railAgentText, terminalPart, wordsOf, type RailAgent, type WordsSnapshot, NO_WORDS } from "../lib/tasks/rail.ts";
 import type { TaskPorts } from "../lib/tasks/menu.ts";
+import type { Component } from "svelte";
 
 /** The rail poll's live cadence (a named tunable). */
 export const RAIL_POLL_MS = 3000;
@@ -95,13 +96,32 @@ function agentActs(
 export interface TasksRailDeps {
   /** The window services slice the beneath-acts ride. */
   ports(): Pick<TaskPorts, "open" | "elsewhere" | "copy">;
+  /** The clock: the backoff's schedule reads it. Defaults to the
+   * real clock; tests inject a stepped one. */
+  now?(): number;
+  /** One poll, driven by the caller (tests drive the backoff by
+   * hand; the loop drives it live). */
+  tick?(): Promise<void>;
 }
 
 /** The tasks instrument's rail publication: per registered project,
  * the agents beneath its rail entry; the strays at the foot. The poll
  * lives here, with the backoff; the frame reads the published targets
  * through the claims seam and draws them generically. */
+/** The live agent lookup behind the tasks instrument's row component:
+ * the instrument points it at its own rail view (the specimen, at its
+ * fixture). */
+let railAgentLookup: (id: string) => RailAgent | null = () => null;
+export function serveRailAgents(lookup: (id: string) => RailAgent | null): void {
+  railAgentLookup = lookup;
+}
+/** The agent behind one published rail target's id, or null. */
+export function railAgentOf(id: string): RailAgent | null {
+  return railAgentLookup(id);
+}
+
 export function createTasksRail(deps: TasksRailDeps) {
+  const now = (): number => (deps.now ? deps.now() : Date.now());
   const observers = new Set<() => void>();
   let words: WordsSnapshot = NO_WORDS;
   let rail: ReturnType<typeof railOf> | null = null;
@@ -111,18 +131,25 @@ export function createTasksRail(deps: TasksRailDeps) {
   const failures = new Map<string, number>();
   // per project: when the next ask is due (ms epoch)
   const nextDue = new Map<string, number>();
+  // per project: the last ask's failure (the unreachable note's text),
+  // cleared on success
+  const notes = new Map<string, string>();
 
   async function poll(): Promise<void> {
-    let projects: { machine: string; path: string; declaration: { name: string } }[] = [];
+    let projects: { machine: string; path: string; declaration: { name: string; port: number | null } }[] = [];
     try {
       projects = await theProjects().projects();
     } catch {
       projects = [];
     }
     // one ask per project: due only (a failed project's backoff holds
-    // it back; a success resets it)
-    const now = Date.now();
-    const due = projects.filter((project) => (nextDue.get(project.declaration.name) ?? 0) <= now);
+    // it back; a success resets it). A project whose declaration has
+    // no tracker port is never asked: nothing of its tracker is known
+    // (its plain rail entry stands, no note)
+    const moment = now();
+    const due = projects.filter(
+      (project) => project.declaration.port !== null && (nextDue.get(project.declaration.name) ?? 0) <= moment,
+    );
     const pages = await Promise.all(
       due.map(async (project) => {
         try {
@@ -137,13 +164,18 @@ export function createTasksRail(deps: TasksRailDeps) {
           );
           failures.delete(project.declaration.name);
           nextDue.delete(project.declaration.name);
+          notes.delete(project.declaration.name);
           return { name: project.declaration.name, agents, repoPath };
-        } catch {
+        } catch (error) {
           const failed = (failures.get(project.declaration.name) ?? 0) + 1;
           failures.set(project.declaration.name, failed);
           nextDue.set(
             project.declaration.name,
-            Math.min(now + RAIL_RETRY_MS * 2 ** (failed - 1), now + RAIL_RETRY_CAP_MS),
+            Math.min(moment + RAIL_RETRY_MS * 2 ** (failed - 1), moment + RAIL_RETRY_CAP_MS),
+          );
+          notes.set(
+            project.declaration.name,
+            error instanceof Error ? error.message : String(error),
           );
           return { name: project.declaration.name, agents: null, repoPath: null };
         }
@@ -202,7 +234,7 @@ export function createTasksRail(deps: TasksRailDeps) {
    * agents in importance order, their label carrying the word (the
    * frame draws no state glyphs), the attach first then the task's
    * board acts. */
-  function targetsFor(project: string, ports: Pick<TaskPorts, "elsewhere" | "copy">): TargetDefinition[] {
+  function targetsFor(project: string, ports: { elsewhere(spec: string, act: "link" | "once" | "new"): void; copy(text: string): void }): TargetDefinition[] {
     const view = rail;
     if (view === null) return [];
     const entry = view.projects.find((candidate) => candidate.name === project);
@@ -230,7 +262,7 @@ export function createTasksRail(deps: TasksRailDeps) {
   /** The foot targets: the terminals no registered project holds, in
    * importance order, their label carrying the word and the
    * terminal's own title. */
-  function footTargets(ports: Pick<TaskPorts, "elsewhere" | "copy">): TargetDefinition[] {
+  function footTargets(ports: { elsewhere(spec: string, act: "link" | "once" | "new"): void; copy(text: string): void }): TargetDefinition[] {
     const view = rail;
     if (view === null) return [];
     return view.unregistered.map((agent) => {
@@ -249,10 +281,38 @@ export function createTasksRail(deps: TasksRailDeps) {
   }
 
   return {
-    /** The beneath-targets the claims seam asks for: the agents
+      /** The beneath-targets the claims seam asks for: the agents
      * beneath a project's rail entry, or the foot's strays. */
-    railTargets(project: string | null, ports: Pick<TaskPorts, "open" | "elsewhere" | "copy">): TargetDefinition[] {
+    railTargets(project: string | null): TargetDefinition[] {
+      const ports = {
+        open: (spec: string) => deps.ports().open(spec),
+        elsewhere: (spec: string, act: "link" | "once" | "new") => deps.ports().elsewhere?.(spec, act),
+        copy: (text: string) => deps.ports().copy?.(text),
+      };
       return project === null ? footTargets(ports) : targetsFor(project, ports);
+    },
+    /** The unreachable note for a project, or null (a plain entry
+     * stands). */
+    railNote(project: string): string | null {
+      return notes.get(project) ?? null;
+    },
+    /** The agent behind one published rail target's id, or null (the
+     * row component draws by it). */
+    railAgentFor(id: string): RailAgent | null {
+      const view = rail;
+      if (view === null) return null;
+      for (const entry of view.projects) {
+        for (const group of entry.groups) {
+          for (const agent of group.agents) {
+            if (railAgentPart(entry.name, agent) === id) return agent;
+          }
+        }
+      }
+      return view.unregistered.find((agent) => terminalPart(agent.address) === id) ?? null;
+    },
+    /** The words feed's note, or null. */
+    railFootnote(): string | null {
+      return words.problem ?? null;
     },
     /** The current rail view (the rows' agent marks read its words). */
     words(): WordsSnapshot {
@@ -268,8 +328,16 @@ export function createTasksRail(deps: TasksRailDeps) {
     start(): void {
       if (running) return;
       running = true;
-      void loop();
-      void wordsLoop();
+      // a test that injected the clock drives the poll by hand (tick);
+      // the live loop and word feed spawn only under the real clock
+      if (deps.now === undefined) {
+        void loop();
+        void wordsLoop();
+      }
+    },
+    /** One poll, for the caller that drives the clock. */
+    tick(): Promise<void> {
+      return loop();
     },
     stop(): void {
       running = false;

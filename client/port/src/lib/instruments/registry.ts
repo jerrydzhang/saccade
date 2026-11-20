@@ -123,8 +123,15 @@ export interface RegisteredInstrument {
    * and polled by the instrument; the frame draws them without
    * knowing their kind. */
   railTargets(project: string | null): import("../contracts/buffer.ts").TargetDefinition[];
+  /** The unreachable note under a project's rail entry, or null. */
+  railNote?(project: string): string | null;
+  /** The words feed's note, or null. */
+  railFootnote?(): string | null;
   /** The picker's task candidates on a tracker machine, or none. */
-  pickerTasks?(machine: string): Promise<readonly { id: string; title: string }[]>;
+  pickerCandidates?(machine: string): Promise<readonly { id: string; title: string }[]>;
+  /** The row component for this instrument's rail targets (the frame
+   * hosts it; absent, the targets draw as their labels). */
+  railRow?: import("svelte").Component<{ target: import("../contracts/buffer.ts").TargetDefinition }>;
   construct(environment: WindowEnvironment): RunningInstrument;
 }
 
@@ -151,13 +158,17 @@ export function instrumentForAddress(
 
 export function registerInstrument<
   T extends object, UI extends object, A extends AnchorData,
->(definition: InstrumentDefinition<T, UI, A> & { railTargets?: RegisteredInstrument["railTargets"] }): RegisteredInstrument {
+>(definition: InstrumentDefinition<T, UI, A>): RegisteredInstrument {
   const registration: RegisteredInstrument = {
     kind: definition.kind,
     title: definition.title,
     claims: definition.claims,
     projectView: definition.projectView,
-    railTargets: definition.railTargets ?? (() => []),
+    railTargets: definition.railTargets,
+    railNote: definition.railNote,
+    railFootnote: definition.railFootnote,
+    pickerCandidates: definition.pickerCandidates,
+    railRow: definition.railRow,
     construct(environment) {
       const built: BuiltBuffer<T, UI> = environment.buffers.create<T, UI, A>({
         context: environment.context,

@@ -16,6 +16,8 @@ from the registry's reviewed erasure boundary. -->
   import type { WhichKeyView } from "./lib/input/key-matcher.ts";
   import Strip from "./components/Strip.svelte";
   import FrameRail from "./components/FrameRail.svelte";
+  import { chordName, WINDOW_CHORDS } from "./lib/input/contexts.ts";
+  import { railNoteFor } from "./lib/instruments/claims.ts";
   import type { FrameRailProject } from "./App.ts";
   import type { TargetDefinition } from "./lib/contracts/buffer.ts";
 
@@ -39,12 +41,15 @@ from the registry's reviewed erasure boundary. -->
   let railState = $state<FrameRailView>({
     visible: false,
     registered: false,
+    footnote: null,
+    notes: [],
     add: { open: false, value: "", problem: null },
     pane: null,
   });
   let railProjects = $state<FrameRailProject[]>([]);
   let railBeneath = $state<readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[]>([]);
   let railFoot = $state<readonly TargetDefinition[]>([]);
+  let railNotes = $state<readonly { part: string; note: string }[]>([]);
   let railSelectLabels = $state<readonly { part: string; label: string; nested?: boolean }[]>([]);
   let railSelectTyped = $state("");
   let railMenu = $state<import("./lib/menu/session.ts").MenuView | null>(null);
@@ -93,6 +98,9 @@ from the registry's reviewed erasure boundary. -->
         targets: windowPort.railTargets(project.name),
       }));
       railFoot = windowPort.railTargets(null);
+      railNotes = next
+        .map((project) => ({ part: project.part, note: railNoteFor(project.name) }))
+        .filter((entry) => entry.note !== null);
       railShown = next.find((project) => project.current)?.name ?? null;
     });
     void windowPort.boot();
@@ -248,6 +256,7 @@ from the registry's reviewed erasure boundary. -->
           projects={railProjects}
           beneath={railBeneath}
           foot={railFoot}
+          notes={railNotes}
           view={railState}
           shown={railShown}
           labels={railSelectLabels}
@@ -269,10 +278,10 @@ from the registry's reviewed erasure boundary. -->
             involved - three lines and nothing else; the third appears
             with the registry's state -->
             <div class="port-empty" data-port-control="empty-surface" role="document">
-              <p class="port-empty-line" data-port-control="empty-open">Space Space open something</p>
-              <p class="port-empty-line" data-port-control="empty-projects">Space r show projects</p>
+              <p class="port-empty-line" data-port-control="empty-open">{chordName(WINDOW_CHORDS.picker)} open something</p>
+              <p class="port-empty-line" data-port-control="empty-projects">{chordName(WINDOW_CHORDS.rail)} show projects</p>
               {#if !railState.registered}
-                <p class="port-empty-line" data-port-control="empty-register">Space a register a project</p>
+                <p class="port-empty-line" data-port-control="empty-register">{chordName(WINDOW_CHORDS.register)} register a project</p>
               {/if}
             </div>
           {:else if frame.content.kind === "available"}

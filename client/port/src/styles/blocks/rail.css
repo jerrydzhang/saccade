@@ -146,8 +146,10 @@
 }
 
 /* the pointer's entry and the menu's target share one highlight */
+.port-rail-name[data-port-hover],
 .port-rail-name[data-port-selected],
-.port-rail-agent[data-port-selected] {
+.port-rail-entry[data-port-hover],
+.port-rail-entry[data-port-selected] {
   background: var(--port-color-selection);
 }
 
@@ -197,4 +199,77 @@
   margin: 0 0 12px;
   color: var(--port-color-ink);
   font-size: 1rem;
+}
+
+/* The beneath-rows' drawing, moved from the plane's block as renames
+ * (the ownership split: the frame owns the entry element and its
+ * marking; the instrument's row component owns what is inside). The
+ * geometry is the rail's own: 32px rows, the bleed so highlights
+ * never move the text, the id and name on fixed columns. */
+.port-rail-entry {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  margin: 0 -8px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) fit-content(45%);
+  column-gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  line-height: 24px;
+  font-size: 0.875rem;
+}
+.port-rail-entry[data-port-hover],
+.port-rail-entry[data-port-selected] {
+  background: var(--port-color-selection);
+}
+.port-rail-who {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.port-rail-incarnation {
+  flex: none;
+  width: 3.75em;
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-rail-agent-name {
+  min-width: 0;
+  color: var(--port-color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-rail-tasks {
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-muted);
+  white-space: nowrap;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-rail-tasks[data-port-unregistered] {
+  font-family: inherit;
+  font-style: italic;
+}
+.port-rail-msg {
+  grid-column: 2 / -1;
+  line-height: 16px;
+  color: var(--port-color-muted);
+  font-style: italic;
+  font-size: 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }

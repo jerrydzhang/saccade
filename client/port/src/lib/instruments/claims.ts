@@ -51,12 +51,12 @@ export function projectViewFor(project: string): string | null {
 /** The picker's task candidates on a tracker machine: the registered
  * instruments' first answer. The window's picker face reads this - the
  * window never reads a tracker's lib. */
-export async function pickerTasks(
+export async function pickerCandidates(
   machine: string,
 ): Promise<readonly { id: string; title: string }[]> {
   for (const entry of registeredInstruments()) {
-    if (entry.pickerTasks === undefined) continue;
-    const tasks = await entry.pickerTasks(machine);
+    if (entry.pickerCandidates === undefined) continue;
+    const tasks = await entry.pickerCandidates(machine);
     if (tasks.length > 0) return tasks;
   }
   return [];
@@ -73,4 +73,23 @@ export function railTargetsFor(project: string | null): import("../contracts/buf
     for (const target of entry.railTargets(project)) out.push(target);
   }
   return out;
+}
+
+/** The unreachable note under a project's rail entry: the registered
+ * instruments' first answer, or null (a plain entry stands). */
+export function railNoteFor(project: string): string | null {
+  for (const entry of registeredInstruments()) {
+    const note = entry.railNote?.(project);
+    if (note !== null && note !== undefined) return note;
+  }
+  return null;
+}
+
+/** The words feed's note, or null. */
+export function railFootnote(): string | null {
+  for (const entry of registeredInstruments()) {
+    const note = entry.railFootnote?.();
+    if (note !== null && note !== undefined) return note;
+  }
+  return null;
 }

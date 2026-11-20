@@ -41,7 +41,18 @@ export type InstrumentDefinition<
   /** The picker's task candidates on a tracker machine: the tasks
    * this instrument's tracker lists, or none (the board offers
    * none). */
-  pickerTasks?(machine: string): Promise<readonly { id: string; title: string }[]>;
+  pickerCandidates?(machine: string): Promise<readonly { id: string; title: string }[]>;
+  /** The unreachable note under a project's rail entry (its last
+   * ask's failure), or null when the entry stands clean. */
+  railNote?(project: string): string | null;
+  /** The words feed's note (why the agents' words may be stale), or
+   * null. */
+  railFootnote?(): string | null;
+  /** The row component this instrument hands the frame for its rail
+   * targets: one component, hosted inside the frame's own entry
+   * element, receiving the target and drawing it by kind. Absent, the
+   * frame draws the targets as their labels. */
+  railRow?: import("svelte").Component<{ target: import("../contracts/buffer.ts").TargetDefinition }>;
   Component: Component<InstrumentProps<T, UI>>;
   connect: (buffer: BufferAccess<T>, services: import("../instruments/registry.ts").WindowServices) => InstrumentAttachment<UI, A>;
 }>;
