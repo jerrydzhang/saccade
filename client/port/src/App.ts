@@ -36,6 +36,7 @@ import { parseLocation } from "./lib/location.ts";
 import type { TargetPresentations } from "./components/Buffer.ts";
 import { formatLocation } from "./lib/location.ts";
 import { createFrameRail } from "./lib/frame/rail.ts";
+import { createTargetPresentations } from "./lib/frame/presentations.ts";
 import type { Address } from "./lib/contracts/places.ts";
 import {
   PORT_SURFACE,
@@ -149,6 +150,11 @@ export interface PortWindow {
   /** The targets published beneath a project's rail entry (the
    * claims seam), or the foot group's when the project is null. */
   railTargets(project: string | null): import("./lib/contracts/buffer.ts").RailPublication[];
+  /** The presentations the rail's entries ride now: the shown
+   * buffer's when one is shown, the frame's own when none is (the
+   * empty window), null while a pending open still draws the
+   * previous content. */
+  railLease(): TargetPresentations | null;
   typeAdd(value: string): void;
   submitAdd(): void;
   closeAdd(): void;
@@ -272,29 +278,66 @@ export function createPortWindow(windowId = "main"): PortWindow {
   let railCramped = false;
   const RAIL_MIN_WIDTH = 640;
 
-  /** The select-session labels over the shown buffer's presented set,
-   * while select mode is open: the rail's chips ride the same
-   * session's labels, measured in the pane. */
-  function railSelectLabels(): readonly { part: string; label: string; nested?: boolean }[] {
+  // The frame's own presentation of the rail's entries, for a window
+  // that shows no buffer: the same select session and act menu a shown
+  // buffer's presentation carries, over the rail's targets alone. Its
+  // keys ride the frame's own matcher - the reading context (s enters
+  // select), replaced by a capture while select or the menu holds the
+  // keys; captures are not a stack, so a stale release restores
+  // nothing.
+  let railOwnHost: HostMatcher | null = null;
+  let railOwnLease: { release(): void } | null = null;
+  function railOwnInstall(context: import("./lib/contracts/input.ts").InputContext): void {
+    railOwnHost?.dispose();
+    railOwnHost = createHostMatcher(context, { expirySuspended: () => whichKey !== null });
+    railOwnHost.subscribePending(() => notifyLivePending());
+  }
+  const railOwnPresentations: TargetPresentations = createTargetPresentations({
+    targets: () => (railVisible && !railCramped ? frameRail.targets() : []),
+    bounds: (id) => railBounds(id),
+    capture: (context) => {
+      const lease = {
+        release: () => {
+          if (railOwnLease !== lease) return;
+          railOwnLease = null;
+          railOwnInstall(railOwnReading);
+        },
+      };
+      railOwnLease = lease;
+      railOwnInstall(context);
+      return lease;
+    },
+    viewport,
+  });
+  const railOwnReading = railOwnPresentations.readingContext();
+  railOwnInstall(railOwnReading);
+  const railOwnKeys: Parameters<typeof dispatchStroke>[1] = {
+    handleKey: (stroke) => (railOwnHost === null ? "allow-default" : railOwnHost.apply(railOwnHost.stroke(stroke))),
+  };
+
+  /** Whether the window draws a buffer: its available content, or a
+   * pending open still drawing the previous one. */
+  function showsBuffer(): boolean {
     const state = displayedFrame();
-    if (state.kind !== "alive" || state.content.kind !== "available") return [];
-    const targets = state.content.value.props["targets"] as TargetPresentations | undefined;
-    const view = targets?.selectView();
-    if (view === null || view === undefined) return [];
-    return view.labels;
+    if (state.kind !== "alive") return false;
+    return state.content.kind === "available" || (state.content.kind === "pending" && state.content.previous !== null);
   }
 
-  // The shown buffer's presentations change (select opens, labels
-  // narrow): the rail's chips ride them. Subscribed when the frame
-  // state moves; the lease lives on the frame's published props.
+  function railLeaseOf(): TargetPresentations | null {
+    const state = displayedFrame();
+    if (state.kind === "alive" && state.content.kind === "available") {
+      return (state.content.value.props["targets"] as TargetPresentations | undefined) ?? null;
+    }
+    return showsBuffer() ? null : railOwnPresentations;
+  }
+
+  // The rail's presentations change (select opens, labels narrow):
+  // the rail's chips ride them. Subscribed when the frame state moves;
+  // a shown buffer's lease lives on the frame's published props.
   let railLease: TargetPresentations | null = null;
   let railLeaseOff: (() => void) | null = null;
   function watchRailLease(): void {
-    const state = displayedFrame();
-    const lease =
-      state.kind === "alive" && state.content.kind === "available"
-        ? (state.content.value.props["targets"] as TargetPresentations | undefined) ?? null
-        : null;
+    const lease = railLeaseOf();
     if (lease === railLease) return;
     railLeaseOff?.();
     railLeaseOff = null;
@@ -360,12 +403,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       },
     });
     instrument.activate();
-    instrument.subscribeInputPending(() => {
-      const view = livePending();
-      whichKeyPending = view !== null;
-      whichKey = view === null ? null : view;
-      notifyWhichKey();
-    });
+    instrument.subscribeInputPending(() => notifyLivePending());
     instruments[surface] = instrument;
     return instrument;
   }
@@ -861,11 +899,21 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // holds none - the which-key property holds at every level
   function livePending(): import("./lib/input/key-matcher.ts").WhichKeyView | null {
     const instrument = instruments[activeSurface];
-    if (instrument !== undefined) {
+    if (!showsBuffer()) {
+      const view = railOwnHost?.pendingView() ?? null;
+      if (view !== null) return view;
+    } else if (instrument !== undefined) {
       const view = instrument.inputPending();
       if (view !== null) return view;
     }
     return windowHost.pendingView();
+  }
+
+  function notifyLivePending(): void {
+    const view = livePending();
+    whichKeyPending = view !== null;
+    whichKey = view === null ? null : view;
+    notifyWhichKey();
   }
 
   windowHost.subscribePending(() => {
@@ -1127,10 +1175,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   /** The frame's select view for the shown surface, read off the
    * contract's own face. */
   function frameSelectView(): import("./lib/select/session.ts").SelectSessionView | null {
-    const state = displayedFrame();
-    if (state.kind !== "alive" || state.content.kind !== "available") return null;
-    const targets = state.content.value.props["targets"] as TargetPresentations | undefined;
-    return targets?.selectView() ?? null;
+    return railLeaseOf()?.selectView() ?? null;
   }
   function selectFacts(): Record<string, string> {
     const view = frameSelectView();
@@ -1268,7 +1313,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
       ? activeInstrument().handleKey(stroke)
       : dispatchStroke(
           windowHost,
-          activeInstrument(),
+          // a window that draws no buffer hands its keys to the frame's
+          // own matcher: the rail's select session and act menu
+          showsBuffer() ? activeInstrument() : railOwnKeys,
           stroke,
           trace === null
             ? undefined
@@ -1575,6 +1622,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     },
     subscribeRail: (observer) => frameRail.subscribeRail(observer),
     railTargets: (project) => frameRail.railTargets(project),
+    railLease: () => railLeaseOf(),
     typeAdd: (value) => frameRail.add.type(value),
     submitAdd: () => void frameRail.add.submit(),
     closeAdd: () => frameRail.add.close(),

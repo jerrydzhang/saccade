@@ -135,24 +135,13 @@ from the registry's reviewed erasure boundary. -->
     if (ask !== null) askInput?.focus();
   });
 
-  // The rail's select chips and its act menu ride the shown buffer's
-  // presentations: subscribed here so the pane paints its own subset.
+  // The rail's select chips and its act menu ride the presentations
+  // the rail's entries ride now (the shown buffer's, or the frame's
+  // own in a window that shows none): subscribed here so the pane
+  // paints its own subset; a frame state move re-reads them.
   $effect(() => {
-    if (frame === null || frame.kind !== "alive" || frame.content.kind !== "available") {
-      railSelectLabels = [];
-      railMenu = null;
-      railMenuSession = null;
-      return;
-    }
-    const targets = frame.content.value.props["targets"] as
-      | {
-          selectView(): { labels: readonly { part: string; label: string; nested?: boolean }[]; pendingLabel: string } | null;
-          menuView(): import("./lib/menu/session.ts").MenuView | null;
-          menuSession(): unknown;
-          subscribe(observer: () => void): () => void;
-        }
-      | undefined;
-    if (targets === undefined) {
+    const targets = frame === null ? null : (port?.railLease() ?? null);
+    if (targets === null) {
       railSelectLabels = [];
       railMenu = null;
       railMenuSession = null;
@@ -182,10 +171,10 @@ from the registry's reviewed erasure boundary. -->
     return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
   }
 
-  /** A rail entry's plain click: through the shown buffer's lease
-   * when one is present (the entry is an ordinary target - the
-   * primary act runs); with no shown buffer, a project's entry opens
-   * its task list directly. */
+  /** A rail entry's plain click: through the rail's lease (the entry
+   * is an ordinary target - the primary act runs); while a pending
+   * open still draws the previous content there is none, and a
+   * project's entry opens its task list directly. */
   function railEntryActivate(part: string, event: MouseEvent): void {
     const lease = railLeaseOf();
     if (lease !== null) {
@@ -207,8 +196,7 @@ from the registry's reviewed erasure boundary. -->
   }
 
   function railLeaseOf(): import("./lib/contracts/buffer.ts").TargetPresentations | null {
-    if (frame === null || frame.kind !== "alive" || frame.content.kind !== "available") return null;
-    return (frame.content.value.props["targets"] as import("./lib/contracts/buffer.ts").TargetPresentations) ?? null;
+    return port?.railLease() ?? null;
   }
 
 </script>
