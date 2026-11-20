@@ -16,8 +16,13 @@ lint: saccade::lint app::lint
 # the full suite: saccade's (the cargo workspace, the native node
 # suites), then the app's (the app shell's own tests, the app
 # frontend's vitest unit and browser projects; the vitest native
-# project is gated: just app-test-native)
-test: saccade::test app::test
+# project is gated: just app-test-native), then the merge gate's scope
+# rule (gate_scope.py)
+test: saccade::test app::test gate-scope-test
+
+# the merge gate's scope rule: which suites a push runs
+gate-scope-test:
+    python3 -B -m unittest test_gate_scope
 
 alias typecheck := saccade::typecheck
 alias native-test := saccade::native-test

@@ -61,16 +61,20 @@ hooks = [
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "merge-gate", name = "merge gate: the full suite (just test) and the #all build",
+  { id = "merge-gate", name = "merge gate: the suites the push touches and the #all build",
     entry = "bash", language = "system",
     args = ["-c", '''
 set -eu
 # the push hands the hook git's own env: every scratch repo the tests
 # build would resolve against this checkout's git dir without the scrub
 unset $(git rev-parse --local-env-vars) 2>/dev/null || true
-# the full suite: saccade's and the app's (justfile test), just from
-# the saccade shell
-direnv exec saccade just test
+# the suites the pushed paths call for (gate_scope.py: app/ alone runs
+# the app's, saccade/ or any root file runs both), then the gate's own
+# scope test; just comes from the saccade shell
+for recipe in $(python3 -B gate_scope.py "${PRE_COMMIT_FROM_REF:-}" "${PRE_COMMIT_TO_REF:-}"); do
+  direnv exec saccade just "$recipe"
+done
+python3 -B -m unittest -q test_gate_scope
 sha="${PRE_COMMIT_TO_REF:-}"
 case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
 repo="$(git rev-parse --path-format=absolute --git-common-dir)"
