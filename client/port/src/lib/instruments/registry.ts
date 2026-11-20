@@ -30,6 +30,7 @@ import type {
   AnchorData,
   ReturnPlaces,
 } from "../contracts/places.ts";
+import type { TargetDefinition } from "../contracts/buffer.ts";
 import type {
   InstrumentDefinition,
   InstrumentProps,
@@ -49,6 +50,21 @@ function packComponent<P extends Record<string, unknown>>(
 }
 import type { WhichKeyView } from "../input/key-matcher.ts";
 
+export interface WindowServices {
+  /** The ONE open funnel (trail + anchored restore). */
+  open(spec: string, part?: string | null): void;
+  /** The elsewhere acts (o/i/w), present when the boot's binding
+   * facts have answered. */
+  elsewhere?(spec: string, act: "link" | "once" | "new"): void;
+  /** The copy observation: the payload recorded, the clipboard
+   * attempted. */
+  copy(text: string): void;
+  /** The window carries the rest of its own doors beside the named
+   * ones (the board's enlarge, reading layout, history toggle); the
+   * instruments read their slices. */
+  [name: string]: unknown;
+}
+
 export type WindowEnvironment = Readonly<{
   /** The which-key suspension probe (the r110 tunable): while true,
    * the instrument's own matcher freezes its sequence expiry - the
@@ -58,6 +74,15 @@ export type WindowEnvironment = Readonly<{
   viewport: Viewport;
   diagnostics: BufferDiagnostics;
   buffers: BufferFactory;
+  /** The window's services door: the instruments read their slices. */
+  services: WindowServices;
+  /** The frame's own targets (the rail's), presented beside the
+   * publication's: one select session and one act menu span the
+   * content and the rail. */
+  frameTargets?: {
+    targets(): TargetDefinition[];
+    bounds(id: string): import("../contracts/buffer.ts").Bounds | null;
+  };
 }>;
 export interface RunningInstrument {
   readonly id: string;
@@ -85,21 +110,76 @@ export interface RunningInstrument {
 }
 export interface RegisteredInstrument {
   readonly kind: string;
+  /** The help column's title. */
+  readonly title: string;
+  /** The locations this instrument shows (the claims seam). */
+  claims(address: import("../contracts/places.ts").Address): boolean;
+  /** The location form this instrument offers for a registered
+   * project's name, or null. */
+  projectView(project: string): string | null;
+  /** The targets this instrument publishes beneath a project's rail
+   * entry (its `inside` names the project's rail id), or at the rail's
+   * foot when the project is null. The instrument's own data, read
+   * and polled by the instrument; the frame draws them without
+   * knowing their kind. */
+  railTargets(project: string | null): import("../contracts/buffer.ts").TargetDefinition[];
+  /** The unreachable note under a project's rail entry, or null. */
+  railNote?(project: string): string | null;
+  /** The words feed's note, or null. */
+  railFootnote?(): string | null;
+  /** The picker's task candidates on a tracker machine, or none. */
+  pickerCandidates?(machine: string): Promise<readonly { id: string; title: string }[]>;
+  /** The row component for this instrument's rail targets (the frame
+   * hosts it; absent, the targets draw as their labels). */
+  railRow?: import("svelte").Component<{ target: import("../contracts/buffer.ts").TargetDefinition }>;
   construct(environment: WindowEnvironment): RunningInstrument;
 }
+
+/** The registered instruments, in registration order: the frame reads
+ * this list and never names one. */
+const registered: RegisteredInstrument[] = [];
+
+export function registeredInstruments(): readonly RegisteredInstrument[] {
+  return registered;
+}
+
+/** The instrument registered under a kind, or undefined. */
+export function instrumentOfKind(kind: string): RegisteredInstrument | undefined {
+  return registered.find((entry) => entry.kind === kind);
+}
+
+/** The registered instrument whose claims name the address, in
+ * registration order; null when none does. */
+export function instrumentForAddress(
+  address: import("../contracts/places.ts").Address,
+): RegisteredInstrument | null {
+  return registered.find((entry) => entry.claims(address)) ?? null;
+}
+
 export function registerInstrument<
   T extends object, UI extends object, A extends AnchorData,
 >(definition: InstrumentDefinition<T, UI, A>): RegisteredInstrument {
-  return {
+  const registration: RegisteredInstrument = {
     kind: definition.kind,
+    title: definition.title,
+    claims: definition.claims,
+    projectView: definition.projectView,
+    railTargets: definition.railTargets,
+    railNote: definition.railNote,
+    railFootnote: definition.railFootnote,
+    pickerCandidates: definition.pickerCandidates,
+    railRow: definition.railRow,
     construct(environment) {
       const built: BuiltBuffer<T, UI> = environment.buffers.create<T, UI, A>({
         context: environment.context,
         viewport: environment.viewport,
         diagnostics: environment.diagnostics,
-        connect: definition.connect,
+        connect: (buffer) => definition.connect(buffer, environment.services),
         ...(environment.expirySuspended !== undefined
           ? { expirySuspended: environment.expirySuspended }
+          : {}),
+        ...(environment.frameTargets !== undefined
+          ? { frameTargets: environment.frameTargets }
           : {}),
       });
       const project = (frame: Readonly<ContentFrame<T>>): RenderPair =>
@@ -128,6 +208,8 @@ export function registerInstrument<
 };
     },
   };
+  registered.push(registration);
+  return registration;
 }
 
 // App.ts: called only when the window needs a NEW buffer. Revisiting a

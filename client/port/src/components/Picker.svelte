@@ -8,7 +8,7 @@
   // kept scrolled into view. Composition only - the ranking lives in
   // lib/picker/model.ts.
   import { pickList, isPathMode, type PickContext } from "../lib/picker/model.ts";
-  import { parseOpenSpec } from "../instruments/board.ts";
+  import { parseLocation } from "../lib/location.ts";
 
   let {
     context,
@@ -54,7 +54,7 @@
     // prefix-matched a recent PINNED entry (tier 300) and Enter
     // reopened the stale pin, disarming the follow. Typed forms are
     // also how a tracker is first reached.
-    if (typed.length > 0 && parseOpenSpec(typed) !== null) {
+    if (typed.length > 0 && parseLocation(typed) !== null) {
       submit(typed, elsewhere);
       return;
     }

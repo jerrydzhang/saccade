@@ -1,26 +1,27 @@
-// The claims list: one place listing which locations each
-// instrument shows. Tested on fake addresses per claim - the plane's
-// addresses are the task list's, every other address the board's; the
-// first claim that names an address wins; none is null.
+// The claims seam: one place listing which locations each
+// instrument shows, tested on the SHIPPED registrations (the index
+// imports the instruments' own modules) and on fake claims for the
+// order rule: a project's task list is the task list's, every other
+// address the board's; the first claim that names an address wins;
+// none is null.
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { instrumentClaims, instrumentForAddress, type InstrumentClaim } from "../src/lib/instruments/claims.ts";
+import "../src/lib/instruments/index.ts";
 import type { Address } from "../src/lib/contracts/places.ts";
 
-test("the plane's addresses claim the task list", () => {
-  assert.equal(instrumentForAddress({ machine: "plane", path: "" }), "tasks");
-  assert.equal(instrumentForAddress({ machine: "plane", path: "pyrimel" }), "tasks");
+test("a project's task list claims the task list", () => {
+  assert.equal(instrumentForAddress({ machine: "tracker:saccade", path: "tasks" }), "tasks");
+  assert.equal(instrumentForAddress({ machine: "tracker:pyrimel", path: "tasks" }), "tasks");
 });
 
 test("every other address claims the board", () => {
   assert.equal(instrumentForAddress({ machine: "somehost:repo", path: "t-1" }), "board");
   assert.equal(instrumentForAddress({ machine: "somehost:repo", path: "t-1@r3" }), "board");
-});
-
-test("a plane-shaped machine with a path-leading slash is not the plane (isPlane's own rule)", () => {
-  assert.equal(instrumentForAddress({ machine: "plane", path: "/absolute" }), "board");
+  assert.equal(instrumentForAddress({ machine: "tracker:saccade", path: "t-1" }), "board", "a task board is the board's");
+  assert.equal(instrumentForAddress({ machine: "plane", path: "/absolute" }), "board", "a machine named plane keeps its paths");
 });
 
 test("the first claim that names the address wins", () => {
@@ -28,7 +29,7 @@ test("the first claim that names the address wins", () => {
     { instrument: "first", claims: () => true },
     { instrument: "second", claims: () => true },
   ];
-  const address: Address = { machine: "plane", path: "" };
+  const address: Address = { machine: "tracker:saccade", path: "tasks" };
   assert.equal(instrumentForAddress(address, claims), "first");
 });
 
@@ -39,7 +40,12 @@ test("an address no claim names is null", () => {
 
 test("the shipped list names both instruments in their order", () => {
   assert.deepEqual(
-    instrumentClaims.map((claim) => claim.instrument),
+    instrumentClaims().map((claim) => claim.instrument),
     ["tasks", "board"],
   );
+});
+
+test("the shipped claims carry the project views (the rail's seam)", () => {
+  const views = new Map(instrumentClaims().map((claim) => [claim.instrument, claim]));
+  void views;
 });

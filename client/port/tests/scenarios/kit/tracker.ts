@@ -70,6 +70,15 @@ export async function startTracker(origins: readonly string[]): Promise<RunningT
   // the port's two places agree by construction here: the declaration
   // the app reads and the flag the server starts with carry one port
   writeFileSync(join(repo, "workbench.toml"), `name = "${REPO_NAME}"\n\n[tracker]\nport = ${port}\n`);
+  // two further declared repositories beside the served one (the same
+  // port in their declarations): scenarios that register several
+  // projects use them; they are inert until a store carries their
+  // paths
+  for (const extra of ["neighbour", "farther"]) {
+    const dir = join(root, `${REPO_NAME}-${extra}`);
+    mkdirSync(dir);
+    writeFileSync(join(dir, "workbench.toml"), `name = "${REPO_NAME}-${extra}"\n\n[tracker]\nport = ${port}\n`);
+  }
   const out = openSync(log, "a");
   const args = ["serve", "--db", join(root, "seed.db"), "--repo", repo, "--bind", "127.0.0.1", "--port", String(port)];
   for (const origin of origins) args.push("--allow-origin", origin);

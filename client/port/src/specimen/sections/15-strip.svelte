@@ -6,9 +6,9 @@
 
   const base = { jumpChip: null, note: null };
   const strips: StripView[] = [
-    { ...base, location: "plane", status: "loaded", link: null },
-    { ...base, location: "pyrimel/t-2@r9", status: "loaded", link: "plane" },
-    { ...base, location: "pyrimel/t-2@r9", status: "loading", link: "plane" },
+    { ...base, location: "pyrimel/tasks", status: "loaded", link: null },
+    { ...base, location: "pyrimel/t-2@r9", status: "loaded", link: "pyrimel/tasks" },
+    { ...base, location: "pyrimel/t-2@r9", status: "loading", link: "pyrimel/tasks" },
     { ...base, location: "pyrimel/t-9", status: "unavailable", link: null, note: "not a location: \"t-9x\"" },
     { ...base, location: "pyrimel/t-2@r9", status: "loaded", link: null, jumpChip: "b" },
   ];

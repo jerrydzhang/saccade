@@ -34,17 +34,11 @@ export async function submitLocation(app: AppDriver, location: string): Promise<
   await app.press("Enter");
 }
 
-/** Show the seeded tracker's tasks on the control plane: open
- * "plane" through the picker and switch to the project's rail entry
- * (the lane seeds the registration - kit/lane-asks.ts, native.ts - so
- * no scenario types a path here; the control-plane scenario drives
- * the real add field itself). Answers when its list shows. */
+/** Open the seeded project's task list (project/tasks): the lane
+ * seeds the registration (kit/lane-asks.ts, native.ts), so the list's
+ * location resolves without typing. Answers when the list shows. */
 export async function openPlane(app: AppDriver, tracker: SeededTracker): Promise<void> {
-  await submitLocation(app, "plane");
-  await expect.poll(async () => (await app.readout()).surface).toBe("tasks");
-  const project = `project-${tracker.repo}`;
-  await expect.poll(() => app.shows(project), { timeout: 20_000 }).toBe(true);
-  await app.click(project);
+  await submitLocation(app, `${tracker.repo}/tasks`);
   await expect
     .poll(async () => {
       const tasks = (await app.readout()).tasks;

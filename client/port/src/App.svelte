@@ -6,7 +6,7 @@ from the registry's reviewed erasure boundary. -->
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createPortWindow, type PortWindow, type StripView } from "./App.ts";
+  import { createPortWindow, type FrameRailView, type PortWindow, type StripView } from "./App.ts";
   import type { RenderPair } from "./lib/instruments/registry.ts";
   import type { BufferState } from "./lib/contracts/buffer.ts";
   import type { PickerState } from "./lib/input/picker.ts";
@@ -15,6 +15,10 @@ from the registry's reviewed erasure boundary. -->
   import { pendingKeys, type HelpView, type PendingKeysView } from "./lib/input/help.ts";
   import type { WhichKeyView } from "./lib/input/key-matcher.ts";
   import Strip from "./components/Strip.svelte";
+  import FrameRail from "./components/FrameRail.svelte";
+  import { railNoteFor } from "./lib/instruments/claims.ts";
+  import type { FrameRailProject } from "./App.ts";
+  import type { TargetDefinition } from "./lib/contracts/buffer.ts";
 
   let port: PortWindow | null = null;
   let scroller: HTMLElement | null = $state(null);
@@ -33,6 +37,23 @@ from the registry's reviewed erasure boundary. -->
   let askInput: HTMLInputElement | null = $state(null);
   let askValue = $state("");
   let inspection = $state<import("./lib/figures/inspection.ts").InspectionState | null>(null);
+  let railState = $state<FrameRailView>({
+    visible: false,
+    footnote: null,
+    notes: [],
+    add: { open: false, value: "", problem: null },
+    pane: null,
+  });
+  let railProjects = $state<FrameRailProject[]>([]);
+  let railBeneath = $state<readonly { project: FrameRailProject; targets: readonly TargetDefinition[] }[]>([]);
+  let railFoot = $state<readonly TargetDefinition[]>([]);
+  let railNotes = $state<readonly { part: string; note: string }[]>([]);
+  let railSelectLabels = $state<readonly { part: string; label: string; nested?: boolean }[]>([]);
+  let railSelectTyped = $state("");
+  let railMenu = $state<import("./lib/menu/session.ts").MenuView | null>(null);
+  let railMenuSession = $state<unknown>(null);
+  // the shown project for the rail's mark
+  let railShown = $state<string | null>(null);
   // the viewer's drag (the prototype's lb.onmousedown origin) and the
   // stage's layout size (a transform never changes offsetWidth)
   let drag: { sx: number; sy: number } | null = null;
@@ -65,6 +86,21 @@ from the registry's reviewed erasure boundary. -->
     const offInspection = windowPort.subscribeInspection((state) => {
       inspection = state;
     });
+    const offRailState = windowPort.subscribeRailState((view) => {
+      railState = view;
+    });
+    const offRail = windowPort.subscribeRail((next) => {
+      railProjects = next;
+      railBeneath = next.map((project) => ({
+        project,
+        targets: windowPort.railTargets(project.name),
+      }));
+      railFoot = windowPort.railTargets(null);
+      railNotes = next
+        .map((project) => ({ part: project.part, note: railNoteFor(project.name) }))
+        .filter((entry) => entry.note !== null);
+      railShown = next.find((project) => project.current)?.name ?? null;
+    });
     void windowPort.boot();
     return () => {
       offFrame();
@@ -74,6 +110,8 @@ from the registry's reviewed erasure boundary. -->
       offWhichKey();
       offAsk();
       offInspection();
+      offRailState();
+      offRail();
       windowPort.destroy();
       port = null;
     };
@@ -96,6 +134,70 @@ from the registry's reviewed erasure boundary. -->
   $effect(() => {
     if (ask !== null) askInput?.focus();
   });
+
+  // The rail's select chips and its act menu ride the presentations
+  // the rail's entries ride now (the shown buffer's, or the frame's
+  // own in a window that shows none): subscribed here so the pane
+  // paints its own subset; a frame state move re-reads them.
+  $effect(() => {
+    const targets = frame === null ? null : (port?.railLease() ?? null);
+    if (targets === null) {
+      railSelectLabels = [];
+      railMenu = null;
+      railMenuSession = null;
+      return;
+    }
+    const read = (): void => {
+      const select = targets.selectView();
+      railSelectLabels = select?.labels ?? [];
+      railSelectTyped = select?.pendingLabel ?? "";
+      const menu = targets.menuView();
+      railMenu = menu !== null && menu.part.startsWith("rail/") ? menu : null;
+      railMenuSession = targets.menuSession();
+    };
+    read();
+    return targets.subscribe(read);
+  });
+
+  /** The rail entry's liveness measure, taken in the pane: an entry
+   * the pane cannot measure has left, and a stale lease acts nothing. */
+  function railMeasure(part: string): import("./lib/contracts/places.ts").Bounds | null {
+    const pane = railState.pane;
+    if (pane === null) return null;
+    const element = pane.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
+    if (!(element instanceof HTMLElement)) return null;
+    const box = element.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) return null;
+    return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+  }
+
+  /** A rail entry's plain click: through the rail's lease (the entry
+   * is an ordinary target - the primary act runs); while a pending
+   * open still draws the previous content there is none, and a
+   * project's entry opens its task list directly. */
+  function railEntryActivate(part: string, event: MouseEvent): void {
+    const lease = railLeaseOf();
+    if (lease !== null) {
+      lease.presentTarget(part, () => railMeasure(part)).activatePointer("plain");
+      event.preventDefault();
+      return;
+    }
+    const project = part.startsWith("rail/project/") ? part.slice("rail/project/".length) : null;
+    if (project !== null) port?.openSpec(`${project}/tasks`);
+  }
+
+  function railEntryMenu(part: string, event: MouseEvent): void {
+    const lease = railLeaseOf();
+    if (lease === null) return;
+    const content = scroller?.getBoundingClientRect();
+    lease
+      .presentTarget(part, () => railMeasure(part))
+      .showActions({ left: event.clientX - (content?.left ?? 0), top: event.clientY - (content?.top ?? 0) });
+  }
+
+  function railLeaseOf(): import("./lib/contracts/buffer.ts").TargetPresentations | null {
+    return port?.railLease() ?? null;
+  }
 
 </script>
 
@@ -134,25 +236,53 @@ from the registry's reviewed erasure boundary. -->
   {/if}
   <div class="port-main">
   <main class="port-content" data-port-control="content" bind:this={scroller}>
-    {#if frame !== null && frame.kind === "alive"}
-      {#if frame.content.kind === "available"}
-        {@const pair = frame.content.value}
-        {@const Component = pair.Component}
-        <Component {...pair.props} />
-      {:else if frame.content.kind === "pending"}
-        <div class="port-placeholder">
-          {#if frame.content.previous !== null}
-            {@const previous = frame.content.previous}
-            {@const Previous = previous.Component}
-            <Previous {...previous.props} />
-          {:else}
-            <p class="port-state-line">loading...</p>
-          {/if}
-        </div>
-      {:else if frame.content.kind === "unavailable"}
-        <p class="port-state-line">the board did not load; the diagnostic carries the reason</p>
+    <div class="port-frame-layout" class:port-frame-layout-with-rail={railState.visible}>
+      {#if railState.visible}
+        <FrameRail
+          projects={railProjects}
+          beneath={railBeneath}
+          foot={railFoot}
+          notes={railNotes}
+          view={railState}
+          shown={railShown}
+          labels={railSelectLabels}
+          typed={railSelectTyped}
+          menu={railMenu}
+          menuSession={railMenuSession}
+          typeAdd={(value) => port?.typeAdd(value)}
+          submitAdd={() => port?.submitAdd()}
+          closeAdd={() => port?.closeAdd()}
+          entryActivate={railEntryActivate}
+          entryMenu={railEntryMenu}
+          attachPane={(element) => port?.attachRailPane(element)}
+        />
       {/if}
-    {/if}
+      <div class="port-frame-body">
+        {#if frame !== null && frame.kind === "alive"}
+          {#if frame.content.kind === "empty"}
+            <!-- the empty window: the frame's surface, blank; no instrument
+            involved -->
+            <div class="port-empty" data-port-control="empty-surface" role="document"></div>
+          {:else if frame.content.kind === "available"}
+            {@const pair = frame.content.value}
+            {@const Component = pair.Component}
+            <Component {...pair.props} />
+          {:else if frame.content.kind === "pending"}
+            <div class="port-placeholder">
+              {#if frame.content.previous !== null}
+                {@const previous = frame.content.previous}
+                {@const Previous = previous.Component}
+                <Previous {...previous.props} />
+              {:else}
+                <p class="port-state-line">loading...</p>
+              {/if}
+            </div>
+          {:else if frame.content.kind === "unavailable"}
+            <p class="port-state-line">the board did not load; the diagnostic carries the reason</p>
+          {/if}
+        {/if}
+      </div>
+    </div>
   </main>
   {#if inspection !== null}
     <!-- the figure viewer: the prototype's lightbox (inst16.html:241,

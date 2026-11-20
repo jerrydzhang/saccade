@@ -175,6 +175,10 @@ async function launch(runRoot: string, registered: string, reuse?: string): Prom
         await browser.switchToWindow(original);
       }
     },
+    async seededPath() {
+      const machine = pinned().SAC_APP_HERDR_MACHINE;
+      return `${machine}:${inject("tracker").repoPath}`;
+    },
     async press(...keys) {
       for (const key of keys) await stroke(browser, key);
     },

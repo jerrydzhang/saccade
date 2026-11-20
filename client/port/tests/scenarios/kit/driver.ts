@@ -23,6 +23,9 @@ export type SeededTracker = {
 /** The throwaway tracker's door, mid-scenario (kit/tracker-wire.ts). */
 export interface TrackerDoor {
   createTask(name: string): Promise<string>;
+  /** Claim a task as the suite's own actor: the list's row then
+   * names that actor in its agents cell. */
+  claimTask(task: string): Promise<void>;
   /** Commit a board, with any figure files beside board.yaml. */
   commit(
     task: string,
@@ -49,6 +52,10 @@ export type FindMark = { part: string | null; text: string; active: boolean };
 
 /** A fresh app: one window, no launch restore, its own data. */
 export interface AppDriver {
+  /** The lane's seeded registered path ("machine:/path/to/repository"),
+   * read from the device store: scenarios that register further
+   * projects reuse its machine prefix. */
+  seededPath(): Promise<string>;
   /** The readout of a window: the focused one by default. */
   readout(window?: string): Promise<PortObservation>;
   /** Real key presses in order. Names: one character ("n", "/", " ";

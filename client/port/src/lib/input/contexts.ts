@@ -20,6 +20,13 @@ import { INSPECTION_PAN_PX } from "../figures/inspection.ts";
 // Escape closes the picker only while it is open. Find belongs to
 // the reading instrument, not this window command table: it is `/`
 // alone, bound in the board's reading context (no space /).
+/** The window chords, declared once. */
+export const WINDOW_CHORDS = {
+  picker: [key(" "), key(" ")],
+  rail: [key(" "), key("r")],
+  register: [key(" "), key("a")],
+} as const;
+
 export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
@@ -33,6 +40,13 @@ export interface WindowActions {
   linkByLabels(): void;
   /** space-u: clear this window's link. */
   unlink(): void;
+  /** space-r: show or hide the rail, per window, for the run. The
+   * two rail keys are the human's first choice - they bind here, so
+   * one line changes them. */
+  toggleRail(): void;
+  /** space-a: show the rail if it is hidden and open the add field
+   * in it; Enter registers, nothing opens. */
+  registerProject(): void;
   /** ?: the help surface - the which-key popup over the ACTIVE
    * context's whole command table (a recorded deliberate
    * difference from the prototype's hand-curated list). */
@@ -93,7 +107,7 @@ export function windowContext(actions: WindowActions): InputContext {
         label: "open a location",
         run: () => actions.openPicker(),
       },
-      keys: [sequence(key(" "), key(" "))],
+      keys: [sequence(...WINDOW_CHORDS.picker)],
     },
     ...(actions.toggleHistory === undefined
       ? []
@@ -122,6 +136,22 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.unlink(),
       },
       keys: [sequence(key(" "), key("u"))],
+    },
+    {
+      action: {
+        id: "window.toggle-rail",
+        label: "show or hide the rail",
+        run: () => actions.toggleRail(),
+      },
+      keys: [sequence(...WINDOW_CHORDS.rail)],
+    },
+    {
+      action: {
+        id: "window.register-project",
+        label: "register a project (machine:/path/to/repository)",
+        run: () => actions.registerProject(),
+      },
+      keys: [sequence(...WINDOW_CHORDS.register)],
     },
     {
       action: {

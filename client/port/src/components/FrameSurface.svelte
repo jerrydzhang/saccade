@@ -34,6 +34,8 @@ Presentation only - the sessions live behind the presentations. -->
 
   let content: HTMLElement | null = $state(null);
   let select: SelectSessionView | null = $state(null);
+  // a menu whose target is a frame-rail entry renders in the rail pane
+  // (App.svelte's own ActMenu); the content's surface skips it
   let menu: MenuView | null = $state(null);
   // the part a middle press armed on: the release acts only over it
   let armedPart: string | null = null;
@@ -46,7 +48,8 @@ Presentation only - the sessions live behind the presentations. -->
     if (presentations === null) return;
     return presentations.subscribe(() => {
       select = presentations.selectView();
-      menu = presentations.menuView();
+      const view = presentations.menuView();
+      menu = view !== null && view.part.startsWith("rail/") ? null : view;
     });
   });
 

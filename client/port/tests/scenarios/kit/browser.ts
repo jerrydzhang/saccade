@@ -57,7 +57,7 @@ function keySyntax(key: string): string {
   return key;
 }
 
-async function launch(src: string, seed: { machine: string; repoPath: string; base: string }): Promise<{ app: AppDriver; close: () => void }> {
+async function launch(src: string, seed: { machine: string; repoPath: string; base: string; latencyMs?: number }): Promise<{ app: AppDriver; close: () => void }> {
   // the lane's asks install reads this before it runs (kit/lane-asks.ts):
   // the seeded repository's real path and address
   (window as unknown as Record<string, unknown>).__saccadeLaneSeed = seed;
@@ -78,6 +78,12 @@ async function launch(src: string, seed: { machine: string; repoPath: string; ba
       const door = portWindow().__saccadePort;
       if (!door) throw new Error("the port readout door is gone");
       return JSON.parse(JSON.stringify(door.readout())) as PortObservation;
+    },
+    async seededPath() {
+      const raw = portWindow().localStorage.getItem("saccade.projects");
+      const first = JSON.parse(raw ?? "[]")[0];
+      if (typeof first !== "string") throw new Error("the lane's seeded path is missing");
+      return first;
     },
     async press(...keys) {
       for (const key of keys) await userEvent.keyboard(keySyntax(key));
@@ -239,8 +245,15 @@ export type BridgedOptions = {
 // only the declaration and the seeded tracker's answers.
 const LANE_MACHINE = "lane";
 
+/** A lane app launched on terms the default app fixture does not
+ * name: the registered path's machine, and how late the tracker
+ * answers each request (a remote machine's latency). */
+export type LaneOptions = { machine?: string; latencyMs?: number };
+
 export const test = base.extend<{
   app: AppDriver;
+  /** The lane app on other terms (LaneOptions). */
+  laned: (options?: LaneOptions) => Promise<AppDriver>;
   tracker: Tracker;
   bridged: (options?: BridgedOptions) => Promise<{ app: AppDriver; shell: Shell }>;
 }>({
@@ -253,6 +266,20 @@ export const test = base.extend<{
     });
     await use(app);
     close();
+  },
+  laned: async ({ tracker }, use) => {
+    const closers: (() => void)[] = [];
+    await use(async (options = {}) => {
+      const { app, close } = await launch("/tests/scenarios/kit/app.html", {
+        machine: options.machine ?? LANE_MACHINE,
+        repoPath: tracker.repoPath,
+        base: tracker.base,
+        latencyMs: options.latencyMs,
+      });
+      closers.push(close);
+      return app;
+    });
+    for (const close of closers) close();
   },
   // eslint-disable-next-line no-empty-pattern
   tracker: async ({}, use) => {

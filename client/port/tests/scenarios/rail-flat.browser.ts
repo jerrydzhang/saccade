@@ -22,6 +22,8 @@ const words = {
 test("the rail is flat: rows in importance order, no word headings, a stray's label in the name column", async ({ bridged, tracker }) => {
   const { app } = await bridged({ words });
   await openPlane(app, tracker);
+  await app.press(" ", "r");
+  await expect.poll(() => app.shows("rail")).toBe(true);
   await expect.poll(() => app.shows("unregistered")).toBe(true);
   const foot = (await app.controlText("unregistered")) ?? "";
   // blocked before working before idle (wordRank), each row once
@@ -32,7 +34,8 @@ test("the rail is flat: rows in importance order, no word headings, a stray's la
   for (const heading of ["blocked", "working", "idle"]) {
     expect(foot.split("\n").map((line) => line.trim())).not.toContain(heading);
   }
-  // the id column holds the address, the name column the terminal's title
+  // the id column holds the address, the name column the terminal's
+  // title; the word rides the row's glyph, not its text
   const row = (await app.partText("rail/terminal/t7c")) ?? "";
   expect(row.indexOf("t7c")).toBeGreaterThanOrEqual(0);
   expect(row.indexOf("t7c")).toBeLessThan(row.indexOf("pi run"));
@@ -48,6 +51,7 @@ test("select mode: an agent inside a project is labelled nested; the project and
   };
   const { app } = await bridged({ words: placed });
   await openPlane(app, tracker);
+  await app.press(" ", "r");
   await expect.poll(() => app.partText("rail/terminal/t7d")).not.toBe(null);
   await app.press("Escape");
   await app.press("s");

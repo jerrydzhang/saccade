@@ -1,4 +1,4 @@
-// The plane's specimen fixture: a rail built by the real railOf from
+// The task list's specimen fixture: a rail built by the real railOf from
 // fixture agents pages and Herdr words, a pipeline page model, and a
 // controller that serves them and runs nothing. It covers every word
 // (and one the core sends that the language has no shape for), an
@@ -7,7 +7,7 @@
 // one of them empty.
 
 import { railOf, type AgentFacts, type HerdrWord, type Rail, type WordsSnapshot } from "../lib/tasks/rail.ts";
-import { ADD_CLOSED, type AddView } from "../lib/tasks/add.ts";
+import { ADD_CLOSED, type AddView } from "../lib/frame/add.ts";
 import type { TaskRow, TasksPageModel } from "../lib/tasks/page.ts";
 import type { TasksData, TasksUI } from "../instruments/tasksController.ts";
 
@@ -48,7 +48,7 @@ const words: WordsSnapshot = {
   },
 };
 
-export const planeRail: Rail = railOf(
+export const tasksRail: Rail = railOf(
   [
     { name: "jernerics", agents: [], problem: null, repoPath: "/home/jerry/Projects/jernerics" },
     { name: "pyrimel", agents, problem: null, repoPath: REPO },
@@ -73,7 +73,7 @@ const row = (task: string, title: string, agents: string, commit: string, age: n
 });
 const group = (n: number, title: string, rows: TaskRow[]) => ({ part: `/content/${n}`, title, rows });
 
-export const planePage: TasksPageModel = {
+export const tasksPage: TasksPageModel = {
   groups: [
     group(0, "waiting", []),
     group(1, "in flight", [
@@ -95,34 +95,30 @@ export const planePage: TasksPageModel = {
   ],
 };
 
-/** The shown plane, loaded. */
-export const planeContent: TasksData = {
+/** The shown project's task list, loaded. */
+export const tasksContent: TasksData = {
   generation: 1,
-  asked: "pyrimel",
-  location: "tasks",
+  asked: "pyrimel/tasks",
+  location: "pyrimel/tasks",
   project: "pyrimel",
-  resolved: null,
+  resolved: { machine: "tracker:pyrimel", path: "tasks" },
   status: "loaded",
   problem: null,
-  page: planePage,
+  page: tasksPage,
   errors: [],
 };
 
 /** A controller that serves the fixture and runs nothing. The frame's
  * faces (select, menu) are the buffer's; the specimen hosts the view
- * bare, with no lease, so none appear here. */
+ * bare, with no lease, so none appear here. The rail is the frame's,
+ * not this instrument's. */
 export function fixtureTasksUI(add: AddView = ADD_CLOSED): TasksUI {
+  void add;
   return {
     getSelection: () => null,
-    subscribeRail: (observer) => {
-      observer(planeRail);
+    subscribeWords: (observer) => {
+      observer(tasksRail);
       return () => {};
     },
-    subscribeAdd: (observer) => {
-      observer(add);
-      return () => {};
-    },
-    addView: () => add,
-    typeAdd: () => {},
   };
 }

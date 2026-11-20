@@ -151,9 +151,13 @@ test("the shell's snapshot decodes field by field; anything malformed is no conn
 import { vi, onTestFinished } from "vitest";
 import { agentPart, projectPart, railTargetsOf } from "../src/lib/tasks/rail.ts";
 import { taskRowActs, tasksMenuLabel } from "../src/lib/tasks/menu.ts";
-import { theProjects } from "../src/lib/asks.ts";
-import { directAsks } from "../src/lib/asks.ts";
+import { theProjects, directAsks } from "../src/lib/asks.ts";
 import { parseRegisteredPath } from "../src/lib/projects.ts";
+import { sourceFor } from "../src/lib/sources.ts";
+import { TrackerSource } from "../src/lib/tracker.ts";
+import { createTasksRail } from "../src/instruments/tasksRail.ts";
+import { createFrameRail } from "../src/lib/frame/rail.ts";
+import "../src/lib/instruments/index.ts";
 
 function railWithAgent() {
   const words: WordsSnapshot = { generation: 1, connected: true, words: { t12: { state: "working", at: 1 } } };
@@ -180,67 +184,254 @@ test("the rail's targets: each project, then its agents, carrying the shown mark
   );
 });
 
-test("a project's acts: f shows it on this plane first; a adds a project; d forgets any project, the shown one too", () => {
-  const forgotten: string[] = [];
-  const opened: [string, string | null | undefined][] = [];
-  let adds = 0;
-  const elsewhere: string[] = [];
-  const target = (name: string, current: boolean) => ({
-    part: projectPart(name),
-    kind: "project" as const,
-    text: name,
-    project: name,
-    task: null,
-    current,
-    address: null,
+test("a project's acts: f shows its tasks here first; a opens the add field; d unregisters any project, the shown one too", async () => {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
   });
-  const rail = [target("jernerics", false), target("pyrimel", false), target("saccade", true)];
-  const deps = {
-    machine: () => "tracker:saccade",
-    rowLink: () => null,
-    railTarget: (part: string) => rail.find((entry) => entry.part === part),
-    forget: (name: string) => forgotten.push(name),
-    addProject: () => {
-      adds += 1;
-    },
-    ports: () => ({
-      open: (spec: string, part?: string | null) => opened.push([spec, part]),
-      elsewhere: (spec: string) => elsewhere.push(spec),
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "tasks-test"\n\n[tracker]\nport = 9\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
     }),
-  };
-  const acts = (name: string) => taskRowActs({ kind: "project", label: name, part: projectPart(name) }, deps);
-  assert.deepEqual(acts("jernerics").map((act) => act.key), ["f", "a", "d"]);
-  assert.deepEqual(acts("pyrimel").map((act) => act.key), ["f", "a", "d"]);
-  assert.deepEqual(acts("saccade").map((act) => act.key), ["f", "a", "d"]);
-  acts("jernerics")[0]!.action.run();
-  acts("jernerics")[1]!.action.run();
-  acts("jernerics")[2]!.action.run();
-  // the plane names no tracker: the project rides as its part (t-54)
-  assert.deepEqual(opened, [["plane", "jernerics"]]);
-  assert.equal(adds, 1, "a opens the add field and opens nothing");
-  assert.deepEqual(forgotten, ["jernerics"]);
-  // the heading is the target's own label
-  assert.equal(tasksMenuLabel({ kind: "project", label: "jernerics" }), "jernerics");
-  assert.equal(tasksMenuLabel({ kind: "project", label: "pyrimel" }), "pyrimel");
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const forgotten: string[] = [];
+  const opened: string[] = [];
+  const rail = createFrameRail({
+    capture: () => ({ release: () => {} }),
+    open: (spec) => opened.push(spec),
+    shownProject: () => null,
+  });
+  rail.add.enter();
+  rail.add.type("box:/srv/tasks-test");
+  await rail.add.submit();
+  const registered = rail.targets().find((entry) => entry.kind === "project");
+  assert.ok(registered !== undefined, "the registered project publishes");
+  const acts = registered.acts();
+  assert.deepEqual(acts.map((act) => act.key), ["f", "a", "d"]);
+  acts[0]!.action.run();
+  assert.deepEqual(opened, ["tasks-test/tasks"], "f opens the project's task list");
+  acts[1]!.action.run();
+  assert.equal(rail.add.view().open, true, "a opens the add field and opens nothing");
+  rail.add.close();
+  acts[2]!.action.run();
+  assert.deepEqual(rail.projectsNow().map((project) => project.name), [], "the unregistered project leaves the rail");
+  // the store holds no path any more
+  assert.deepEqual(JSON.parse(store.get("saccade.projects") ?? "[]"), []);
 });
 
-test("an agent's acts are its first task's, composed against its own project", () => {
-  const targets = railTargetsOf(railWithAgent());
-  const elsewhere: [string, string][] = [];
-  const acts = taskRowActs(
-    { kind: "agent", label: "i-3 t-2", part: agentPart("saccade", "i-3") },
-    {
-      machine: () => "tracker:pyrimel",
-      rowLink: () => null,
-      railTarget: (part) => targets.find((entry) => entry.part === part),
-      forget: () => {},
-      addProject: () => {},
-      ports: () => ({ open: () => {}, elsewhere: (spec, act) => elsewhere.push([spec, act]) }),
+test("an agent's acts are its first task's, composed against its own project", async () => {
+  // the agent's acts are the frame rail's now: the service resolves
+  // them over its live view, the registry stubbed at the window seam
+  // and the word feed answering the shell's own command
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/saccade"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "saccade"\n\n[tracker]\nport = 8814\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+    __TAURI_INTERNALS__: {
+      invoke: (command: string) =>
+        command === "words_wait"
+          ? // the shell's bounded hold: the snapshot answers after its
+            // hold, the same generation - a quiet feed, not a spin
+            new Promise((resolve) =>
+              setTimeout(
+                () => resolve({
+                  generation: 1,
+                  connected: true,
+                  words: { t10: { state: "working", app: "claude-code", at: 1 } },
+                }),
+                50,
+              ),
+            )
+          : Promise.resolve(null),
     },
-  );
-  assert.deepEqual(acts.map((act) => act.key), ["o", "i", "w"]);
-  acts[0]!.action.run();
-  assert.deepEqual(elsewhere, [["saccade/t-2", "link"]]);
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const source = sourceFor("tracker:saccade") as TrackerSource;
+  vi.spyOn(source, "agentsPage").mockImplementation(async () => agentsPage());
+  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: null }));
+  const elsewhere: [string, string][] = [];
+  const copied: string[] = [];
+  const rail = createTasksRail({
+    ports: () => ({
+      open: () => {},
+      elsewhere: (spec, act) => elsewhere.push([spec, act]),
+      copy: (text) => copied.push(text),
+    }),
+  });
+  rail.start();
+  try {
+    await vi.waitFor(() => {
+      assert.ok(rail.words().words.t10 !== undefined, "the words read");
+    });
+    // the agents publish beneath the project's rail entry (the
+    // instrument's own publication face; the ports come from the
+    // rail's own deps)
+    const targets = rail.railTargets("saccade");
+    const agent = targets.find((entry) => entry.kind === "agent");
+    assert.ok(agent !== undefined, "the rail's agents publish as targets");
+    const acts = agent.acts();
+    assert.deepEqual(acts.map((act) => act.key), ["y", "o", "i", "w"], "y the attach first, then the task's acts");
+    acts[0]!.action.run();
+    assert.deepEqual(copied, ["hc attach t10"]);
+    acts[1]!.action.run();
+    assert.deepEqual(elsewhere, [["saccade/t-4", "link"]]);
+  } finally {
+    rail.stop();
+  }
+});
+
+
+test("a declared project with no tracker section is a plain rail entry: no beneath-targets, no problem line", async () => {
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/bare"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "bare"\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  await theProjects().projects();
+  const rail = createFrameRail({
+    capture: () => ({ release: () => {} }),
+    open: () => {},
+    shownProject: () => null,
+  });
+  rail.start();
+  try {
+    await vi.waitFor(() => {
+      assert.deepEqual(rail.projectsNow().map((project) => project.name), ["bare"], "the registry's name lists");
+    });
+    // the plain entry: a header with no problem line, and the seam
+    // publishes nothing beneath it (the tasks instrument's tracker
+    // refuses a repo it does not serve)
+    const targets = rail.targets();
+    const header = targets.find((target) => target.id === projectPart("bare"));
+    assert.ok(header !== undefined, "the plain header draws");
+    assert.equal(header.label, "bare");
+    assert.deepEqual(
+      targets.filter((target) => target.inside === projectPart("bare")),
+      [],
+      "nothing publishes beneath a project no instrument serves",
+    );
+    // no problem line anywhere under the entry
+    assert.ok(!targets.some((target) => target.label.toLowerCase().includes("unreachable")));
+  } finally {
+    rail.stop();
+  }
+});
+
+test("the backoff doubles per consecutive failure, caps at a minute, and resets on success (injected clock)", async () => {
+  let moment = 1_000_000;
+  const store = new Map<string, string>([["saccade.projects", JSON.stringify(["box:/srv/saccade"])]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  });
+  vi.stubGlobal("window", {
+    __saccadeAsks: directAsks({
+      readFile: async () => 'name = "saccade"\n\n[tracker]\nport = 8814\n',
+      readAsset: async () => {
+        throw new Error("no assets here");
+      },
+      requestLocal: async () => {
+        throw new Error("no requests here");
+      },
+    }),
+  });
+  const source = sourceFor("tracker:saccade") as TrackerSource;
+  let answers: "fail" | "succeed" = "fail";
+  const asked: number[] = [];
+  vi.spyOn(source, "agentsPage").mockImplementation(async () => {
+    asked.push(moment);
+    if (answers === "fail") throw new Error("the tracker refused");
+    return agentsPage();
+  });
+  vi.spyOn(source, "identity").mockImplementation(async () => ({ machineId: null, repoPath: null }));
+  const rail = createTasksRail({
+    ports: () => ({ open: () => {}, elsewhere: undefined, copy: undefined }),
+    now: () => moment,
+  });
+  rail.start();
+  const tick = async (): Promise<void> => {
+    await rail.tick();
+  };
+  try {
+    // first ask fails: the next ask is one interval doubled (6s away)
+    await tick();
+    const first = asked.length;
+    assert.equal(first, 1, "the first ask ran");
+    moment += 3000;
+    await tick();
+    assert.equal(asked.length, first, "the doubled interval holds the ask back at +3s");
+    // past the doubled interval: the second ask runs and fails: the
+    // next ask doubles again (12s away)
+    moment += 4000;
+    await tick();
+    assert.equal(asked.length, first + 1, "the doubled interval released the ask");
+    moment += 6000;
+    await tick();
+    assert.equal(asked.length, first + 1, "the second doubling holds the ask back at +6s");
+    moment += 7000;
+    await tick();
+    assert.equal(asked.length, first + 2, "the second doubling released the ask");
+    // the cap: many more failures never wait longer than a minute
+    for (let round = 0; round < 6; round++) {
+      moment += 61_000;
+      await tick();
+      assert.equal(asked.length, first + 2 + round + 1, "the capped ask released");
+    }
+    const cappedGap = asked[asked.length - 1]! - asked[asked.length - 2]!;
+    assert.ok(cappedGap <= 61_000, "the cap keeps the wait under a minute");
+
+    // a success resets: the next ask rides the live cadence again
+    answers = "succeed";
+    moment += 61_000;
+    await tick();
+    const afterSuccess = asked.length;
+    moment += 3000;
+    await tick();
+    assert.equal(asked.length, afterSuccess + 1, "the reset returns the project to the live cadence");
+  } finally {
+    rail.stop();
+  }
 });
 
 test("registering reads the declaration through the module; the store keeps paths alone; forgetting drops the path", async () => {
@@ -463,37 +654,7 @@ test("every agent is a target with y copying hc attach <address> as the local co
     ],
     "projects in name order, each followed by its agents; the foot group last",
   );
-  const copied: string[] = [];
-  const elsewhere: [string, string][] = [];
-  const deps = {
-    machine: () => "tracker:saccade",
-    rowLink: () => null,
-    railTarget: (part: string) => targets.find((entry) => entry.part === part),
-    forget: () => {},
-    addProject: () => {},
-    ports: () => ({
-      open: () => {},
-      elsewhere: (spec: string, act: string) => elsewhere.push([spec, act]),
-      copy: (text: string) => copied.push(text),
-    }),
-  };
-  const acts = (part: string, label: string) => taskRowActs({ kind: "agent", label, part }, deps);
-  const registered = acts(agentPart("saccade", "i-3"), "i-3 t-2");
-  assert.deepEqual(registered.map((act) => act.key), ["y", "o", "i", "w"], "y the attach first (Enter copies it), then the task's acts");
-  registered[0]!.action.run();
-  const stray = acts(terminalPart("other/t4j"), "t-0 / 2 other/t4j");
-  assert.deepEqual(stray.map((act) => [act.key, act.action.label]), [["y", "copy hc attach other/t4j"]]);
-  stray[0]!.action.run();
-  acts(terminalPart("t7q"), "pi run t7q")[0]!.action.run();
-  assert.deepEqual(copied, ["hc attach t12", "hc attach other/t4j", "hc attach t7q"]);
-  assert.deepEqual(elsewhere, []);
-  // with no clipboard injected, a stray has no act at all
-  assert.deepEqual(
-    taskRowActs({ kind: "agent", label: "t7q", part: terminalPart("t7q") }, { ...deps, ports: () => ({ open: () => {} }) }),
-    [],
-  );
 });
-
 test("a named agent's menu heading reads by its name, the incarnation beside it (t-56)", () => {
   const base = { address: "t12", state: "working", msg: null, progress: null, tasks: ["t-2"], at: 1, label: null };
   assert.equal(railAgentText({ ...base, incarnation: "i-3", name: "theory" }), "theory (i-3) t-2");
@@ -524,6 +685,19 @@ test("words in importance order: error, blocked, done, working, idle, any other 
   // only the shown project's agents join
   const unshown = railOf([{ name: "pyrimel", agents, problem: null }], { generation: 1, connected: true, words: {} }, null);
   assert.equal(wordsByIncarnationOf(unshown).size, 0);
+  // a named project joins whether or not the rail marks it shown (the
+  // task list names its own project; the rail publication marks none)
+  const unmarked = railOf(
+    [{ name: "pyrimel", agents, problem: null }],
+    {
+      generation: 1,
+      connected: true,
+      words: Object.fromEntries(states.map((state, index) => [`t${index}`, state === "" ? { at: 1 } : { state, at: 1 }])),
+    },
+    null,
+  );
+  assert.equal(wordsByIncarnationOf(unmarked, "pyrimel").get("i-7"), "error");
+  assert.equal(wordsByIncarnationOf(unmarked, "elsewhere").size, 0);
 });
 
 test("the foot group reads as runs of one word, in its own order", () => {

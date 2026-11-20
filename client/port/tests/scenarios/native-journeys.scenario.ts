@@ -64,15 +64,13 @@ test("S20 a relaunch on the same data directory opens one fresh window", { tags:
   const obs = await app.readout();
   expect(obs.window).toMatchObject({ label: "main", link: null });
   expect((await app.strip()).link).toBe("unlinked");
-  // fresh means the control plane: the launch named no place and no
-  // test-open rides a relaunch; the plane loads its list from the
-  // tracker the run already reached (the data directory rides the
-  // relaunch), and the board surface stays empty
-  await expect.poll(async () => (await app.readout()).surface).toBe("tasks");
+  // fresh means the empty window: the launch named no place and no
+  // test-open rides a relaunch - no location, the frame's empty state,
+  // the board surface empty and nothing loaded
   await expect
     .poll(async () => {
       const obs = await app.readout();
       return { status: obs.tasks?.status ?? null, asked: obs.board.asked };
     })
-    .toEqual({ status: "loaded", asked: null });
+    .toEqual({ status: null, asked: null });
 });

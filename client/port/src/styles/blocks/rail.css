@@ -1,0 +1,231 @@
+/* The frame's rail: a pane beside the content, any window that shows
+ * it; none starts with it (Space r), and a window too narrow for a
+ * rail beside its content hides it. A block's stylesheet reads tokens
+ * only (tests/theme.test.ts). The geometry is the rail's own from the
+ * plane: one unit (8px); one left text edge (24px); 32px rows;
+ * highlights bleed outward so text never moves. */
+
+/* the frame layout: plain flow while the rail is hidden (the
+ * content's own full-width story); with the rail shown, the plane's
+ * own grid - the pane, a 32px gutter, the content, the window's 24px
+ * right edge - the rail sticking while the content scrolls beside it */
+.port-frame-layout.port-frame-layout-with-rail {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  column-gap: 32px;
+  align-items: start;
+  padding-right: 24px;
+}
+
+/* the rail: one quiet panel, full height, the native sidebar's way.
+ * Its height is the window's, never more: the rail is its own scroll
+ * region (the list inside it scrolls), not a panel that grows with
+ * its entries */
+.port-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  height: calc(100vh - var(--port-strip-height) - 1px);
+  box-sizing: border-box;
+  padding: 16px 24px;
+  background: var(--port-color-paper);
+  border-right: 1px solid var(--port-color-line);
+  /* nothing in the rail ever reaches the content: every line clips or
+   * wraps inside its own box, and the rail itself clips as the floor */
+  overflow: hidden;
+}
+
+/* the pane's own scroll: the wheel scrolls the rail, never the
+ * content; the shown project stays in view. The list takes its
+ * entries' height and shrinks only when they overflow, so what
+ * follows it (the footnote) sits right beneath them. Its box reaches
+ * 12px past the rail's text edge on each side, so the shown
+ * project's fill, which bleeds 12px outward, is never clipped by the
+ * scroll region's own edge */
+.port-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 -12px;
+  padding: 0 12px;
+  overflow-y: auto;
+}
+
+.port-rail-project {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* the shown project as a group: its name and its agents on one faint
+ * fill, the selection's colour, never a hue */
+.port-rail-project[data-port-shown] {
+  margin: 0 -12px;
+  padding: 0 12px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--port-color-selection) 70%, transparent);
+}
+
+/* a project: an item, the heaviest text in the rail - a step larger,
+ * semibold, full ink (the shown one strongest); the row bleeds 8px so
+ * its highlight never moves the text */
+.port-rail-name,
+.port-rail-entry {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  margin: 0 -8px;
+}
+.port-rail-name {
+  height: 32px;
+  line-height: 32px;
+  padding: 0 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--port-color-ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.port-rail-name[aria-current] {
+  color: var(--port-color-ink-strong);
+}
+/* the foot group's heading names the group; it is no target */
+.port-rail-group {
+  cursor: default;
+}
+
+/* an entry beneath a project: the glyph's column, the id and the name
+ * on fixed columns, every claimed task at the right; Herdr's status
+ * line beneath, one line - a 32px row, 48px with the status line. The
+ * frame owns the entry element; the instrument's row component fills
+ * its grid */
+.port-rail-entry {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) fit-content(45%);
+  column-gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  line-height: 24px;
+  font-size: 0.875rem;
+}
+/* the row component's root: it spans the entry's columns and lays its
+ * cells on the entry's own tracks, so the cells sit exactly where they
+ * would as the entry's direct children */
+.port-rail-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-width: 0;
+}
+.port-rail-who {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.port-rail-incarnation {
+  flex: none;
+  width: 3.75em;
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-rail-agent-name {
+  min-width: 0;
+  color: var(--port-color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-rail-tasks {
+  font-family: var(--port-font-mono);
+  font-size: 0.75rem;
+  color: var(--port-color-muted);
+  white-space: nowrap;
+  /* a long list never pushes the agent out or bleeds past the rail:
+   * it keeps under half the row and ends in an ellipsis (the full
+   * list rides the row's title) */
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* an agent no tracker registered: marked, never hidden */
+.port-rail-unregistered {
+  font-family: inherit;
+  font-style: italic;
+}
+.port-rail-msg {
+  grid-column: 2 / -1;
+  line-height: 16px;
+  color: var(--port-color-muted);
+  font-style: italic;
+  font-size: 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* the pointer's entry and the menu's target share one highlight */
+.port-rail-name[data-port-hover],
+.port-rail-name[data-port-selected],
+.port-rail-entry[data-port-hover],
+.port-rail-entry[data-port-selected] {
+  background: var(--port-color-selection);
+}
+
+.port-rail-note {
+  color: var(--port-color-muted);
+  font-size: var(--port-size-small);
+  overflow-wrap: anywhere;
+}
+.port-rail-add {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.port-rail-add input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--port-color-muted);
+  padding: 4px 0;
+  min-width: 0;
+}
+/* the add field's focus: its rule takes the accent */
+.port-rail-add input:focus {
+  border-bottom-color: var(--port-color-accent);
+}
+
+/* cramped: the window too narrow for a rail beside its content - the
+ * pane hides and the layout drops its column and its gutters */
+@media (max-width: 40rem) {
+  .port-rail {
+    display: none;
+  }
+
+  .port-frame-layout.port-frame-layout-with-rail {
+    grid-template-columns: minmax(0, 1fr);
+    padding-right: 0;
+  }
+}
+
+/* the empty window's surface: blank, the frame's own - no
+ * instrument involved */
+.port-empty {
+  padding: 48px 24px;
+}

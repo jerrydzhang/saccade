@@ -1,4 +1,4 @@
-<!-- The plane's pipeline: the tasks by stage. A stage's title takes
+<!-- The project's task list: the tasks by stage. A stage's title takes
 its state's hue; its rows stay neutral and carry no column header (the
 columns explain themselves): id, title, agents (each marked with its
 live Herdr word's shape), the latest commit's short hash, age.

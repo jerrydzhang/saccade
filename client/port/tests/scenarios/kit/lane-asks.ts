@@ -16,11 +16,13 @@
 // registered path the test page names (the seeded repository's real
 // path), so a scenario registers nothing by itself unless it drives
 // the real add field. The test page also gets a per-ask counter
-// (window.__saccadeLaneCounts) for the timing scenarios.
+// (window.__saccadeLaneCounts) for the timing scenarios. A seed may
+// carry a latency: every tracker request then answers that many
+// milliseconds late, as a remote machine's would.
 
 import { directAsks } from "../../../src/lib/asks.ts";
 
-type LaneSeed = { machine: string; repoPath: string; base: string };
+type LaneSeed = { machine: string; repoPath: string; base: string; latencyMs?: number };
 
 type LaneWindow = Window & {
   __saccadeAsks?: unknown;
@@ -63,6 +65,8 @@ if (seed !== undefined) {
     if (!route.startsWith("/")) {
       throw new Error(`the route must start with '/': ${route}`);
     }
+    const latency = seed.latencyMs ?? 0;
+    if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
     // a real fetch of the seeded tracker at the loopback port the ask
     // carries - the same address the shell composes on a machine; the
     // tracker's origin allowlist names this page

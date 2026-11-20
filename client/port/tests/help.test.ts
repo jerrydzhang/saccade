@@ -14,7 +14,7 @@ const windowKeys = () =>
   windowContext({
     openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false,
     trailBack: (): boolean => true, trailForward: (): boolean => true,
-    toggleHistory: () => {}, linkByLabels: () => {}, unlink: () => {}, showHelp: () => {},
+    toggleHistory: () => {}, linkByLabels: () => {}, unlink: () => {}, toggleRail: () => {}, registerProject: () => {}, showHelp: () => {},
   });
 
 const boardKeys = () =>
@@ -34,7 +34,7 @@ test("which-key: the head is the pending prefix, the rows its next strokes, case
   assert.equal(view.prefix, "space");
   assert.deepEqual(
     view.rows.map((row) => row.key),
-    ["space", "h", "l", "u"],
+    ["space", "h", "l", "u", "r", "a"],
     "space's continuations, in declaration order; no space /",
   );
   assert.equal(view.rows[0]!.label, "open a location");
@@ -51,6 +51,8 @@ test("help: one column per context, titled, the instrument's first", () => {
   assert.ok(board.some((row) => row.key === "/" && row.label === "find in this revision"));
   assert.ok(board.some((row) => row.key === "g g"));
   assert.ok(window.some((row) => row.key === "space space" && row.label === "open a location"));
+  assert.ok(window.some((row) => row.key === "space r" && row.label === "show or hide the rail"));
+  assert.ok(window.some((row) => row.key === "space a" && row.label === "register a project (machine:/path/to/repository)"));
   assert.ok(window.some((row) => row.key === "?"));
   assert.ok(!window.some((row) => row.key === "space /"), "find is / alone");
 });

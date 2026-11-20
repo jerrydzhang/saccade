@@ -30,14 +30,16 @@ test("the shown place is the ASKED location and the board part at the reading he
   });
 });
 
-test("the plane remembers no project: its place is the bare plane (t-54; the human, 2026-11-14)", () => {
-  const plane = (path: string) => (): SavedPlace => ({
+test("a project's task list carries no board part (the location names the list)", () => {
+  const tasks = (): SavedPlace => ({
     bufferId: "main-tasks-1",
-    address: { machine: "plane", path },
+    address: { machine: "tracker:pyrimel", path: "tasks" },
     position: { kind: "anchor", anchor: { kind: "task", task: "t-2" }, viewportOffset: { left: 0, top: 0 } },
   });
-  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("pyrimel")), { location: "plane", part: null });
-  assert.deepEqual(shownPlaceOf({ asked: "plane", status: "loaded" }, plane("")), { location: "plane", part: null });
+  assert.deepEqual(shownPlaceOf({ asked: "pyrimel/tasks", status: "loaded" }, tasks), {
+    location: "pyrimel/tasks",
+    part: null,
+  });
 });
 
 test("a task row, a loading frame, an empty frame and a dead capture are no place or no part", () => {

@@ -33,10 +33,10 @@ round 16 prototype's behaviour, built and tested scenario by scenario
 (t-36).
 
 A project is registered by where its repository is
-(`port/src/lib/projects.ts`): the add field takes
-`machine:/path/to/repository`, the declaration file there
-(`workbench.toml`) names the project and the loopback port its tracker
-answers on, and the device keeps the registered paths alone -
+(`port/src/lib/projects.ts`): the rail's add field (Space a, in any
+window) takes `machine:/path/to/repository`, the declaration file
+there (`workbench.toml`) names the project and the loopback port its
+tracker answers on, and the device keeps the registered paths alone -
 the file is read again through the one core module whenever a fact is
 needed. The tracker is started with its own `--port`; the file names
 the same port, and the app checks the tracker it reached serves the
@@ -45,6 +45,16 @@ device that registered trackers by `host:port` under the
 old keys (`saccade.trackers`, `saccade.trackers.home`) re-registers
 its repositories by path; the old keys are never read and never
 cleaned, and no special case reads them.
+
+The rail is the frame's (`port/src/lib/frame/rail.ts`): any window
+can show it (Space r, per window for the run), none starts with it, a
+cramped window hides it. Its entries are ordinary targets of the
+shown buffer, and its project views come from what the instruments
+claim (`port/src/lib/instruments/` - the task list claims
+`name/tasks`); the frame never names an instrument (the suite holds
+the boundary: no frame file imports an instrument, the assembly names
+none). A window with no location is the empty window: the frame's own
+surface, blank - and the window at launch is one.
 
 The earlier frontend (`src/`) retired at t-36 m-554: it carried the
 features first asked for, but was never usable enough for any of them to

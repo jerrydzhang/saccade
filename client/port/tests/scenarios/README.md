@@ -109,8 +109,10 @@ Every module is a test-infrastructure module; each line says why it exists.
   a refusal for machine assets (its boards ride the fixture source). It
   also seeds the device store with the one
   registered path (the seeded repository's real path), so scenarios register
-  nothing by typing; the control-plane scenario drives the real add field
-  itself, and clears the seed for its empty case.
+  nothing by typing; the control-plane scenario drives the real add
+  field itself (Space a, machine:/path - the machine read from the
+  seeded store in the native lane), and clears the seed for its
+  empty-registry case.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.
 - `kit/pointer-commands.ts`: the browser project's real mouse drag and wheel
@@ -161,7 +163,8 @@ seeds the device store with one registered path, the seeded repository under
 the core's machine, and the app reaches the tracker through the declaration
 file exactly as on a real device. Nothing here types into the app; the
 registration is the store seed, and a scenario that wants the add field
-drives it itself (the control-plane scenario, browser-only).
+drives it itself (the control-plane scenario, browser-only: Space a,
+`machine:/path`).
 
 ```sh
 SACCADE_DB=<the caller-side tracker db> just app-test-native
