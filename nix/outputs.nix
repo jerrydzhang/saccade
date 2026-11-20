@@ -116,7 +116,7 @@ let
   cargoVersion =
     let
       line = lib.findFirst (l: builtins.match ''version = "[0-9]+\.[0-9]+\.[0-9]+"'' l != null) null (
-        lib.splitString "\n" (builtins.readFile ../tracker/Cargo.toml)
+        lib.splitString "\n" (builtins.readFile ../saccade/tracker/Cargo.toml)
       );
     in
     if line == null then
@@ -149,7 +149,7 @@ let
   mkAttachHook =
     { pkgs }:
     let
-      substituted = pkgs.replaceVars ../tracker/native/claude-code/saccade-cc-attach.template {
+      substituted = pkgs.replaceVars ../saccade/tracker/native/claude-code/saccade-cc-attach.template {
         expectMajor = lib.versions.major cargoVersion;
         expectMinor = lib.versions.minor cargoVersion;
       };
@@ -173,7 +173,9 @@ let
   mkWorktreeHook =
     { pkgs }:
     let
-      substituted = pkgs.replaceVars ../tracker/native/claude-code/saccade-cc-worktree.template { };
+      substituted =
+        pkgs.replaceVars ../saccade/tracker/native/claude-code/saccade-cc-worktree.template
+          { };
     in
     pkgs.runCommand "saccade-cc-worktree"
       {
@@ -196,7 +198,7 @@ let
       set -o errexit
       export attachHook="${attachHook}"
       export worktreeHook="${worktreeHook}"
-      substituteAll ${../tracker/native/claude-code/settings.json.template} $out
+      substituteAll ${../saccade/tracker/native/claude-code/settings.json.template} $out
       # the packaged file must parse as settings: a template that no
       # longer carries the hook wire refuses the build here
       ${pkgs.jq}/bin/jq -e .hooks.SessionStart $out >/dev/null
@@ -215,7 +217,7 @@ let
       settings = mkCCSettings {
         inherit pkgs attachHook worktreeHook;
       };
-      wrapper = pkgs.replaceVars ../tracker/native/claude-code/saccade-claude-code.template {
+      wrapper = pkgs.replaceVars ../saccade/tracker/native/claude-code/saccade-claude-code.template {
         inherit claude settings;
         jq = pkgs.jq;
         curl = pkgs.curl;
@@ -255,23 +257,23 @@ let
         worktreeHook = "${mkWorktreeHook { inherit pkgs; }}/bin/saccade-cc-worktree";
       };
   # the native integration the composed harness loads
-  saccadePiExtensions = [ "tracker/native/saccade.ts" ];
-  # the Saccade app's packaging lives in nix/saccade-app.nix: one
+  saccadePiExtensions = [ "saccade/tracker/native/saccade.ts" ];
+  # the Saccade app's packaging lives in app/nix/saccade-app.nix: one
   # callPackage-able file taking every dependency from the pkgs it
   # is called on, so overlays.default can build it against a
   # consumer's own nixpkgs - the packaged binary then shares the
   # host's GL stack instead of this flake's pin. The repo root rides
-  # in explicitly: the app's cargo tree spans client/port-shell,
-  # client/src-tauri and the shared grammar crate, and a relative
+  # in explicitly: the app's cargo tree spans app/port-shell,
+  # app/src-tauri and the shared grammar crate, and a relative
   # climb would stay an unnormalized ".." path inside flake evaluation.
-  saccadeApp = pkgs: root: pkgs.callPackage ./saccade-app.nix { repoRoot = root; };
+  saccadeApp = pkgs: root: pkgs.callPackage ../app/nix/saccade-app.nix { repoRoot = root; };
 in
 {
   # the consumer-facing overlay: a NixOS configuration sets
   # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
   # pkgs.saccade-app built against its own nixpkgs
   overlays.default = final: prev: {
-    saccade-app = (final.callPackage ./saccade-app.nix { repoRoot = ../.; }).app;
+    saccade-app = (final.callPackage ../app/nix/saccade-app.nix { repoRoot = ../.; }).app;
   };
 
   devShells = forAllSystems (
@@ -392,7 +394,7 @@ in
             {
               enterShell = ''
                 if [ ! -f .agents/skills/saccade/SKILL.md ]; then
-                  cargo run --quiet -p saccade --bin sac -- skill install
+                  cargo run --quiet --manifest-path saccade/Cargo.toml -p saccade --bin sac -- skill install
                 fi
               '';
 
@@ -485,7 +487,7 @@ in
           exec ${pi}/bin/wrapped-pi "$@"
         '';
       };
-      sac = import ./sac.nix {
+      sac = import ../saccade/nix/sac.nix {
         inherit
           pkgs
           lib
@@ -493,11 +495,11 @@ in
           devHerdrPin
           saccadeClaudeCode
           ;
-        root = ../.;
+        root = ../saccade;
       };
       # the pinned archive: main's 0.18.0 tip, the release the live
       # tracker ran; the rev is the pin, the use is read-only.
-      sac-archive = import ./sac-archive.nix {
+      sac-archive = import ../saccade/nix/sac-archive.nix {
         inherit pkgs lib;
         archiveRev = "189894f54f4c747ad937493f34c5e526a76726b8";
         archiveSrc = builtins.fetchGit {
@@ -516,10 +518,10 @@ in
         # lock: the grammar-local Cargo.lock is not tracked, so a
         # git-sourced build cannot use it (this derivation failed
         # evaluation from any git checkout since the lock left git)
-        src = ../.;
+        src = ../saccade;
         cargoRoot = ".";
         buildAndTestSubdir = "grammar";
-        cargoLock.lockFile = ../Cargo.lock;
+        cargoLock.lockFile = ../saccade/Cargo.lock;
         meta.mainProgram = "board-grammar";
       };
     in

@@ -1,18 +1,13 @@
 [package]
 name = "saccade-app"
 version = "0.2.11"
-description = "The Saccade app's binary: the shared Rust shell around the client/port frontend"
+description = "The Saccade app's binary: the shared Rust shell around the app/port frontend"
 edition = "2021"
 
-# its own workspace root: the GTK/WebKit build stays out of the repo's
-# root workspace (whose default members build without those libraries),
-# and a standalone workspace stops cargo's upward search here
-[workspace]
-
 # The shared shell: the lib target compiles the shell library in
-# client/src-tauri/src under this package's manifest directory. The
+# app/src-tauri/src under this package's manifest directory. The
 # tauri context macro reads THIS crate's tauri.conf.json (frontendDist
-# ../port/dist), so the binary embeds the client/port frontend.
+# ../port/dist), so the binary embeds the app/port frontend.
 [lib]
 name = "saccade_app_lib"
 path = "../src-tauri/src/lib.rs"
@@ -39,4 +34,4 @@ toml = "0.9"
 saccade-app-core = { path = "../src-tauri/core-client" }
 # the shared board grammar: admission runs here, on the Tauri side, so
 # the frontend never grows a second validator
-board-grammar = { path = "../../grammar" }
+board-grammar = { path = "../../saccade/grammar" }

@@ -15,11 +15,11 @@ hooks = [
     pass_filenames = false, always_run = true },
   { id = "saccade-native-typecheck", name = "native extension typechecks against the pinned SDK",
     entry = "bash", language = "system",
-    args = ["tracker/native/typecheck.sh"],
+    args = ["saccade/tracker/native/typecheck.sh"],
     pass_filenames = false, always_run = true },
   { id = "port-unit", name = "the port's unit project passes (vitest)",
     entry = "sh", language = "system",
-    args = ["-c", "just client-deps && cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
+    args = ["-c", "just client-deps && cd app && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --silent"],
     pass_filenames = false, always_run = true },
   { id = "nix-fmt", name = "nix files are formatted (nixfmt; just fmt fixes)",
     entry = "nixfmt", language = "system",
@@ -35,12 +35,23 @@ hooks = [
     { id = "check-added-large-files" },
 ]
 
+# the rust hooks over the two cargo workspaces: fmt covers saccade's
+# members and the app's core client (the app shell's sources are not
+# under fmt), cargo check the saccade workspace (the app shell builds
+# only with the app shell's GTK/WebKit libraries)
 [[repos]]
-repo = "https://github.com/FeryET/pre-commit-rust"
-rev = "v1.2.1"
+repo = "local"
 hooks = [
-  { id = "fmt", args = ["--all"], pass_filenames = false, always_run = true },
-  { id = "cargo-check" },
+  { id = "fmt", name = "fmt", entry = "cargo", language = "system",
+    args = ["fmt", "--all", "--manifest-path", "saccade/Cargo.toml"],
+    pass_filenames = false, always_run = true, stages = ["pre-commit", "pre-merge-commit", "manual"] },
+  { id = "fmt-app-core", name = "fmt (app core client)", entry = "cargo", language = "system",
+    args = ["fmt", "--manifest-path", "app/Cargo.toml", "-p", "saccade-app-core"],
+    pass_filenames = false, always_run = true, stages = ["pre-commit", "pre-merge-commit", "manual"] },
+  { id = "cargo-check", name = "cargo check", entry = "cargo", language = "system",
+    args = ["check", "--manifest-path", "saccade/Cargo.toml"],
+    files = '^.*(Cargo\.toml|Cargo\.lock|.*\.rs)$', pass_filenames = false,
+    stages = ["pre-commit", "pre-merge-commit", "pre-push", "manual"] },
 ]
 
 [[repos]]

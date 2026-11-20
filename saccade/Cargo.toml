@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+# the tracker and the grammar crate; the app's crates are their own
+# workspace under app/
+members = [
+    "tracker",
+    "grammar",
+]
+
+[profile.release]
+strip = true
+lto = true

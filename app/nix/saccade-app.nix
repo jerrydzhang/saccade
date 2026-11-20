@@ -1,6 +1,6 @@
-# The Saccade app's packaging: the frontend dist (client/port), the
-# native binary (the client/port-shell crate over the shared shell
-# library in client/src-tauri/src) and the tauri-driver the native
+# The Saccade app's packaging: the frontend dist (app/port), the
+# native binary (the app/port-shell crate over the shared shell
+# library in app/src-tauri/src) and the tauri-driver the native
 # test project boots - one callPackage-able file taking every
 # dependency from the pkgs it is called on, so overlays.default can
 # build it against a consumer's own nixpkgs. (The port took the app's
@@ -27,14 +27,14 @@
   dbus,
   alsa-lib,
   # the repository root, passed in by every call site: the app's cargo
-  # tree spans client/port-shell, client/src-tauri (shared shell source
-  # and core-client) and the shared grammar crate, and a relative climb
-  # out of client/ would stay an unnormalized ".." path inside flake
+  # tree spans app/port-shell, app/src-tauri (shared shell source and
+  # core-client) and the shared grammar crate, and a relative climb
+  # out of app/ would stay an unnormalized ".." path inside flake
   # evaluation
   repoRoot,
 }:
 let
-  clientRoot = repoRoot + "/client";
+  clientRoot = repoRoot + "/app";
   # the frontend and its npm graph: the client's package-lock, the port
   # tree, and the fixture corpus its bundled globs reach
   src = lib.sourceByRegex clientRoot [
@@ -88,32 +88,35 @@ in
         dbus
         alsa-lib
       ];
-      # the cargo tree: client/port-shell plus everything the shared shell
-      # compile reads (the lib source under client/src-tauri/src,
-      # core-client, the grammar crate). The root workspace manifests are
-      # not part of this tree: the port crate is its own workspace root.
+      # the cargo tree: the app workspace (app/Cargo.toml, its lock),
+      # app/port-shell, everything the shared shell compile reads (the
+      # lib source under app/src-tauri/src, core-client) and the grammar
+      # crate from saccade/grammar. The saccade workspace manifests are
+      # not part of this tree.
       cargoSrc = lib.sourceByRegex repoRoot [
-        "^client$"
-        "^client/port-shell$"
-        "^client/port-shell/Cargo\\.toml$"
-        "^client/port-shell/Cargo\\.lock$"
-        "^client/port-shell/build\\.rs$"
-        "^client/port-shell/tauri\\.conf\\.json$"
-        "^client/port-shell/src$"
-        "^client/port-shell/src/.*$"
-        "^client/src-tauri$"
-        "^client/src-tauri/src$"
-        "^client/src-tauri/src/.*$"
-        "^client/src-tauri/icons$"
-        "^client/src-tauri/icons/.*$"
-        "^client/src-tauri/core-client$"
-        "^client/src-tauri/core-client/Cargo\\.toml$"
-        "^client/src-tauri/core-client/src$"
-        "^client/src-tauri/core-client/src/.*$"
-        "^grammar$"
-        "^grammar/Cargo\\.toml$"
-        "^grammar/src$"
-        "^grammar/src/.*$"
+        "^app$"
+        "^app/Cargo\\.toml$"
+        "^app/Cargo\\.lock$"
+        "^app/port-shell$"
+        "^app/port-shell/Cargo\\.toml$"
+        "^app/port-shell/build\\.rs$"
+        "^app/port-shell/tauri\\.conf\\.json$"
+        "^app/port-shell/src$"
+        "^app/port-shell/src/.*$"
+        "^app/src-tauri$"
+        "^app/src-tauri/src$"
+        "^app/src-tauri/src/.*$"
+        "^app/src-tauri/icons$"
+        "^app/src-tauri/icons/.*$"
+        "^app/src-tauri/core-client$"
+        "^app/src-tauri/core-client/Cargo\\.toml$"
+        "^app/src-tauri/core-client/src$"
+        "^app/src-tauri/core-client/src/.*$"
+        "^saccade$"
+        "^saccade/grammar$"
+        "^saccade/grammar/Cargo\\.toml$"
+        "^saccade/grammar/src$"
+        "^saccade/grammar/src/.*$"
       ];
     in
     rustPlatform.buildRustPackage {
@@ -125,11 +128,11 @@ in
       # expensive step
       doCheck = false;
       # cargoRoot names the manifest dir for the lockfile check and the
-      # vendor paths: the port crate carries its own Cargo.lock
-      cargoRoot = "client/port-shell";
-      buildAndTestSubdir = "client/port-shell";
+      # vendor paths: the app workspace carries its own Cargo.lock
+      cargoRoot = "app";
+      buildAndTestSubdir = "app/port-shell";
       cargoLock = {
-        lockFile = clientRoot + "/port-shell/Cargo.lock";
+        lockFile = clientRoot + "/Cargo.lock";
       };
       # without tauri's custom-protocol feature the release binary
       # dials the dev server instead of serving the embedded dist
@@ -152,8 +155,8 @@ in
       # preBuild runs from the source root before the build hook
       # enters the crate dir
       preBuild = ''
-        mkdir -p client/port/dist
-        cp -r ${webDist}/. client/port/dist/
+        mkdir -p app/port/dist
+        cp -r ${webDist}/. app/port/dist/
       '';
       postInstall = ''
         wrapProgram $out/bin/saccade-app \

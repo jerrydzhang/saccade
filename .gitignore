@@ -35,17 +35,17 @@ rustc-ice-*.txt
 .devenv/
 
 # the web workbench: dist is a generated build product (just web-build)
-client/node_modules/
-client/runs/
-client/harness/__pycache__/
-client/dist/
+app/node_modules/
+app/runs/
+app/harness/__pycache__/
+app/dist/
 
 # numbered result links from multi-output or repeated nix builds
 result-[0-9]*
 
-# Installed product skill: generated from tracker/skill in the devshell
+# Installed product skill: generated from saccade/tracker/skill in the devshell
 .agents
 .claude
 
 # vitest's run attachments (failure screenshots, traces) for the port suite
-client/port/.vitest
+app/port/.vitest

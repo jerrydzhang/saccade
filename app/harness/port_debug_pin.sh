@@ -10,7 +10,7 @@
 # per chunk; this pin is the iteration surface.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-BIN=$ROOT/client/port-shell/target/debug/saccade-app
+BIN=$ROOT/app/target/debug/saccade-app
 PIN_DIR=/var/tmp/saccade-app-$(id -u)/debug-bin
 
 test -x "$BIN" || { echo "no debug binary at $BIN (run the cargo build first)" >&2; exit 1; }

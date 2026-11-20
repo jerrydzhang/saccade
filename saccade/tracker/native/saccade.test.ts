@@ -1168,7 +1168,7 @@ test("the presented terminal pairs host disclosure with session-scoped launch pr
 // git repositories - the five demonstrations the done-when demands.
 // A demonstration drives the staged diff exactly as a commit would:
 // files written, staged, the script run in the repository's root.
-const noRefsHook = join(import.meta.dirname, "../../check-no-tracker-refs.py");
+const noRefsHook = join(import.meta.dirname, "../../../check-no-tracker-refs.py");
 
 function scratchRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "no-tracker-refs-"));

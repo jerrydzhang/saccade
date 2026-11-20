@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+# the app's binary crate (the GTK/WebKit shell) and its read-only core
+# client; the board grammar rides in by path from saccade/grammar
+members = [
+    "port-shell",
+    "src-tauri/core-client",
+]
