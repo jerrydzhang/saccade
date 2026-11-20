@@ -4,12 +4,14 @@
   saccadePi,
   devHerdrPin,
   saccadeClaudeCode,
-  root,
+  # the saccade cargo workspace (saccade/ only) and its lock
+  src,
+  cargoLockFile,
 }:
 pkgs.rustPlatform.buildRustPackage (
   {
     name = "saccade";
-    src = root;
+    inherit src;
     buildInputs = [ ];
     # the suites run once, in the devshell: that run is the
     # full-suite gate, and the sandbox never carried it whole (no
@@ -32,7 +34,7 @@ pkgs.rustPlatform.buildRustPackage (
       mkdir -p $out/share/fish/vendor_completions.d
       $out/bin/sac completions fish > $out/share/fish/vendor_completions.d/sac.fish
     '';
-    cargoLock.lockFile = root + "/Cargo.lock";
+    cargoLock.lockFile = cargoLockFile;
     meta.mainProgram = "sac";
   }
   // lib.optionalAttrs (devHerdrPin != null) {
